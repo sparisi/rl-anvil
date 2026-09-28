@@ -7,7 +7,7 @@ A small customizable codebase to train, sweep, and benchmark RL agents on
 Gymnasium environments, locally or on SLURM, with plots, heatmaps, and videos of
 what the agent learns. Branches:
 - `pytorch` (main) for deep RL algorithms in PyTorch,
-- `pytorch_gcrl` for GCRL,
+- `pytorch_gcrl` for GCRL (code for [SUN: Reaching for Novelty in RL](https://arxiv.org/abs/2609.08642)),
 - `tabular` for tabular Q-Learning (useful to quickly prototype algorithms).
 
 ## Key Features

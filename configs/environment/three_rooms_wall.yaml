@@ -1,10 +1,11 @@
 # @package _global_
 
 environment:
-  id: Gym-Gridworlds/Empty-Loop-3x3-v0
+  id: Gym-Gridworlds/ThreeRooms-Wall-14x16-v0
+  infinite_horizon: True
 
 experiment:
   warm_up: 1
   cool_down: 0
-  training_steps: 5_000
+  training_steps: 50_000
   testing_episodes: 1

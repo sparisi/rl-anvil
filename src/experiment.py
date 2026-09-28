@@ -262,13 +262,6 @@ class Experiment:
         self._save_videos = save_videos
         self._save_heatmaps = save_heatmaps
 
-        # Used for debugging
-        self._critic.visit_count = tabular_count(self._env_train)
-        if hasattr(self._actor, "goal_selected_count"):
-            self._actor.goal_selected_count = tabular_count(self._env_train)
-        if hasattr(self._actor, "goal_reached_count"):
-            self._actor.goal_reached_count = tabular_count(self._env_train)
-
         self._replay_memory = getattr(src.replay_memory, replay_memory.id)(**replay_memory)
         self._replay_memory.init(
             obs=self._env_train.observation_space.sample(),
@@ -278,6 +271,18 @@ class Experiment:
             trunc=np.asarray(False),
             next_obs=self._env_train.observation_space.sample(),
         )
+
+        # Used for debugging
+        self._critic.visit_count = tabular_count(self._env_train)
+        if hasattr(self._actor, "goal_selected_count"):
+            self._actor.goal_selected_count = tabular_count(self._env_train)
+            self._replay_memory.add_keys(
+                goal_obs=self._env_train.observation_space.sample(),
+                goal_act=self._env_train.action_space.sample(),
+                goal_valid=np.asarray(False),  # to mark when the actor is not following a goal
+            )
+        if hasattr(self._actor, "goal_reached_count"):
+            self._actor.goal_reached_count = tabular_count(self._env_train)
 
         # Pre-allocate critic and arrays for test()
         if self._testing_episodes >= 1 and self._env_test is not None:
@@ -443,6 +448,11 @@ class Experiment:
                         trunc=trunc,
                         next_obs=next_obs,
                     )
+                    if hasattr(self._actor, "goal"):
+                        goal = self._actor.goal
+                        sample["goal_valid"] = goal is not None
+                        sample["goal_obs"] = 0 if goal is None else goal["obs"]
+                        sample["goal_act"] = 0 if goal is None else goal["act"]
 
                     # Update statistics and decay epsilon, learning rates, and
                     # any other scheduled parameter. These run on the

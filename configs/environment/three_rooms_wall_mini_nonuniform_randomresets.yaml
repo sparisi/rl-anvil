@@ -8,7 +8,7 @@ environment:
   random_reset_prob: 0.2
 
 experiment:
-  warm_up: 10_000
-  cool_down: 10_000
-  training_steps: 100_000
+  warm_up: 1
+  cool_down: 0
+  training_steps: 10_000
   testing_episodes: 21  # 10 starts in first room, 10 in second, 1 in third

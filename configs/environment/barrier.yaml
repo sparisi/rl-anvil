@@ -4,7 +4,7 @@ environment:
   id: Gym-Gridworlds/Barrier-5x5-v0
 
 experiment:
-  warm_up: 1_000
-  cool_down: 1_000
+  warm_up: 1
+  cool_down: 0
   training_steps: 10_000
   testing_episodes: 1

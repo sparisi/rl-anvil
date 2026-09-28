@@ -22,33 +22,25 @@ per_env_plot:
 # "eps_greedy", "resmax", "greedy", "random".
 # In this case, the group "eps_greedy" has 2 configurations, and they will share
 # the same base color.
-#
-# Note: nonlinearity, hidden_size, dropout_p are swept in configs/sweeps/example.yaml
-# but if they are not defined here, the default values will be used.
 configs:
   eps_greedy:  # can be any name
     - algorithm: eps_greedy
       agent.actor.eps.init_value: 1.0
       agent.actor.eps.end_value: 0.0
-      agent.critic.approximator.nonlinearity: SiLU
       plot.label: "ε-greedy (1 → 0)"
     - algorithm: eps_greedy
       agent.actor.eps.init_value: 0.5
       agent.actor.eps.end_value: 0.2
-      agent.critic.approximator.nonlinearity: LeakyReLU
       plot.label: "ε-greedy (0.5 → 0.2)"
   resmax:
     - algorithm: resmax
-      agent.critic.approximator.hidden_size: 32
       plot.label: "Resmax"
   greedy:
     - algorithm: greedy
       plot.label: "Greedy"
-      agent.critic.approximator.dropout_p: 0.1
   random:
     - algorithm: random
       plot.label: "Random"
-      agent.critic.approximator.dropout_p: 0.0
 
 # Environments to plot.
 # You can customize the y-lim of statistics for better visualization.

@@ -186,78 +186,33 @@ class QCritic(Critic):
         return np.random.default_rng(seed=seed)
 
 
-class QNetwork(QCritic):
+class QTable(QCritic):
     """
-    Instance of QCritic that uses neural network Q-functions.
-    It also keeps visit counts that are updated by the data collection procedure.
+    Instance of QCritic that uses tabular Q-functions.
+    Visit counts are managed by the experiment (set as `visit_count`);
+    keep as None here so a deep-copied critic (used for testing) does not
+    carry a stale counter.
     """
 
     def __init__(
         self,
-        obs_space: gymnasium.spaces.Box,
+        obs_space: gymnasium.spaces.Discrete,
         act_space: gymnasium.spaces.Discrete,
-        target_copy_frequency: int,
-        tau: float,
-        normalize_observation: bool,
         approximator: DictConfig,
         seed: int = None,
         **kwargs,
     ):
-        """
-        Args:
-            obs_space (gymnasium.spaces.Box): observation space,
-            act_space (gymnasium.spaces.Discrete): action space,
-            target_copy_frequency (int): after how many updates the target
-                network is updated (hard or Polyak copy of Q-network),
-            tau (float): Polyak averaging coefficient,
-            normalize_observation (bool): if True, observations are normalized using their
-                running mean and standard deviation,
-            approximator (DictConfig): configuration to initialize the Q-network,
-            seed (int): seed to initialize the network for reproducibility,
-        """
-
         QCritic.__init__(self, **kwargs)
+        self.n_observations = obs_space.n
         self.n_actions = act_space.n
         self.q = getattr(src.approximator, approximator.id)(
-            obs_space.shape, act_space.n, **approximator, seed=seed,
+            self.n_observations, self.n_actions, **approximator, seed=seed,
         )
-        self.q_target = getattr(src.approximator, approximator.id)(
-            obs_space.shape, act_space.n, **approximator, seed=seed,
-        )
-        self.q_target.eval()
-        self.target_copy_frequency = target_copy_frequency
-        self.target_copy_counter = 0
-        self.tau = tau
-        self.n_updates = 0
-        self.running_obs = RunningStandardization(obs_space.shape)
-        self.normalize_observation = normalize_observation
+        self.q_target = self.q  # with tabular Q we don't need a different target
         self.visit_count = None  # Will be set in the experiment
-        QNetwork.reset(self, seed=seed)
-
-    def __call__(self, obs, act=None, target=False, **kwargs):
-        if target:
-            return self.q_target(self._normalize_obs(obs), act)
-        return self.q(self._normalize_obs(obs), act)
-
-    def _normalize_obs(self, obs):
-        if self.normalize_observation:
-            return self.running_obs.normalize(obs)
-        else:
-            return obs
-
-    def post_step(self, obs, act, *args, **kwargs):
-        QCritic.post_step(self, obs, act, *args, **kwargs)
-        self.running_obs.update(obs)
-
-    def reset(self, seed=None):
         QCritic.reset(self, seed=seed)
-        self.target_copy_counter = 0
-        self.running_obs.reset()
 
     def update(self, replay_memory, rng_generator=None, **kwargs):
-        self.n_updates += 1
-        self.train()
-
         if rng_generator is None:
             rng_generator = self.rng_generator()
 
@@ -269,358 +224,168 @@ class QNetwork(QCritic):
         )
         obs, act, rwd, next_obs, term, trunc, weights = _unpack_batch(batch)
 
-        obs = self._normalize_obs(obs)
-        next_obs = self._normalize_obs(next_obs)
-
-        B, T = rwd.shape
-
         if self.clip_reward:
             rwd = np.clip(rwd, -1.0, 1.0)
 
-        # Double DQN
-        tolerance_max = 1.0 - self.gamma
-        q_next = self.q(next_obs, with_gradient=False)
-        next_a_max = random_argmax(
-            q_next,
-            rng_generator=rng_generator,
-            axis=-1,
-            # rtol=tolerance_max,
-        )
-        target_q_next = np.take_along_axis(
-            self.q_target(next_obs, with_gradient=False),
-            next_a_max[..., None],
-            axis=-1,
-        ).squeeze(-1)
-
+        B, T = rwd.shape
         is_next_act_greedy = None
         if self.lmbda > 0.0 and T > 1:  # compute mask to cut eligibility traces
+            # act[:, 1:] is the next action within the sequence (a_{t+1} for t=0..T-2).
+            # Use the online Q (not the target) for the Watkins mask.
             is_next_act_greedy = is_act_greedy(
-                q_next[:, :-1],
+                self.q(next_obs)[:, :-1],
                 act[:, 1:],
                 axis=-1,
-                # rtol=tolerance_max,
-            )  # use the main Q, not the target Q
+            )
             trace_cut_frac = (1.0 - is_next_act_greedy).mean()
         else:
             trace_cut_frac = np.nan
 
-        target = td_target(
-            rwd,
-            term,
-            trunc,
-            is_next_act_greedy,
-            target_q_next,
-            self.gamma,
-            self.lmbda,
-        )
-        stepsize = self.lr.value * weights
-        error, gradient_norm, q = self.q.update(
-            obs, act, target=target, stepsize=stepsize, rng_generator=rng_generator,
-        )
+        q_next = self.q_target(next_obs).max(-1)
+        target = td_target(rwd, term, trunc, is_next_act_greedy, q_next, self.gamma, self.lmbda)
+        stepsize = np.asarray(self.lr.value * weights)
 
-        # Update priorities in PER (will skip if no PER)
-        replay_memory.post_sampling(batch["idx"], error, "td_err")  # td_err is already squared
+        error, gradient_norm = self.q.update(
+            obs.ravel(),
+            act.ravel(),
+            target=target.ravel(),
+            stepsize=np.broadcast_to(stepsize, target.shape).ravel(),
+        )
+        error = error.reshape(target.shape)
+
+        # Update priorities in PER (no-op on plain ReplayMemory).
+        # Every sample in the (B, T) batch gets its priority set from its own
+        # TD error, independent of how sampling picked the sequence endpoints.
+        replay_memory.post_sampling(batch["idx"], error, "td_err")
 
         return {
             "td_err": error,
             "grad_norm": gradient_norm,
-            "q_mean": q.mean(),
             "trace_cut_frac": trace_cut_frac,
         }
 
-    def post_update(self):
-        if self.n_updates > 0:
-            self.target_copy_counter += 1
-            if self.target_copy_counter % self.target_copy_frequency == 0:
-                self.target_copy_counter = 0
-                self.q_target.copy_from(self.q, self.tau)
 
-    def train(self):
-        self.q.train()
-        # self.q_target.train()
-
-    def eval(self):
-        self.q.eval()
-        # self.q_target.eval()
-
-    def copy_from(self, source):
-        QCritic.copy_from(self, source)
-        self.target_copy_frequency = source.target_copy_frequency
-        self.target_copy_counter = source.target_copy_counter
-        self.tau = source.tau
-        self.n_updates = source.n_updates
-        self.running_obs.copy_from(source.running_obs)
-
-
-class QEnsemble(Critic):
+class QVisitTable(QTable):
     """
-    Ensemble of Q-critics. Each member has its own target network, i.e.,
-
-        Q_1  Q_2  ...  Q_K
-        ↓    ↓         ↓
-        Qt_1 Qt_2 ...  Qt_K
-
-    Each Qt_k is updated from its main Q_k.
-    Each main Q_k is update with a different mini-batch, and its TD target is
-    computed with a randomly assigned target network, i.e.,
-
-        Q_1(s_t, a_t) target: r + γ max_a Qt_k(s_t, a) with k random
-        same for all Q_k
-
-    The attribute "aggregation" determines how the ensemble aggregates the values
-    of the critics:
-    - min: Q(s, a) = min_k Q_k(s, a)
-    - max: Q(s, a) = max_k Q_k(s, a)
-    - mean: Q(s, a) = mean Q_k(s, a)
-    - random: Q(s, a) = Q_k(s, a) with k random
+    This critic learns Q-functions based on the successor representation, to
+    approximate first time visitation of state-action pairs.
+    These are often called S-functions or W-functions in the RL literature. Here,
+    they are they are called Q-visit.
     """
 
     def __init__(
         self,
-        obs_space: gymnasium.spaces.Box,
+        obs_space: gymnasium.spaces.Discrete,
         act_space: gymnasium.spaces.Discrete,
-        n_critics: int,
-        critics_id: str,
-        aggregation: str = "min",
+        approximator_visit: DictConfig,
+        gamma_visit: float,
+        lmbda_visit: float,
+        lr_visit: DictConfig,
+        batch_size_visit: int,
+        sequence_length_visit: int,
         seed: int = None,
         **kwargs,
     ):
-        self.n_critics = n_critics
-        assert (
-            aggregation in ("min", "max", "mean", "random")
-        ), f"aggregation must be either min, max, mean, or random (got {aggregation})"
-        self.aggregation = aggregation
-        critic_cls = globals()[critics_id]
-        self.critics = [
-            critic_cls(
-                obs_space,
-                act_space,
-                seed=cantor_pairing(seed, i) if seed is not None else None,
-                **kwargs,
-            )
-            for i in range(n_critics)
-        ]
-
-    def __getattr__(self, name):
-        # Proxy attribute lookups to the first critic so that callers can
-        # access e.g. self.n_actions, self.gamma, self.visit_count transparently.
-        #
-        # __getattr__ is only called when normal lookup fails, so QEnsemble's
-        # own attributes (critics, n_critics) are never intercepted.
-        #
-        # Use object.__getattribute__ to access critics: if critics is not yet
-        # set (e.g. during deepcopy reconstruction), this raises AttributeError
-        # cleanly instead of recursing back into __getattr__.
-        critics = object.__getattribute__(self, 'critics')
-        return getattr(critics[0], name)
-
-    def __call__(self, *args, rng_generator=None, **kwargs):
-        if rng_generator is None:
-            rng_generator = self.rng_generator()
-
-        if self.aggregation == "random":
-            i = rng_generator.integers(self.n_critics)
-            return self.critics[i](*args, *kwargs)
-
-        values = np.stack([c(*args, **kwargs) for c in self.critics], axis=0)
-        if self.aggregation == "min":
-            return values.min(axis=0)
-        elif self.aggregation == "max":
-            return values.max(axis=0)
-        elif self.aggregation == "mean":
-            return values.mean(axis=0)
-
-    def update(self, replay_memory, rng_generator=None, **kwargs):
-        if rng_generator is None:
-            rng_generator = self.rng_generator()
-
-        # Randomly assign each critic a target network from the ensemble
-        original_targets = [c.q_target for c in self.critics]
-        assigned = rng_generator.integers(self.n_critics, size=self.n_critics)
-        for i, critic in enumerate(self.critics):
-            critic.q_target = original_targets[assigned[i]]
-
-        # Update one random critic
-        i = rng_generator.integers(self.n_critics)
-        stats = self.critics[i].update(replay_memory, rng_generator=rng_generator, **kwargs)
-
-        # Revert assigned target networks
-        for i, critic in enumerate(self.critics):
-            critic.q_target = original_targets[i]
-
-        return stats
-
-    def post_update(self):
-        for c in self.critics:
-            c.post_update()
-
-    def post_step(self, *args, **kwargs):
-        for c in self.critics:
-            c.post_step(*args, **kwargs)
-
-    def reset(self, seed=None):
-        for c in self.critics:
-            c.reset(seed=seed)
+        QTable.__init__(self, obs_space, act_space, **kwargs, seed=seed)
+        self.lr_visit = getattr(src.parameter, lr_visit.id)(**lr_visit)
+        self.gamma_visit = gamma_visit
+        self.lmbda_visit = lmbda_visit
+        self.batch_size_visit = batch_size_visit
+        self.sequence_length_visit = sequence_length_visit
+        self.q_visit = getattr(src.approximator, approximator_visit.id)(
+            self.n_observations,
+            self.n_actions,
+            self.n_observations * self.n_actions,
+            **approximator_visit,
+            seed=seed,
+        )
+        self.q_visit_target = self.q_visit
+        QVisitTable.reset(self, seed=seed)
 
     def copy_from(self, source):
-        self.n_critics = source.n_critics
-        for c, sc in zip(self.critics, source.critics):
-            c.copy_from(sc)
+        QTable.copy_from(self, source)
+        self.lr_visit.copy_from(source.lr_visit)
+        self.gamma_visit = source.gamma_visit
+        self.lmbda_visit = source.lmbda_visit
+        self.batch_size_visit = source.batch_size_visit
+        self.sequence_length_visit = source.sequence_length_visit
+        self.q_visit.copy_from(source.q_visit)
+        self.q_visit_target.copy_from(source.q_visit_target)
 
-    def rng_generator(self, seed=None):
-        return np.random.default_rng(seed=seed)
-
-    def train(self):
-        for c in self.critics:
-            c.train()
-
-    def eval(self):
-        for c in self.critics:
-            c.eval()
-
-
-class SUNRISE(QEnsemble):
-    """
-    SUNRISE (Lee et al., ICML 2021): ensemble DQN with three additions
-    on top of QEnsemble.
-
-    - UCB acting: return `mean(Q) + kappa * std(Q)` across ensemble members
-      (kappa=0 recovers plain mean-Q greedy behavior).
-    - Weighted Bellman backup: pool one batch across all members; pick the
-      next-state greedy action from `mean(Q_target)` and bootstrap with
-      `min(Q_target)` (clipped double-Q).
-    - Bootstrap masks + uncertainty-weighted loss: each member sees each
-      transition with probability `mask_p` (Bernoulli), and every sample is
-      re-weighted by `sigmoid(-temperature * std(max Q_target)) + 0.5` so
-      transitions the ensemble already agrees on get down-weighted.
-    """
-
-    def __init__(
-        self,
-        *args,
-        kappa: DictConfig,
-        temperature: DictConfig,
-        mask_p: float,
-        **kwargs,
-    ):
-        """
-        Args:
-            kappa (DictConfig): schedule for the UCB coefficient in acting
-                (λ in SUNRISE Eq. 7),
-            temperature (DictConfig): schedule for the sigmoid temperature in
-                the uncertainty-weighted loss (T in SUNRISE Eq. 6),
-            mask_p (float): probability that a transition is included in
-                each member's update (Bernoulli bootstrap mask).
-        """
-
-        super().__init__(*args, **kwargs)
-        self.kappa = getattr(src.parameter, kappa.id)(**kappa)
-        self.temperature = getattr(src.parameter, temperature.id)(**temperature)
-        self.mask_p = mask_p
-
-    def __call__(self, *args, **kwargs):
-        values = np.stack([c(*args, **kwargs) for c in self.critics], axis=0)
-        return values.mean(axis=0) + self.kappa.value * values.std(axis=0)
+    def reset(self, seed=None):
+        self.lr_visit.reset()
+        self.q_visit.reset(seed=seed)
+        self.q_visit_target.reset(seed=seed)
+        QTable.reset(self, seed=seed)
 
     def update(self, replay_memory, rng_generator=None, **kwargs):
         if rng_generator is None:
             rng_generator = self.rng_generator()
 
-        c0 = self.critics[0]
-        self.train()
+        q_stats = QTable.update(self, replay_memory, rng_generator, **kwargs)
 
+        # Separate batch for the visit critic (may use its own PER priority
+        # and its own batch/sequence sizes).
         batch = replay_memory.get(
-            batch_size=c0.batch_size,
-            sequence_length=c0.sequence_length,
+            batch_size=self.batch_size_visit,
+            sequence_length=self.sequence_length_visit,
             rng_generator=rng_generator,
-            priority_key="td_err",
+            priority_key="td_err_visit",
         )
         obs, act, rwd, next_obs, term, trunc, weights = _unpack_batch(batch)
 
-        obs = c0._normalize_obs(obs)
-        next_obs = c0._normalize_obs(next_obs)
-
-        if c0.clip_reward:
-            rwd = np.clip(rwd, -1.0, 1.0)
-
+        # q_visit shape is (n_obs, n_act, n_obs * n_act), storing value functions
+        # of shape (n_obs, n_act) for all state-action pairs
         B, T = rwd.shape
-        n = self.n_critics
-
-        # (n_critics, B, T, n_actions) target-net evaluations at next_obs
-        q_target_next = np.stack(
-            [c.q_target(next_obs, with_gradient=False) for c in self.critics], axis=0
-        )
-
-        # Uncertainty weight from ensemble disagreement on max Q(next)
-        # (SUNRISE Eq. 6/9): sigmoid(-T * std) + 0.5
-        q_target_next_max_std = q_target_next.max(-1).std(0)  # (B, T)
-        u_weights = 1.0 / (1.0 + np.exp(self.temperature.value * q_target_next_max_std)) + 0.5
-
-        # Weighted Bellman backup: action from mean, value from min (clipped double-Q)
-        q_target_next_mean = q_target_next.mean(0)  # (B, T, n_actions)
-        next_a_max = random_argmax(q_target_next_mean, rng_generator=rng_generator, axis=-1)
-        target_q_next = np.take_along_axis(
-            q_target_next.min(0), next_a_max[..., None], axis=-1,
-        ).squeeze(-1)  # (B, T)
-
         is_next_act_greedy = None
-        if c0.lmbda > 0.0 and T > 1:
+        if self.lmbda_visit > 0.0 and T > 1:
             is_next_act_greedy = is_act_greedy(
-                q_target_next_mean[:, :-1], act[:, 1:], axis=-1,
+                self.q_visit(next_obs)[:, :-1],
+                act[:, 1:],
+                axis=-2,
             )
-            trace_cut_frac = (1.0 - is_next_act_greedy).mean()
+            trace_cut_frac_visit = (1.0 - is_next_act_greedy).mean()
         else:
-            trace_cut_frac = np.nan
+            trace_cut_frac_visit = np.nan
+
+        q_visit_next = self.q_visit_target(next_obs).max(-2)
+        rwd_visit = np.zeros_like(q_visit_next)
+        idx = np.ravel_multi_index((obs, act), (self.n_observations, self.n_actions))
+        np.put_along_axis(rwd_visit, axis=-1, indices=idx[..., None], values=1.0)
+        term_visit = np.logical_or(term[..., None], rwd_visit == 1.0)
+        trunc_visit = np.broadcast_to(trunc[..., None], term_visit.shape)
 
         target = td_target(
-            rwd,
-            term,
-            trunc,
+            rwd_visit,
+            term_visit,
+            trunc_visit,
             is_next_act_greedy,
-            target_q_next,
-            c0.gamma,
-            c0.lmbda,
+            q_visit_next,
+            self.gamma_visit,
+            self.lmbda_visit,
         )
 
-        # Bootstrap mask, shape (n_critics, B, T)
-        critic_mask = (rng_generator.random((n, B, T)) < self.mask_p).astype(np.float32)
+        stepsize = np.asarray(self.lr_visit.value * weights)
+        error_visit, gradient_norm_visit = self.q_visit.update(
+            obs.ravel(),
+            act.ravel(),
+            target=target.reshape(-1, self.n_observations * self.n_actions),
+            stepsize=np.broadcast_to(stepsize, target.shape[:-1]).ravel()[..., None],
+        )
+        error_visit = error_visit.reshape(target.shape)
 
-        base_stepsize = weights * u_weights  # (B, T)
+        # Update priorities in PER (no-op on plain ReplayMemory).
+        # Every sample in the (B, T) batch gets its priority set from its own
+        # error (reduced over goals with max, since each sample is trained
+        # against every goal), independent of how sampling picked endpoints.
+        replay_memory.post_sampling(batch["idx"], error_visit.max(-1), "td_err_visit")
 
-        errors, grad_norms, q_means = [], [], []
-        for i, c in enumerate(self.critics):
-            c.n_updates += 1
-            stepsize = c.lr.value * base_stepsize * critic_mask[i]
-            error, grad_norm, q = c.q.update(
-                obs, act, target=target, stepsize=stepsize, rng_generator=rng_generator,
-            )
-            errors.append(error)
-            grad_norms.append(grad_norm)
-            q_means.append(q.mean())
-
-        mean_error = np.mean(errors, axis=0)
-        replay_memory.post_sampling(batch["idx"], mean_error, "td_err")
-
-        return {
-            "td_err": mean_error,
-            "grad_norm": np.mean(grad_norms),
-            "q_mean": np.mean(q_means),
-            "q_std_next": q_target_next_max_std.mean(),
-            "trace_cut_frac": trace_cut_frac,
+        return q_stats | {
+            "td_err_visit": error_visit,
+            "grad_norm_visit": gradient_norm_visit,
+            "trace_cut_frac_visit": trace_cut_frac_visit,
         }
 
     def post_step(self, *args, **kwargs):
-        super().post_step(*args, **kwargs)
-        self.kappa.step()
-        self.temperature.step()
-
-    def reset(self, seed=None):
-        super().reset(seed=seed)
-        self.kappa.reset()
-        self.temperature.reset()
-
-    def copy_from(self, source):
-        super().copy_from(source)
-        self.kappa.copy_from(source.kappa)
-        self.temperature.copy_from(source.temperature)
-        self.mask_p = source.mask_p
+        self.lr_visit.step()
+        QTable.post_step(self, *args, **kwargs)

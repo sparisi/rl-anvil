@@ -4,7 +4,7 @@ environment:
   id: Gym-Gridworlds/Straight-20-v0
 
 experiment:
-  warm_up: 3_000
-  cool_down: 3_000
+  warm_up: 1
+  cool_down: 0
   training_steps: 30_000
   testing_episodes: 1

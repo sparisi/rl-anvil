@@ -4,7 +4,7 @@ environment:
   id: Gym-Gridworlds/Empty-Distract-6x6-v0
 
 experiment:
-  warm_up: 500
-  cool_down: 500
+  warm_up: 1
+  cool_down: 0
   training_steps: 5_000
   testing_episodes: 1

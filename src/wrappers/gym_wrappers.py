@@ -131,12 +131,13 @@ def make_gym_env(train_from_pixels=False, observation_bins=None, action_bins=Non
             env = ChannelsFirstWrapper(env)
         else:
             if "Gym-Gridworlds" in env_name:
-                if "Taxi" in env_name or "CleanDirt" in env_name:
-                    env = MatrixWithGoalWrapper(env)
-                else:
-                    env = MatrixWrapper(env)
-                    # env = ContinuousObservationWrapper(env)
-                env = FlattenObservation(env)
+                pass
+                # if "Taxi" in env_name or "CleanDirt" in env_name:
+                #     env = MatrixWithGoalWrapper(env)
+                # else:
+                #     env = MatrixWrapper(env)
+                #     # env = ContinuousObservationWrapper(env)
+                # env = FlattenObservation(env)
             elif "Gym-MinAtar" in env_name:
                 env = ChannelsFirstWrapper(env)
             # elif isinstance(env.observation_space, gymnasium.spaces.Box):

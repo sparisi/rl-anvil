@@ -6,9 +6,9 @@ environment:
   distance_difference_reward: True
 
 experiment:
-  warm_up: 10_000
-  cool_down: 10_000
-  training_steps: 300_000
+  warm_up: 1
+  cool_down: 0
+  training_steps: 50_000
   testing_episodes: 1
 
 agent:

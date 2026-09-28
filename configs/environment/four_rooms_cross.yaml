@@ -6,7 +6,7 @@ environment:
   start_pos: [[1, 3]]
 
 experiment:
-  warm_up: 5_000
-  cool_down: 5_000
-  training_steps: 50_000
+  warm_up: 1
+  cool_down: 0
+  training_steps: 10_000
   testing_episodes: 1

@@ -1,8 +1,5 @@
 global_sweep:
   environment: [large, four_rooms, travel_field_small]
-  agent.critic.approximator.nonlinearity: [SiLU, LeakyReLU]
-  agent.critic.approximator.dropout_p: [0.0, 0.1]
-  agent.critic.approximator.hidden_size: [32, 64]
   results.save_memory: True
 
 config_sweep:

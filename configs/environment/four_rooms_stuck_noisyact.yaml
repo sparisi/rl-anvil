@@ -7,7 +7,7 @@ environment:
   random_action_prob: 0.2
 
 experiment:
-  warm_up: 10_000
-  cool_down: 10_000
-  training_steps: 200_000
+  warm_up: 1
+  cool_down: 0
+  training_steps: 20_000
   testing_episodes: 1

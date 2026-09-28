@@ -4,7 +4,7 @@ environment:
   id: Gym-Gridworlds/Penalty-3x3-v0
 
 experiment:
-  warm_up: 1_500
-  cool_down: 1_500
-  training_steps: 15_000
+  warm_up: 1
+  cool_down: 0
+  training_steps: 1_000
   testing_episodes: 1

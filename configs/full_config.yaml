@@ -53,7 +53,7 @@ experiment:
 
 agent:
   critic:
-    id:  # QNetwork
+    id:  # QTable
     # ------- QCritic (all critics) -------
     gamma: 0.99  # discount factor
     lmbda: 0.95  # trace factor (Watkins TD(λ))
@@ -68,23 +68,11 @@ agent:
       steps: ${experiment.training_steps}
       constant_init_steps: ${experiment.warm_up}
       constant_end_steps: ${experiment.cool_down}
-    # ------- QNetwork -------
-    normalize_observation:  # if True, obs = (obs - running_mean) / max(running_std, 1)
-    target_copy_frequency: 1  # after how many updates the target network is updated (hard or soft copy)
-    tau: 0.001  # copy coefficient (1 = hard, <1 soft aka Polyak)
-    approximator:  # Q-network
-      id:  # MSENetwork (single-Q)
-      optimizer_id:  # torch.optim class name, e.g., SGD, Adam, AdamW
-      normalization:  # LayerNorm, RMSNorm, or null (None)
-      nonlinearity:  # ReLU, LeakyReLU, Tanh, SiLU, ...
-      maxout_layers:  # number of parallel linear experts to max over (Maxout layer width)
-      bias:  # if True, linear layers have a bias term
-      loss:  # torch.nn.functional loss name (e.g., mse_loss, huber_loss)
-      device: cpu  # torch device
-      hidden_size: 32  # size of all linear layers
-      dropout_p: 0.1  # dropout probability
-      max_grad_norm: 10.0  # to clip the gradient
-      lrate: 0.01  # learning rate passed to the optimizer
+    # ------- QTable -------
+    approximator:  # tabular Q-function
+      id:  # MSETable
+      init_value_min: 0.0  # table is filled uniformly in [init_value_min, init_value_max]
+      init_value_max: 0.0
 
   actor:
     id:  # EpsilonGreedy, Resmax, ...

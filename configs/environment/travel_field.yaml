@@ -6,13 +6,11 @@ environment:
   distance_difference_reward: True
 
 experiment:
-  warm_up: 10_000
-  cool_down: 10_000
-  training_steps: 1_000_000
+  warm_up: 1
+  cool_down: 0
+  training_steps: 500_000
   testing_episodes: 1
 
 agent:
   critic:
     gamma: 1.0
-    approximator:
-      hidden_size: 128

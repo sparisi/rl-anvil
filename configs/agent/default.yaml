@@ -1,26 +1,30 @@
 critic:
-  id: QNetwork
+  id: QTable
   gamma: 0.99
   lmbda: 0.95
-  target_copy_frequency: 1
-  tau: 0.001
   clip_reward: False
-  normalize_observation: False
-  batch_size: 32
-  sequence_length: 8
+  batch_size: 1
+  sequence_length: 1
   lr:
-    id: Constant
-    value: 1.0
+    id: LinearDecay
+    init_value: 1.0
+    end_value: 1.0
+    rate: null
+    steps: ${experiment.training_steps}
+    constant_init_steps: ${experiment.warm_up}
+    constant_end_steps: ${experiment.cool_down}
   approximator:
-    id: MSENetwork
-    optimizer_id: AdamW
-    normalization: LayerNorm
-    nonlinearity: SiLU
-    loss: huber_loss
-    maxout_layers: 4
-    dropout_p: 0.1
-    bias: False
-    device: cpu
-    hidden_size: 64
-    max_grad_norm: 1.0
-    lrate: 0.001
+    id: MSETable
+    init_value_min: 0.0
+    init_value_max: 0.0
+
+actor:
+  id: EpsilonGreedy
+  eps:
+    id: LinearDecay
+    init_value: 1.0
+    end_value: 0.0
+    rate: null
+    steps: ${experiment.training_steps}
+    constant_init_steps: ${experiment.warm_up}
+    constant_end_steps: ${experiment.cool_down}

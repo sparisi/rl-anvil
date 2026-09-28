@@ -4,7 +4,7 @@ environment:
   id: Gym-Gridworlds/Wall-50x50-v0
 
 experiment:
-  warm_up: 10_000
-  cool_down: 10_000
+  warm_up: 1
+  cool_down: 0
   training_steps: 1_000_000
   testing_episodes: 1

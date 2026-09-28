@@ -274,16 +274,14 @@ TIMEOUTS_ADJUST_ALGO = {
 # See the docstring for instructions to estimate requested memory.
 BASE_MEM_MB = 1250
 PER_SEED_MEM_MB = {
-    "three_rooms_wall_mini_nonuniform": 500,
-    "four_rooms_stuck_hard": 600,
-    "travel_field_small": 900,
-    #
     "lunar_lander": 850,
-    "lunar_lander_full": 1400,
     "cart_pole": 650,
     "pendulum_discrete": 650,
     "acrobot": 650,
     "mountain_car": 550,
+    "large": 300,
+    "four_rooms": 500,
+    "travel_field_small": 900,
 }
 
 

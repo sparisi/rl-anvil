@@ -1,0 +1,52 @@
+# @package _global_
+
+environment:
+  id: LunarLander-v3
+
+experiment:
+  warm_up: 10_000
+  cool_down: 10_000
+  training_steps: 300_000
+  testing_episodes: 50
+
+agent:
+  critic:
+    approximator:
+      encoder:
+        passthrough: [6, 7]  # last two obs are binary (leg contacts)
+
+# agent:
+#   critic:
+#     approximator:
+#       encoder:
+#         id: RawGridEncoder
+#         grid_id: GaussianActivation
+#         num_centers: 20
+#         v_max: 3
+#         std_init_centers: 0.01
+#         centers_mode: learned
+#
+#       encoder:
+#         id: MaxoutGridEncoder
+#         grid_id: GaussianActivation
+#         num_centers: 8
+#         v_max: 3
+#         std_init_centers: 0.01
+#         centers_mode: learned
+#         num_layers: 6
+#         hidden_size: 64
+#         normalization: null
+#
+#       encoder:
+#         id: GridAggregationEncoder
+#         grid_id: GaussianActivation
+#         num_centers: 8
+#         v_max: 3
+#         std_init_centers: 0.01
+#         centers_mode: learned
+#         num_layers: 6
+#         hidden_size: 16
+#         normalization: null
+#         stats:
+#           - mean
+#           - max

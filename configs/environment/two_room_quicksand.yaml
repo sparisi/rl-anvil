@@ -1,0 +1,10 @@
+# @package _global_
+
+environment:
+  id: Gym-Gridworlds/TwoRoom-Quicksand-3x5-v0
+
+experiment:
+  warm_up: 1_000
+  cool_down: 1_000
+  training_steps: 10_000
+  testing_episodes: 100

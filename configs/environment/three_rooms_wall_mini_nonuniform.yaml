@@ -1,0 +1,13 @@
+# @package _global_
+
+environment:
+  id: Gym-Gridworlds/ThreeRooms-Wall-11x8-v0
+  infinite_horizon: True
+  loop_through_start_pos: True
+  non_uniform_start: True
+
+experiment:
+  warm_up: 5_000
+  cool_down: 5_000
+  training_steps: 100_000
+  testing_episodes: 21  # 10 starts in first room, 10 in second, 1 in third

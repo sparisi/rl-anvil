@@ -1,0 +1,49 @@
+[tool.ruff]
+extend-exclude = ["configs/plots"]
+line-length = 100
+
+[tool.ruff.pycodestyle]
+max-doc-length = 100
+
+[tool.ruff.flake8-implicit-str-concat]
+allow-multiline = false
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rl-anvil"
+version = "0.1.0"
+description = "Train, sweep, and benchmark RL agents on Gymnasium environments, locally or on SLURM"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "swig",
+    "gymnasium[box2d]",
+    "box2d-py",
+    "numpy",
+    "opencv-python",
+    "submitit",
+    "hydra-core",
+    "omegaconf",
+    "pyyaml",
+    "hydra-joblib-launcher",
+    "hydra-submitit-launcher",
+    "matplotlib",
+    "pillow",
+    "seaborn",
+    "rich",
+    "torch",
+    "pandas",
+    "wandb",
+    "tqdm",
+    "imageio",
+    "imageio-ffmpeg",
+    "pathvalidate",
+    "pyrarrow",
+    "fastparquet",
+]
+
+[tool.setuptools.packages.find]
+include = ["src*"]

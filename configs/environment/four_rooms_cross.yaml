@@ -1,0 +1,12 @@
+# @package _global_
+
+environment:
+  id: Gym-Gridworlds/FourRooms-Cross-14x16-v0
+  random_goals: False
+  start_pos: [[1, 3]]
+
+experiment:
+  warm_up: 5_000
+  cool_down: 5_000
+  training_steps: 50_000
+  testing_episodes: 1

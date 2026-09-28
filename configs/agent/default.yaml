@@ -1,0 +1,26 @@
+critic:
+  id: QNetwork
+  gamma: 0.99
+  lmbda: 0.95
+  target_copy_frequency: 1
+  tau: 0.001
+  clip_reward: False
+  normalize_observation: False
+  batch_size: 32
+  sequence_length: 8
+  lr:
+    id: Constant
+    value: 1.0
+  approximator:
+    id: MSENetwork
+    optimizer_id: AdamW
+    normalization: LayerNorm
+    nonlinearity: SiLU
+    loss: huber_loss
+    maxout_layers: 4
+    dropout_p: 0.1
+    bias: False
+    device: cpu
+    hidden_size: 64
+    max_grad_norm: 1.0
+    lrate: 0.001

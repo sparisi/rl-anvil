@@ -1,0 +1,12 @@
+# @package _global_
+
+environment:
+  id: Gym-Gridworlds/FourRooms-Stuck-13x13-Hard-v0
+  random_goals: False
+  start_pos: [[1, 1]]
+
+experiment:
+  warm_up: 10_000
+  cool_down: 10_000
+  training_steps: 200_000
+  testing_episodes: 50

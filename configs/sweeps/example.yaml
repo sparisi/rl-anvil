@@ -1,0 +1,20 @@
+global_sweep:
+  environment: [large, four_rooms, travel_field_small]
+  agent.critic.approximator.nonlinearity: [SiLU, LeakyReLU]
+  agent.critic.approximator.dropout_p: [0.0, 0.1]
+  agent.critic.approximator.hidden_size: [32, 64]
+  results.save_memory: True
+
+config_sweep:
+  - algorithm: eps_greedy
+    agent.actor.eps.init_value: 1.0
+    agent.actor.eps.end_value: [0.5, 0.2, 0.0]
+  - algorithm: eps_greedy
+    agent.actor.eps.init_value: 0.5
+    agent.actor.eps.end_value: [0.2, 0.0]
+  - algorithm: eps_greedy
+    agent.actor.eps.init_value: 0.2
+    agent.actor.eps.end_value: 0.0
+  - algorithm: resmax
+  - algorithm: greedy
+  - algorithm: random

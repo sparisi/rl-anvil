@@ -1,0 +1,8 @@
+# @package _global_
+
+agent:
+  actor:
+    id: EpsilonGreedy
+    eps:
+      id: Constant
+      value: 0.0

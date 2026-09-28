@@ -1,0 +1,10 @@
+# @package _global_
+
+environment:
+  id: Gym-Gridworlds/Empty-10x10-v0
+
+experiment:
+  warm_up: 10_000
+  cool_down: 10_000
+  training_steps: 100_000
+  testing_episodes: 1

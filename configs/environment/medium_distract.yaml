@@ -1,0 +1,10 @@
+# @package _global_
+
+environment:
+  id: Gym-Gridworlds/Empty-Distract-6x6-v0
+
+experiment:
+  warm_up: 500
+  cool_down: 500
+  training_steps: 5_000
+  testing_episodes: 1

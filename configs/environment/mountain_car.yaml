@@ -1,0 +1,10 @@
+# @package _global_
+
+environment:
+  id: MountainCar-v0
+
+experiment:
+  warm_up: 10_000
+  cool_down: 10_000
+  training_steps: 200_000
+  testing_episodes: 50

@@ -1,0 +1,18 @@
+# @package _global_
+
+environment:
+  id: Gym-Gridworlds/TravelField-28x28-v0
+  max_resolution: [256, 256]
+  distance_difference_reward: True
+
+experiment:
+  warm_up: 10_000
+  cool_down: 10_000
+  training_steps: 1_000_000
+  testing_episodes: 1
+
+agent:
+  critic:
+    gamma: 1.0
+    approximator:
+      hidden_size: 128

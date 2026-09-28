@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "RL-Anvil"
+abstract: "A small customizable codebase to train, sweep, and benchmark RL agents on any
+Gymnasium environment, locally or on SLURM, with plots, heatmaps, and videos of
+what the agent learned."
+type: software
+authors:
+  - family-names: Parisi
+    given-names: Simone
+repository-code: "https://github.com/sparisi/rl-anvil"
+url: "https://github.com/sparisi/rl-anvil"
+license: MIT
+version: "1.0"
+keywords:
+  - reinforcement-learning
+  - deep-reinforcement-learning
+  - gymnasium
+  - benchmarking
+  - slurm

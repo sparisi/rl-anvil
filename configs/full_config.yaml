@@ -1,0 +1,104 @@
+# List of all configuration parameters.
+
+environment:
+  id:  # e.g., Acrobot-v1, Gym-Gridworlds/FourRooms-13x13-v0, MountainCar-v0, ...
+  train_from_pixels:  # True or False (optional)
+  action_bins:  # (optional) to discretize continuous environments
+  observation_bins:  # (optional) to discretize continuous environments
+  # Any other parameters added here will be forwarded to gymnasium.make(...)
+
+meta:
+  slurm_job_id: null  # will be updated if the code runs on a SLURM job
+  git_hash: null  # will be updated with the current Git hash
+
+results:
+  data_dir:  # directory where to save data
+  save_memory:  # if True, the whole replay memory will be saved in data_dir
+  save_videos:  # if True, videos of the greedy policy will be saved during testing
+  save_heatmaps:  # if True, heatmaps of the Q-function will be saved
+  force_run:  # if False and the corresponding data.npz exists, the run will be prevented; set it to True if you want to force reruns (e.g., with save_videos=True)
+  progress_report:  # history_table (progress bars + one scrolling row per checkpoint), live_table (progress bars + the latest checkpoint rewritten in place), dict (one plain {key: value} line per checkpoint, for SLURM logs), or null
+  slurm_debug:  # if True, every checkpoint also records memory diagnostics
+
+experiment:
+  rng_seed:  # random seed
+  testing_points:  # how many times the greedy policy will be tested during training
+  testing_episodes:  # number of episodes to test the greedy policy
+  training_return_episode_window:  # how many recent training episodes are averaged for the reported train return; default max(testing_episodes, 10)
+  training_steps:  # the number of steps the agent will interact with the environment
+  warm_up:  # steps before updates of any kind (critic, decaying rates, ...) start (in the meantime, samples are collected in the memory)
+  cool_down:  # steps before training ends during which decaying rates stay fixed at their end_value
+  update_frequency:  # number of steps to collect between updates
+  updates_per_step:  # when it's time to update, how many mini-batches are sampled and used for as many updates
+  replay_memory:
+    id:  # ReplayMemory, PrioritizedReplayMemory, or OnlineMemory
+    max_size: ${experiment.training_steps}
+    min_size: ${experiment.warm_up}
+    alpha:  # priority exponent (0 → no priority, 1 → full priority), used by PrioritizedReplayMemory
+      id: LinearDecay  # Constant (takes 'value' instead of the keys below), LinearDecay, or ExponentialDecay
+      init_value: 0.0
+      end_value: 1.0
+      rate: null
+      steps: ${experiment.training_steps}  # duration of decay/growth
+      constant_init_steps: ${experiment.warm_up}  # when decaying/growing starts
+      constant_end_steps: ${experiment.cool_down}  # when decaying/growing ends
+    beta:  # importance-sampling correction (0 → none, 1 → full), used by PrioritizedReplayMemory
+      id: LinearDecay
+      init_value: 0.0
+      end_value: 1.0
+      rate: null
+      steps: ${experiment.training_steps}
+      constant_init_steps: ${experiment.warm_up}
+      constant_end_steps: ${experiment.cool_down}
+
+agent:
+  critic:
+    id:  # QNetwork
+    # ------- QCritic (all critics) -------
+    gamma: 0.99  # discount factor
+    lmbda: 0.95  # trace factor (Watkins TD(λ))
+    clip_reward:  # if True, reward = np.clip(reward, -1, 1)
+    batch_size:  # samples per mini-batch
+    sequence_length:  # number of consecutive steps per sample (for n-step / TD(λ) updates)
+    lr:  # learning rate scheduler
+      id: LinearDecay  # Constant (takes 'value' instead of the keys below), LinearDecay, or ExponentialDecay
+      init_value: 1.0
+      end_value: 1.0
+      rate: null
+      steps: ${experiment.training_steps}
+      constant_init_steps: ${experiment.warm_up}
+      constant_end_steps: ${experiment.cool_down}
+    # ------- QNetwork -------
+    normalize_observation:  # if True, obs = (obs - running_mean) / max(running_std, 1)
+    target_copy_frequency: 1  # after how many updates the target network is updated (hard or soft copy)
+    tau: 0.001  # copy coefficient (1 = hard, <1 soft aka Polyak)
+    approximator:  # Q-network
+      id:  # MSENetwork (single-Q)
+      optimizer_id:  # torch.optim class name, e.g., SGD, Adam, AdamW
+      normalization:  # LayerNorm, RMSNorm, or null (None)
+      nonlinearity:  # ReLU, LeakyReLU, Tanh, SiLU, ...
+      maxout_layers:  # number of parallel linear experts to max over (Maxout layer width)
+      bias:  # if True, linear layers have a bias term
+      loss:  # torch.nn.functional loss name (e.g., mse_loss, huber_loss)
+      device: cpu  # torch device
+      hidden_size: 32  # size of all linear layers
+      dropout_p: 0.1  # dropout probability
+      max_grad_norm: 10.0  # to clip the gradient
+      lrate: 0.01  # learning rate passed to the optimizer
+
+  actor:
+    id:  # EpsilonGreedy, Resmax, ...
+    eps:  # exploration parameter (used by all listed actors)
+      id: LinearDecay
+      init_value: 1.0
+      end_value: 0.0
+      rate: null
+      steps: ${experiment.training_steps}
+      constant_init_steps: ${experiment.warm_up}
+      constant_end_steps: ${experiment.cool_down}
+
+wandb:  # W&B init arguments (forwarded to wandb.init(**cfg.wandb))
+  mode:  # online, offline, disabled
+  entity:  # your-entity
+  project: null
+  dir: null

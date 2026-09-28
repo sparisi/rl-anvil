@@ -1,0 +1,15 @@
+# Disable Hydra's built-in logging configuration
+defaults:
+  - override hydra_logging: disabled
+  - override job_logging: disabled
+
+# The 'output' and 'multirun' subfolders will be created in the SCRATCH folder (see README).
+# The file 'multirun.yaml' will still be created as currently there is no way to prevent that.
+output_subdir: null
+run:
+  # dir: .
+  dir: ${oc.env:SCRATCH}/outputs/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}
+sweep:
+  # dir: .
+  # subdir: .
+  dir: ${oc.env:SCRATCH}/multirun/${now:%Y-%m-%d_%H-%M-%S}

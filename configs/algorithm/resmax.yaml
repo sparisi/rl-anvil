@@ -1,0 +1,12 @@
+# @package _global_
+
+agent:
+  actor:
+    id: Resmax
+    eps:
+      id: LinearDecay
+      init_value: 1.0
+      end_value: 0.0
+      steps: ${experiment.training_steps}
+      constant_init_steps: ${experiment.warm_up}
+      constant_end_steps: ${experiment.cool_down}

@@ -1,0 +1,41 @@
+rng_seed: 12
+
+ignored_cfg_keys:
+  experiment.testing_episodes
+
+color_scheme:
+  - sun_ratio_adaptive
+
+configs:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive_binned
+      experiment.replay_memory.rho: null
+      plot.label: "True Counts"
+      plot.color: purple
+    - algorithm: sun_ratio_adaptive
+      experiment.replay_memory.rho: 0.5
+      plot.label: "$\\rho = 0.5$"
+    - algorithm: sun_ratio_adaptive
+      experiment.replay_memory.rho: 0.25
+      plot.label: "$\\rho = 0.25$"
+    - algorithm: sun_ratio_adaptive
+      experiment.replay_memory.rho: 0.1
+      plot.label: "$\\rho = 0.1$"
+    - algorithm: sun_ratio_adaptive
+      experiment.replay_memory.rho: 0.05
+      plot.label: "$\\rho = 0.05$"
+    - algorithm: sun_ratio_adaptive
+      experiment.replay_memory.rho: 0.01
+      plot.label: "$\\rho = 0.01$"
+
+environments:
+  control:
+    mountain_car: "MountainCar"
+    pendulum_discrete: "Pendulum"
+    lunar_lander: "LunarLander"
+    acrobot: "Acrobot"
+    cart_pole: "CartPole"
+
+statistics:
+  sa_h: "Entropy"
+  sa_%: "Coverage"

@@ -5,6 +5,8 @@ import gymnasium
 
 import src.approximator
 import src.parameter
+import src.goal_relabeling
+from src.pseudocount import is_neighbor
 from src.utils.running_stats import RunningStandardization
 from src.utils.misc import cantor_pairing, random_argmax
 
@@ -200,6 +202,8 @@ class QNetwork(QCritic):
         tau: float,
         normalize_observation: bool,
         approximator: DictConfig,
+        goal_idx: list = None,
+        explore_only: bool = False,
         seed: int = None,
         **kwargs,
     ):
@@ -213,11 +217,17 @@ class QNetwork(QCritic):
             normalize_observation (bool): if True, observations are normalized using their
                 running mean and standard deviation,
             approximator (DictConfig): configuration to initialize the Q-network,
+            goal_idx (list): indices of the observation elements a goal-conditioned
+                agent treats as the goal. None means all of them,
+            explore_only (bool): if True, the Q-function w.r.t. extrinsic reward
+                will not be learned,
             seed (int): seed to initialize the network for reproducibility,
         """
 
         QCritic.__init__(self, **kwargs)
         self.n_actions = act_space.n
+        self.goal_idx = slice(goal_idx) if goal_idx is None else goal_idx
+        self.explore_only = explore_only
         self.q = getattr(src.approximator, approximator.id)(
             obs_space.shape, act_space.n, **approximator, seed=seed,
         )
@@ -257,6 +267,11 @@ class QNetwork(QCritic):
     def update(self, replay_memory, rng_generator=None, **kwargs):
         self.n_updates += 1
         self.train()
+
+        # A purely exploratory agent never learns the extrinsic Q-function; the
+        # visit Q-function of a subclass is all it acts on.
+        if self.explore_only:
+            return {}
 
         if rng_generator is None:
             rng_generator = self.rng_generator()
@@ -350,6 +365,230 @@ class QNetwork(QCritic):
         self.tau = source.tau
         self.n_updates = source.n_updates
         self.running_obs.copy_from(source.running_obs)
+
+
+class QVisitNetwork(QNetwork):
+    """
+    This critic also learns Q-functions based on the successor representation, to
+    approximate first time visitation of state-action pairs.
+    These are often called S-functions or W-functions in the RL literature. Here,
+    they are they are called Q-visit.
+    """
+
+    def __init__(
+        self,
+        obs_space: gymnasium.spaces.Box,
+        act_space: gymnasium.spaces.Discrete,
+        approximator_visit: DictConfig,
+        gamma_visit: float,
+        lmbda_visit: float,
+        lr_visit: DictConfig,
+        batch_size_visit: int,
+        sequence_length_visit: int,
+        relabeling: DictConfig,
+        negative_visit_reward: bool,
+        reward_visit_hard: bool,
+        seed: int = None,
+        **kwargs,
+    ):
+        assert hasattr(src.goal_relabeling, relabeling.id), f"Unknown relabeling '{relabeling.id}'"
+        QNetwork.__init__(self, obs_space, act_space, **kwargs, seed=seed)
+        self.lr_visit = getattr(src.parameter, lr_visit.id)(**lr_visit)
+        self.gamma_visit = gamma_visit
+        self.lmbda_visit = lmbda_visit
+        self.batch_size_visit = batch_size_visit
+        self.sequence_length_visit = sequence_length_visit
+        self.negative_visit_reward = negative_visit_reward
+        self.reward_visit_hard = reward_visit_hard
+        self.relabeling = relabeling
+        goal_shape = np.empty(obs_space.shape, dtype=obs_space.dtype)[..., self.goal_idx].shape
+        self.q_visit = getattr(src.approximator, approximator_visit.id)(
+            goal_shape, obs_space.shape, act_space.n, **approximator_visit, seed=seed,
+        )
+        self.q_visit_target = getattr(src.approximator, approximator_visit.id)(
+            goal_shape, obs_space.shape, act_space.n, **approximator_visit, seed=seed,
+        )
+        self.q_visit_target.eval()
+        QVisitNetwork.reset(self, seed=seed)
+
+    def __call__(self, obs, act=None, goal=None, target=False, **kwargs):
+        if target:
+            if goal is None:
+                return self.q_target(self._normalize_obs(obs), act)
+            else:
+                return self.q_visit_target(self._normalize_obs(obs), self._normalize_obs(goal)[..., self.goal_idx], act)
+        if goal is None:
+            return self.q(self._normalize_obs(obs), act)
+        else:
+            return self.q_visit(self._normalize_obs(obs), self._normalize_obs(goal)[..., self.goal_idx], act)
+
+    def reset(self, seed=None):
+        self.lr_visit.reset()
+        self.q_visit.reset(seed=seed)
+        self.q_visit_target.reset(seed=seed)
+        QNetwork.reset(self, seed=seed)
+
+    def update(self, replay_memory, rng_generator=None, **kwargs):
+        self.train()
+
+        if rng_generator is None:
+            rng_generator = self.rng_generator()
+
+        q_stats = QNetwork.update(self, replay_memory, rng_generator, **kwargs)
+
+        batch = replay_memory.get(
+            batch_size=self.batch_size_visit,
+            sequence_length=self.sequence_length_visit,
+            rng_generator=rng_generator,
+            priority_key="td_err_visit",
+        )
+
+        # Data is duplicated with positives and negatives, for a final shape of (B, T, k)
+        relabeling_kwargs = {k: v for k, v in self.relabeling.items() if k != 'id'}
+        obs, next_obs, goal, act, term, trunc, stepsize = getattr(src.goal_relabeling, self.relabeling.id)(
+            batch, replay_memory, rng_generator, **relabeling_kwargs,
+        )
+        stepsize = stepsize * self.lr_visit.value
+        T = obs.shape[1]
+
+        if self.reward_visit_hard:
+            rwd_visit = np.all(
+                obs[..., self.goal_idx] == goal[..., self.goal_idx],
+                axis=-1,
+            ) * 1.0
+            # The reward fires only if the state is EXACTLY the goal. This always
+            # happens for positive samples in future HER. TD(λ) then makes positive
+            # credit assignment easier.
+        else:
+            # Other GCRL environments/repos define a threshold for reaching goals
+            # |s - g| < η, but this requires prior knowledge on the environment.
+            # If you want to use the same bins of true counts, modify
+            # `src.pseudocount.is_neighbor_binned` to support batch obs.
+            # Another alternative is to use algorithm-specific mechanism, e.g.,
+            # SUN's pseudocount radius, but this class is supposed to be generic.
+            raise NotImplementedError
+
+        # Note on rwd_visit. Other algorithms/repos use the negative squared
+        # distance from the goal. Not only can it be unstable and depends on the
+        # obs scale, but it also breaks the condition on terminal transition
+        # "term = rwd_visit == 1", unless a threshold check |s - g | < η is used.
+
+        obs = self._normalize_obs(obs)
+        next_obs = self._normalize_obs(next_obs)
+        goal = self._normalize_obs(goal)
+
+        # Double DQN
+        tolerance_max = 1.0 - self.gamma_visit
+        q_visit_bound = 0.0 if self.negative_visit_reward else 1.0
+        q_visit_next = self.q_visit(
+            next_obs,
+            goal[..., self.goal_idx],
+            with_gradient=False,
+        )
+        next_a_max = random_argmax(
+            q_visit_next,
+            rng_generator=rng_generator,
+            axis=-2,
+            rtol=tolerance_max,
+        )
+        target_q_visit_next = np.take_along_axis(
+            self.q_visit_target(
+                next_obs,
+                goal[..., self.goal_idx],
+                with_gradient=False,
+            ),
+            next_a_max[..., None, :],
+            axis=-2,
+        ).squeeze(-2)
+        target_q_visit_next = np.clip(target_q_visit_next, None, q_visit_bound)
+
+        # By default, rwd_visit is 1 on hit and 0 otherwise.
+        # This is used to check termination as well (first-hit termination).
+        A = self.n_actions
+        first_hit = rwd_visit > 0.0
+        rwd_visit = np.repeat(rwd_visit[..., None], A, -1)
+        mask = act[..., None] == np.arange(A)
+        rwd_visit *= mask
+        term_visit = rwd_visit == 1.0
+        term_visit = np.logical_or(term[..., None], term_visit)
+
+        # Truncate at first-hit for all action-goals: cuts TD(λ) backprop at the
+        # state-goal step regardless of which action was taken, for explicit
+        # negative/positive sub-sequence truncation.
+        trunc_visit = np.logical_or(trunc, first_hit)
+        trunc_visit = np.repeat(trunc_visit[..., None], A, -1)
+
+        is_next_act_greedy = None
+        if self.lmbda_visit > 0.0 and T > 1:
+            is_next_act_greedy = is_act_greedy(
+                q_visit_next[:, :-1],
+                act[:, 1:],
+                axis=-2,
+                rtol=tolerance_max,
+            )
+
+        # Subtract -1 if rewards are encoded differently (-1/0 rather than 0/1)
+        target = td_target(
+            rwd_visit - self.negative_visit_reward * 1.0,
+            term_visit,
+            trunc_visit,
+            is_next_act_greedy,
+            target_q_visit_next,
+            self.gamma_visit,
+            self.lmbda_visit,
+        )
+
+        error_visit, gradient_norm_visit, q_visit = self.q_visit.update(
+            obs,
+            goal[..., self.goal_idx],
+            act,
+            target=target,
+            stepsize=stepsize[..., None],  # broadcast to action dim
+            rng_generator=rng_generator,
+        )
+
+        # Average the error over positives and negatives
+        mean_error_visit = error_visit.mean(-1)
+
+        # Update priorities in PER (will skip if no PER)
+        replay_memory.post_sampling(batch["idx"], mean_error_visit, "td_err_visit")  # td_err is already squared
+
+        return q_stats | {
+            "td_err_visit": mean_error_visit,
+            "grad_norm_visit": gradient_norm_visit,
+            "q_visit_mean": q_visit.mean(),
+        }
+
+    def post_step(self, obs, act, *args, **kwargs):
+        # lr_visit steps here, not in post_update, because on this branch every
+        # schedule runs on the environment-step clock (see QCritic.post_step).
+        QNetwork.post_step(self, obs, act, *args, **kwargs)
+        self.lr_visit.step()
+
+    def post_update(self):
+        # QNetwork.post_update zeroes target_copy_counter exactly on the update
+        # it copies q_target, so testing it for 0 afterwards keeps q_visit_target
+        # on the same schedule without duplicating the counter arithmetic.
+        QNetwork.post_update(self)
+        if self.n_updates > 0 and self.target_copy_counter == 0:
+            self.q_visit_target.copy_from(self.q_visit, self.tau)
+
+    def train(self):
+        QNetwork.train(self)
+        self.q_visit.train()
+
+    def eval(self):
+        QNetwork.eval(self)
+        self.q_visit.eval()
+
+    def copy_from(self, source):
+        QNetwork.copy_from(self, source)
+        self.lr_visit.copy_from(source.lr_visit)
+        self.gamma_visit = source.gamma_visit
+        self.lmbda_visit = source.lmbda_visit
+        self.relabeling = source.relabeling
+        self.q_visit.copy_from(source.q_visit)
+        self.q_visit_target.copy_from(source.q_visit_target)
 
 
 class QEnsemble(Critic):

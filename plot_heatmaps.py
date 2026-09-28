@@ -22,7 +22,7 @@ environment and never across them: `same_figure` pools over the maps of one figu
 `all_figures` over every map of that environment the script draws, so the scale it
 gets is the same in every figure it appears in. Either way the pool is over a
 family of maps rather than one map: (`visit_count`, `pseudocount`) share the same
-vmap.
+vmap, and so do (`goal_selected_count`, `goal_reached_count`).
 
 --colorbar draws the colour scale under the panels it applies to: one per
 environment under --shared_vmap, one per panel when it is unset. Panels are drawn
@@ -67,6 +67,9 @@ SUBPLOT_SIZE = 1.5   # inches per panel, without a colour bar under it
 
 MEMORY_KEYS = [
     "visit_count",
+    "pseudocount",
+    "goal_selected_count",
+    "goal_reached_count",
 ]
 
 
@@ -84,7 +87,7 @@ SCALE_FAMILY_KEYS = {
 # comes from `goal_obs` and `goal_valid`, and how often it was then hit needs
 # `act` and `goal_act` beside them. Leaving any of the four out does not draw an
 # empty map, it draws no map at all.
-NEEDED_MEM_KEYS = {"obs", "act"}
+NEEDED_MEM_KEYS = {"obs", "count", "goal_obs", "goal_valid", "act", "goal_act"}
 
 # --- CLI ---
 parser = argparse.ArgumentParser()

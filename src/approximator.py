@@ -366,28 +366,6 @@ class GridAggregationEncoder(nn.Module):
         return self.encoder(x)
 
 
-class PassthroughEncoder(nn.Module):
-    """Wraps an encoder for flat observations: features at `passthrough` indices
-    (e.g., the binary leg contacts of LunarLander) skip the encoder, and are
-    concatenated raw to its output. All other features go through `encoder_cls`.
-    Shape: (..., state_dim) → (batch, encoder_dim + num_passthrough)."""
-
-    def __init__(self, encoder_cls, state_shape, passthrough, **kwargs):
-        super().__init__()
-        assert len(state_shape) == 1, "passthrough requires a flat state_shape"
-        self.state_dim = state_shape[0]
-        mask = np.zeros(self.state_dim, dtype=bool)
-        mask[list(passthrough)] = True
-        # Python lists, not buffers: soft_reset blends buffers as floats.
-        self.raw_idx = np.flatnonzero(mask).tolist()
-        self.enc_idx = np.flatnonzero(~mask).tolist()
-        self.encoder = encoder_cls((len(self.enc_idx),), **kwargs)
-
-    def forward(self, x):
-        x = x.reshape(-1, self.state_dim)
-        return torch.cat([self.encoder(x[:, self.enc_idx]), x[:, self.raw_idx]], dim=-1)
-
-
 # ------------------------------------------------------------------------------
 # ------------------------------ BODY NETWORKS ---------------------------------
 # ------------------------------------------------------------------------------
@@ -539,21 +517,13 @@ class MSENetwork(FunctionApproximator, nn.Module):
         # Cannot use LazyLinear and also have custom init, unless you
         # make a custom Module and override reset_parameters().
 
-        encoder_id = None if self._encoder_cfg is None else self._encoder_cfg.get('id')
-
-        if encoder_id is None:
+        if self._encoder_cfg is None:
             self._obs_encoder = nn.Identity().to(self.device)
         else:
-            encoder_kwargs = {k: v for k, v in self._encoder_cfg.items() if k not in ('id', 'passthrough')}
-            encoder_cls = getattr(src.approximator, encoder_id)
-            passthrough = self._encoder_cfg.get('passthrough')
-            if passthrough is None:
-                self._obs_encoder = encoder_cls(self.state_shape, **encoder_kwargs)
-            else:
-                self._obs_encoder = PassthroughEncoder(
-                    encoder_cls, self.state_shape, passthrough, **encoder_kwargs,
-                )
-            self._obs_encoder.to(self.device)
+            encoder_kwargs = {k: v for k, v in self._encoder_cfg.items() if k != 'id'}
+            self._obs_encoder = getattr(src.approximator, self._encoder_cfg.id)(
+                self.state_shape, **encoder_kwargs,
+            ).to(self.device)
 
         self._obs_encoder.eval()
         state_enc_dim = self._obs_encoder(
@@ -562,7 +532,7 @@ class MSENetwork(FunctionApproximator, nn.Module):
         self._obs_encoder.train()
 
         self._body = nn.Sequential(
-            self.Norm(state_enc_dim) if encoder_id is not None else nn.Identity(),
+            self.Norm(state_enc_dim) if self._encoder_cfg is not None else nn.Identity(),
             # This is a Maxout block (Goodfellow et al., 2013)
             LinearN(
                 state_enc_dim,
@@ -644,6 +614,133 @@ class DuelingMSENetwork(MSENetwork):
             q = torch.take_along_dim(
                 q,
                 action.unsqueeze(action_dim),
+                dim=action_dim,
+            ).squeeze(action_dim)
+
+        return q.detach().cpu().numpy() if not with_gradient else q
+
+
+# ------------------------------------------------------------------------------
+# -------------------------------- GCRL ----------------------------------------
+# ------------------------------------------------------------------------------
+
+class MSEGoalNetwork(MSENetwork):
+    """
+    Receives a state-goal (or simply "goal") as input as well, and outputs
+    values of shape (n_actions, n_actions).
+    The first action-dimension is for the action-value, the second is for the action-goal.
+    Math notation: Q(s_t, a_t | s_g, a_g).
+    Coded as: Q[s_t, s_g, a_t, a_g].
+
+    The architecture is:
+        z_s = phi_s(s)
+        z_g = phi_g(g)
+        sf = obs_body(z_s)
+        gf = goal_body(z_g)
+        h = [sf, gf, sf * gf]
+        h = shared_body(h)
+    """
+
+    def __init__(self, goal_shape, *args, **kwargs):
+        # Set before super().__init__, which calls reset() and needs it.
+        self.goal_shape = goal_shape
+        super().__init__(*args, **kwargs)
+
+    def reset(self, seed=None):
+        if seed is not None:
+            torch.manual_seed(seed)
+
+        # Obs encoder
+        if self._encoder_cfg is None:
+            self._obs_encoder = nn.Identity().to(self.device)
+        else:
+            encoder_kwargs = {k: v for k, v in self._encoder_cfg.items() if k != 'id'}
+            self._obs_encoder = getattr(src.approximator, self._encoder_cfg.id)(
+                self.state_shape, **encoder_kwargs,
+            ).to(self.device)
+
+        self._obs_encoder.eval()
+        state_enc_dim = self._obs_encoder(
+            torch.zeros((1,) + tuple(self.state_shape), device=self.device)
+        ).shape[-1]
+        self._obs_encoder.train()
+
+        # Goal encoder
+        if self._encoder_cfg is None:
+            self._goal_encoder = nn.Identity().to(self.device)
+        else:
+            encoder_kwargs = {k: v for k, v in self._encoder_cfg.items() if k != 'id'}
+            self._goal_encoder = getattr(src.approximator, self._encoder_cfg.id)(
+                self.goal_shape, **encoder_kwargs,
+            ).to(self.device)
+
+        self._goal_encoder.eval()
+        goal_enc_dim = self._goal_encoder(
+            torch.zeros((1,) + tuple(self.goal_shape), device=self.device)
+        ).shape[-1]
+        self._goal_encoder.train()
+
+        # Obs and goal separate bodies
+        self._obs_body = nn.Sequential(
+            self.Linear(state_enc_dim, self._hidden_size, bias=self._bias).apply(zero_init),
+            self.Norm(self._hidden_size),
+            # nn.Dropout(self._dropout_p) if self._dropout_p > 0.0 else nn.Identity(),
+            self.NonLinear(),
+            self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(zero_init),
+        ).to(self.device)
+        self._goal_body = nn.Sequential(
+            self.Linear(goal_enc_dim, self._hidden_size, bias=self._bias).apply(zero_init),
+            self.Norm(self._hidden_size),
+            # nn.Dropout(self._dropout_p) if self._dropout_p > 0.0 else nn.Identity(),
+            self.NonLinear(),
+            self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(zero_init),
+        ).to(self.device)
+
+        # Shared body
+        body_input_dim = self._hidden_size * 3  # concat (sf, gf, sf * gf)
+        self._shared_body = nn.Sequential(
+            self.Norm(body_input_dim) if self._encoder_cfg is not None else nn.Identity(),
+            LinearN(
+                body_input_dim,
+                self._hidden_size,
+                self._maxout_layers,
+                normalization=nn.Identity,
+                bias=self._bias,
+                init=zero_init,
+            ),
+            Aggregation(["max"]),
+            self.Norm(self._hidden_size),
+            self.NonLinear(),
+            nn.Dropout(self._dropout_p) if self._dropout_p > 0.0 else nn.Identity(),
+            self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(zero_init),
+            self.Norm(self._hidden_size),
+            self.NonLinear(),
+            self.Linear(self._hidden_size, self.n_output ** 2).apply(zero_init),
+        ).to(self.device)
+
+        self.reset_optimizer()
+
+    def _forward(self, state, goal):
+        sf = self._obs_body(self._obs_encoder(state))
+        gf = self._goal_body(self._goal_encoder(goal))
+        return self._shared_body(torch.concat((sf, gf, sf * gf), -1))
+
+    def forward(self, state, goal, action=None, with_gradient=False, **kwargs):
+        batch_shapes = state.shape[:-len(self.state_shape)]
+        action_dim = len(batch_shapes)
+
+        with torch.set_grad_enabled(with_gradient):
+            q = self._forward(
+                torch.asarray(state, dtype=torch.float, device=self.device),
+                torch.asarray(goal, dtype=torch.float, device=self.device),
+            )
+            q = q.view(*batch_shapes, self.n_output, self.n_output)
+
+        if action is not None:
+            action = torch.asarray(action, device=self.device, dtype=torch.long)
+            q = torch.take_along_dim(
+                q,
+                action.unsqueeze(action_dim).unsqueeze(action_dim + 1),
                 dim=action_dim,
             ).squeeze(action_dim)
 

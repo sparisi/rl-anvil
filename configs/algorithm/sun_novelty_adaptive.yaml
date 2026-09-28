@@ -1,0 +1,27 @@
+# @package _global_
+defaults:
+  - override /agent: svf
+  - _self_
+
+agent:
+  critic:
+    relabeling:
+      id: her_future
+      K: 4
+
+  actor:
+    id: SUN_Novelty
+    batch_size_goal: 256
+    random_tail: False
+    per_step_selection: True
+    goal_value_check: True
+    eps:
+      id: LinearDecay
+      init_value: 1.0
+      end_value: 0.1
+      steps: ${experiment.warm_up}
+      constant_init_steps: ${experiment.warm_up}
+
+experiment:
+  replay_memory:
+    rho: 0.25

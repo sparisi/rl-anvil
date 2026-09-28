@@ -1,0 +1,35 @@
+defaults:
+  - default
+  - _self_
+
+critic:
+  id: QVisitNetwork
+  explore_only: True
+  goal_idx: null
+  gamma_visit: 0.99
+  lmbda_visit: 0.95
+  batch_size_visit: 16
+  sequence_length_visit: 16
+  negative_visit_reward: False
+  reward_visit_hard: True
+  lr_visit:
+    id: LinearDecay
+    init_value: 1.0
+    end_value: 1.0
+    rate: null
+    steps: ${experiment.training_steps}
+    constant_init_steps: ${experiment.warm_up}
+    constant_end_steps: ${experiment.cool_down}
+  approximator_visit:
+    id: MSEGoalNetwork
+    optimizer_id: AdamW
+    maxout_layers: 4
+    normalization: LayerNorm
+    nonlinearity: SiLU
+    loss: huber_loss
+    bias: False
+    device: cpu
+    hidden_size: 64
+    dropout_p: 0.1
+    max_grad_norm: 1.0
+    lrate: 0.001

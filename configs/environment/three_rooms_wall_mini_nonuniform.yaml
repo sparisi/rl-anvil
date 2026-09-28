@@ -7,6 +7,8 @@ environment:
   non_uniform_start: True
 
 experiment:
+  replay_memory:
+    rho: null
   warm_up: 5_000
   cool_down: 5_000
   training_steps: 100_000

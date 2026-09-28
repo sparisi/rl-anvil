@@ -1,0 +1,28 @@
+# @package _global_
+
+environment:
+  id: LunarLander-v3
+
+experiment:
+  warm_up: 10_000
+  cool_down: 10_000
+  training_steps: 1_000_000
+  testing_episodes: 50
+
+agent:
+  critic:
+    normalize_observation: True
+    approximator:
+      encoder:
+        id: RawGridEncoder
+        grid_id: GaussianActivation
+        num_centers: 20
+        v_max: 3.0
+        centers_mode: learned
+    approximator_visit:
+      encoder:
+        id: RawGridEncoder
+        grid_id: GaussianActivation
+        num_centers: 20
+        v_max: 3.0
+        centers_mode: learned

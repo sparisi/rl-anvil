@@ -1,0 +1,36 @@
+default:
+  - default
+
+statistics:
+  sa_h: "Bin Entropy"
+  sa_%: "Bin Coverage"
+
+configs:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      experiment.replay_memory.rho: 0.5
+      plot.label: "$\\rho = 0.5$"
+    - algorithm: sun_ratio_adaptive
+      experiment.replay_memory.rho: 0.25
+      plot.label: "$\\rho = 0.25$"
+    - algorithm: sun_ratio_adaptive
+      experiment.replay_memory.rho: 0.1
+      plot.label: "$\\rho = 0.1$"
+    - algorithm: sun_ratio_adaptive
+      experiment.replay_memory.rho: 0.05
+      plot.label: "$\\rho = 0.05$"
+    - algorithm: sun_ratio_adaptive
+      experiment.replay_memory.rho: 0.01
+      plot.label: "$\\rho = 0.01$"
+  adagoal:
+    - algorithm: adagoal
+      plot.label: "AdaGoal"
+  discover:
+    - algorithm: discover
+      plot.label: "DISCOVER"
+  random:
+    - algorithm: random
+      plot.label: "Random"
+
+environments:
+  lunar_lander_full: "LunarLander(Full)"

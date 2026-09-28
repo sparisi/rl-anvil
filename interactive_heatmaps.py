@@ -74,7 +74,7 @@ from src.utils.slurm import parse_seeds
 from src.utils.sweep import load_sweep
 
 SUBPLOT_SIZE = 1.3  # inches per heatmap, the size a cell is drawn from
-NEEDED_MEM_KEYS = ("obs", "count")
+NEEDED_MEM_KEYS = ("obs", "count", "goal_obs", "goal_valid")
 
 # The seed a row carries is the directory name, not cfg.yaml's own
 # experiment.rng_seed, which every seed of a configuration shares. SEED is

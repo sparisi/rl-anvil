@@ -279,6 +279,25 @@ class Experiment:
             next_obs=self._env_train.observation_space.sample(),
         )
 
+        # Also for debugging
+        if hasattr(self._actor, "goal_selected_count"):
+            self._replay_memory.add_keys(
+                goal_obs=self._env_train.observation_space.sample(),
+                goal_act=self._env_train.action_space.sample(),
+                goal_valid=np.asarray(False),  # Whether the actor acted on a goal or not (e.g., random exploration)
+            )
+
+        # Counts for scoring goal candidates. The memory serves either the true
+        # binned counts read from this counter or pseudocounts over its own
+        # samples, depending on whether its rho is None; the counter is None when
+        # the environment's observations cannot be binned, which leaves
+        # pseudocounts as the only option.
+        self._replay_memory.init_counting(
+            n_actions=self._critic.n_actions,
+            goal_idx=getattr(self._critic, "goal_idx", slice(None)),
+            counter=self._critic.visit_count,
+        )
+
         # Pre-allocate critic and arrays for test()
         if self._testing_episodes >= 1 and self._env_test is not None:
             self._critic_test = deepcopy(self._critic)
@@ -422,6 +441,11 @@ class Experiment:
                 critic_rng = self._critic.rng_generator(seed=ep_seed)
 
                 obs, info = self._env_train.reset(seed=ep_seed)
+                self._actor.reset_episode(
+                    seed=ep_seed,
+                    rng_generator=actor_rng,
+                    obs=obs,
+                )
                 ep_steps = 0
                 ep_disc_return = 0.0
                 ep_undisc_return = 0.0
@@ -432,7 +456,11 @@ class Experiment:
                     if self._pbar is not None:
                         self._pbar.update("training", self._tot_steps)
 
-                    act = self._actor(obs, actor_rng)
+                    act = self._actor(
+                        obs=obs,
+                        replay_memory=self._replay_memory,
+                        rng_generator=actor_rng,
+                    )
                     next_obs, rwd, term, trunc, info = self._env_train.step(act)
 
                     sample = dict(
@@ -443,6 +471,22 @@ class Experiment:
                         trunc=trunc,
                         next_obs=next_obs,
                     )
+                    if hasattr(self._actor, "goal_selected_count"):
+                        # `_goal_used_last_step` is the goal the action was
+                        # actually taken for, which is not `goal` once a
+                        # per-step actor has already re-selected.
+                        goal = getattr(self._actor, "_goal_used_last_step", None)
+                        if goal is None:
+                            goal = self._actor.goal
+                        # Written every step, including the ones with no goal:
+                        # add() only stores what it is given, so leaving the keys
+                        # out would keep whatever the slot held before -- a goal
+                        # from a previous lap of the ring buffer -- and record it
+                        # as this step's. goal_valid says which entries mean
+                        # anything; the rest are zeroed placeholders.
+                        sample["goal_valid"] = goal is not None
+                        sample["goal_obs"] = 0 if goal is None else goal["obs"]
+                        sample["goal_act"] = 0 if goal is None else goal["act"]
 
                     # Update statistics and decay epsilon, learning rates, and
                     # any other scheduled parameter. These run on the
@@ -556,6 +600,8 @@ class Experiment:
     def _compute_stats(self, d_steps: int, train_sec: float, test_sec: float) -> dict:
         """Gather this checkpoint's statistics into one flat dict."""
 
+        expl_stats = {}
+
         # Here, coverage and entropy are computed from binned counts, i.e.,
         # discretizations of the environment spaces.
         # If the spaces are large, fine-grained binning is too expensive: either
@@ -563,7 +609,6 @@ class Experiment:
         # accurate statistics.
         # In this case, save the whole replay memory and compute statistics
         # post-training (see README.md).
-        expl_stats = {}
         if self._critic.visit_count is not None:
             visits = self._critic.visit_count()  # shape: (num states, num actions)
             try:  # Gridworlds have a mask to filter out unreachable states

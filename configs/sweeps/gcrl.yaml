@@ -1,0 +1,24 @@
+global_sweep:
+  environment:
+    - three_rooms_wall_mini_nonuniform
+    - four_rooms_stuck_hard
+    - travel_field_small
+    - acrobot
+    - mountain_car
+    - pendulum_discrete
+    - cart_pole
+    - lunar_lander
+    # - lunar_lander_full
+  algorithm:
+    - adagoal
+    - discover
+    - random
+    - sun_ratio_adaptive
+    - sun_ratio_adaptive_binned
+    - sun_ratio_episodic
+    - sun_ratio_step
+    - sun_ucb_adaptive
+    - sun_novelty_adaptive
+    - sun_reachability_adaptive
+  results.save_memory: True
+  experiment.testing_episodes: 0

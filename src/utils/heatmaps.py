@@ -139,6 +139,8 @@ def scale_key(key):
 
     if key in ("visit_count", "pseudocount"):
         return "visit"
+    if key in ("goal_selected_count", "goal_reached_count"):
+        return "goal"
     return key
 
 
@@ -204,9 +206,25 @@ def agent_maps(actor, critic, env):
         counts = orient(np.asarray(visit_count()).sum(-1), shape, cartesian)
         panels.append((counts, "Visits"))
 
+    # Kept by goal-conditioned actors: which state-action pairs were picked as
+    # goals, and which of those were reached.
+    for attr, title in (
+        ("goal_selected_count", "Goals Selected"),
+        ("goal_reached_count", "Goals Reached"),
+    ):
+        goals = getattr(actor, attr, None)
+        if goals is not None:
+            panels.append(
+                (orient(np.asarray(goals()).sum(-1), shape, cartesian), title)
+            )
+
     values = value_map(critic, counter_of(env), env, nan_mask)
     if values is not None:
         panels.append((values, "Value"))
+
+    visit_values = visit_value_map(critic, counter_of(env), env, nan_mask)
+    if visit_values is not None:
+        panels.append((visit_values, "Visit-Value"))
 
     return panels
 
@@ -260,6 +278,122 @@ def value_map(critic, counter, env, nan_mask=None):
         nan_mask,
         zero_empty=False,
     )
+
+
+def _flatten_and_split(x, shape):
+    """Reshape a 4D grid (h, w, h, w) into a 2D visualization: rows index outer
+    state s, cols index outer goal g, and each cell holds the (h, w) inner grid.
+    Inserts NaN separator rows/cols between blocks for visual clarity."""
+
+    a, b, c, d = shape
+    y = x.reshape(shape).transpose(2, 0, 3, 1).reshape(c * a, d * b)
+    row_sep = np.full((2, d * b), np.nan)
+    row_blocks = np.split(y, c)
+    y_row = np.vstack([
+        block if i == c - 1 else np.vstack([block, row_sep])
+        for i, block in enumerate(row_blocks)
+    ])
+    col_sep = np.full((y_row.shape[0], 2), np.nan)
+    col_blocks = np.split(y_row, d, axis=1)
+    y_sep = np.hstack([
+        block if i == d - 1 else np.hstack([block, col_sep])
+        for i, block in enumerate(col_blocks)
+    ])
+    return y_sep
+
+
+def visit_value_map(critic, counter, env, nan_mask=None):
+    """Compute V(s, g) = max_a Q_visit(s, a, g) over the grid and return it as a
+    nested map -- one inner map over goals inside every outer cell over states --
+    or None when the critic keeps no visit Q-function to evaluate on it.
+
+    The two kinds of critic disagree on what a goal is, so they reduce
+    differently:
+
+      - a tabular critic hands over its whole table, of shape
+        (n_states, n_act, n_states * n_act). Its goals are (state, action) pairs,
+        so the goal's action is reduced away as well as the action taken.
+      - a network cannot be read out at once, so it is queried at every pair of
+        bin centres, which only `counter` knows. Its goals are states already
+        (`critic(obs, goal=...)` slices out what it needs), so only the action
+        taken is reduced away.
+
+    `env` decides the orientation only.
+
+    `nan_mask` is true for the bins to keep and false for the ones to set to
+    NaN. A cell here is a (state, goal) pair, so it is kept only where both ends
+    are. It is applied on the nested grid, before the orientation and the
+    separators."""
+
+    shape = map_shape(counter)
+    if shape is None or len(shape) != 2:
+        return None
+    n_states = int(np.prod(shape))
+
+    q_visit = getattr(critic, "q_visit", None)
+    if q_visit is None:
+        return None
+
+    v = None
+    if callable(q_visit):
+        try:
+            table = np.asarray(q_visit())
+        except Exception:
+            table = None
+        if (
+            table is not None
+            and table.ndim == 3
+            and table.shape[0] == n_states
+            and table.shape[2] == n_states * table.shape[1]
+        ):
+            n_act = table.shape[1]
+            v = table.max(1).reshape(n_states, n_states, n_act).max(-1)
+
+    if v is None and callable(critic):
+        if not hasattr(counter, "bin_centers_raw"):
+            return None
+        states = counter.bin_centers_raw()
+        n, dim = states.shape
+        if hasattr(critic, "eval"):
+            critic.eval()
+        try:
+            q = np.asarray(
+                critic(
+                    obs=np.broadcast_to(states[:, None, :], (n, n, dim)),
+                    goal=np.broadcast_to(states[None, :, :], (n, n, dim)),
+                )
+            )
+        except Exception:
+            return None
+        finally:
+            if hasattr(critic, "train"):
+                critic.train()
+        # GCRL QTable dims are (s, a, s*a). QNetwork is (s, s, a, a).
+        if q.ndim not in (3, 4) or q.shape[:2] != (n_states, n_states):
+            return None
+        v = q.max(-1)
+        if q.ndim == 4:
+            v = v.max(-1)
+
+    if v is None:
+        return None
+
+    v = v.reshape(shape + shape)
+    if nan_mask is not None:
+        keep = np.asarray(nan_mask, dtype=bool)
+        if keep.size == n_states:
+            keep = keep.reshape(shape)
+            v = np.where(
+                keep[:, :, None, None] & keep[None, None, :, :],
+                v,
+                EMPTY,
+            )
+    if is_cartesian(env):
+        # The flipud(m.T) orient() applies to a flat map, done here on the outer
+        # state grid and on the inner goal grid: both are over the environment's
+        # coordinates, so both need it.
+        v = np.flip(v.transpose(1, 0, 3, 2), axis=(0, 2))
+    return _flatten_and_split(v, v.shape)
 
 
 def memory_maps(memory, env=None, env_cfg=None, fractions=(1.0,)):

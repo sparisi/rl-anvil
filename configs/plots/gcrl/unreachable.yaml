@@ -1,0 +1,44 @@
+default:
+  - default
+
+rng_seed: 12
+
+# plots_rows_cols: [1, -1]  # defines how to arrange subplots (optional; default = one row)
+legend_rows_cols: [1, 8]
+
+# Configurations to plot and their legend labels.
+# One group per algorithm, so each of them is a hue of its own.
+# Configurations not listed here are not plotted.
+configs:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      plot.label: "SUN (Adapt., Multipl.)"
+  sun_ucb_adaptive:
+    - algorithm: sun_ucb_adaptive
+      plot.label: "SUN (Adapt., Additive)"
+  sun_ratio_step:
+    - algorithm: sun_ratio_step
+      plot.label: "SUN (Per-Step, Multipl.)"
+  sun_ratio_episodic:
+    - algorithm: sun_ratio_episodic
+      plot.label: "SUN (Epis., Multipl.)"
+  sun_reachability_adaptive:
+    - algorithm: sun_reachability_adaptive
+      plot.label: "Reach.-Only"
+  sun_novelty_adaptive:
+    - algorithm: sun_novelty_adaptive
+      plot.label: "Novelty-Only"
+  adagoal:
+    - algorithm: adagoal
+      plot.label: "AdaGoal"
+  discover:
+    - algorithm: discover
+      plot.label: "DISCOVER"
+  # random:
+  #   - algorithm: random
+  #     plot.label: "Random"
+
+environments:
+  gridworlds_and_control:
+    three_rooms_wall_mini_nonuniform: "ThreeRoom"
+    four_rooms_stuck_hard: "FourRoomStuck"

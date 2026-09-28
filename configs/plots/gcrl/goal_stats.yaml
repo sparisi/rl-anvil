@@ -1,0 +1,40 @@
+default:
+  - default
+
+per_env_plot:
+  show: True
+  rows_cols: [-1, 2]
+
+configs:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      plot.label: "SUN"
+  sun_ratio_step:
+    - algorithm: sun_ratio_step
+      plot.label: "SUN (Step)"
+  sun_ratio_episodic:
+    - algorithm: sun_ratio_episodic
+      plot.label: "SUN (Epis.)"
+  # sun_ucb_adaptive:
+  #   - algorithm: sun_ucb_adaptive
+  #     plot.label: "SUN (Add.)"
+  # sun_reachability_adaptive:
+  #   - algorithm: sun_reachability_adaptive
+  #     plot.label: "Reach.-Only"
+  # sun_novelty_adaptive:
+  #   - algorithm: sun_novelty_adaptive
+  #     plot.label: "Novelty-Only"
+  adagoal:
+    - algorithm: adagoal
+      plot.label: "AdaGoal"
+  discover:
+    - algorithm: discover
+      plot.label: "DISCOVER"
+
+statistics:
+  sa_h: "Entropy"
+  sa_%: "Coverage"
+  goal_success_%: "Goal Success (%)"
+  avg_steps_to_goal: "Steps-To-Goal"
+  goal_reselections_%: "Goal Re-Selections (%)"
+  random_tail_steps_%: "Random Exploration (%)"

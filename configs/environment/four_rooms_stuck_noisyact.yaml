@@ -7,6 +7,8 @@ environment:
   random_action_prob: 0.2
 
 experiment:
+  replay_memory:
+    rho: null
   warm_up: 10_000
   cool_down: 10_000
   training_steps: 200_000

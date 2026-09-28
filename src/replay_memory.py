@@ -2,6 +2,8 @@ import numpy as np
 import src.parameter
 from omegaconf import DictConfig
 
+from src.pseudocount import SCALE_EPS, is_neighbor, pseudocount, robust_scale
+
 # This implementation is in pure NumPy to make it compatible with any deep learning
 # library you'd like to use. The disadvantage is that you'll have to convert every
 # batch to the desired format (e.g., you'll have to call `torch.from_numpy(obs)`
@@ -65,6 +67,11 @@ class ReplayMemory(object):
         self,
         min_size: int,
         max_size: int,
+        rho: float = None,
+        scale_check_every: int = 1000,
+        scale_tol: float = 0.01,
+        scale_max_samples: int = None,
+        scale_rel_floor: float = 0.01,
         **kwargs,
     ):
         """
@@ -72,6 +79,24 @@ class ReplayMemory(object):
             min_size (int): the minimum number of samples to be collected before
                 the memory is ready (often called "warm-up"),
             max_size (int): maximum number of samples stored in the memory,
+            rho (float): radius for pseudocount. When a new observation is
+                inserted, neighbors within this radius (in standardized space)
+                are used for pseudocounts. Only needed after init_counting().
+                None selects the environment's true binned visit counts instead,
+                read from the counter given to init_counting(), and no
+                pseudocount is maintained,
+            scale_check_every (int): number of insertions between two checks of
+                the pseudocount scale,
+            scale_tol (float): the scale is frozen once its largest relative
+                per-dimension change between two checks falls below this value,
+            scale_max_samples (int): number of stored samples past which the
+                scale is frozen regardless of whether it has stabilized. It also
+                bounds the cost of the forced count rebuild, which is quadratic
+                in the number of stored samples. If None, the scale is frozen
+                only once it stabilizes within scale_tol,
+            scale_rel_floor (float): per-dimension scales below this fraction of
+                the median scale are raised to it, to keep a near-constant
+                feature from being amplified.
         """
 
         assert (
@@ -79,6 +104,11 @@ class ReplayMemory(object):
         ), f"min_size {min_size} larger than max_size {max_size}"
         self._min_size = min_size
         self._max_size = max_size
+        self.rho = rho
+        self._scale_check_every = scale_check_every
+        self._scale_tol = scale_tol
+        self._scale_max_samples = scale_max_samples
+        self._scale_rel_floor = scale_rel_floor
         self.reset()
 
     def init(self, **kwargs):
@@ -97,19 +127,276 @@ class ReplayMemory(object):
             **{k: getattr(self, k)[:self.size] for k in self.keys},
         )
 
+    def init_counting(self, n_actions: int, goal_idx, counter = None):
+        assert not (self.rho is None and counter is None), (
+            "rho=None asks for true counts, which need a binned counter, but this "
+            "environment has none"
+        )
+        self.keys += ["count"]
+        self.count = zeros_resident((self._max_size, n_actions), np.int32)
+        self.goal_idx = goal_idx
+        self.counter = counter
+        if self.rho is None:
+            # Bin of every stored entry, kept so that the entries sharing a bin can
+            # be found without binning the stored observations again.
+            self.bin_idx = zeros_resident((self._max_size,), np.int64)
+        self._reset_count_scale()
+
+    @property
+    def count_scale(self):
+        """Return the per-dimension scale the stored pseudocounts are computed in.
+        """
+
+        return self._count_scale
+
+    @property
+    def count_scale_frozen(self):
+        """Return whether the pseudocount scale has stopped changing."""
+
+        return self._scale_frozen
+
+    def _reset_count_scale(self):
+        """Clear the pseudocount scale and the bookkeeping that decides when to freeze it."""
+
+        self._count_scale = None
+        self._counts_initialized = False
+        self._scale_frozen = False
+        self._since_scale_check = 0
+
     def reset(self):
         self._idx = 0
         self._full = False
         self._tot_steps = 0
+        if hasattr(self, "goal_idx"):
+            self._reset_count_scale()
+            self.count.fill(0)
+            if self.rho is None:
+                self.bin_idx.fill(0)
 
     def add(self, **kwargs):
+        write_idx = self._idx
+
+        # Read evicted entry before overwriting (needed for count maintenance when full)
+        evicted = None
+        if hasattr(self, "goal_idx") and self._full:
+            evicted = (
+                self.obs[write_idx][self.goal_idx].copy(),
+                int(np.asarray(self.act[write_idx]).flat[0]),
+            )
+
         for k, v in kwargs.items():
-            getattr(self, k)[self._idx] = v
+            getattr(self, k)[write_idx] = v
+
+        if hasattr(self, "goal_idx"):
+            if self.rho is None:
+                # The counter already includes this step, so every other stored entry
+                # in the same bin is one visit behind on this action. The counter
+                # never decrements, so eviction needs no correction.
+                new_bin = int(np.ravel(self.counter.bin_index(kwargs["obs"]))[0])
+                new_act = int(np.asarray(kwargs["act"]).flat[0])
+                n = self._max_size if self._full else write_idx
+                self.count[:n][self.bin_idx[:n] == new_bin, new_act] += 1
+                self.bin_idx[write_idx] = new_bin
+                self.count[write_idx] = self.counter(kwargs["obs"])
+            else:
+                self._update_counts(write_idx, kwargs, evicted)
+
         self._tot_steps += 1
         self._idx += 1
         if self._idx >= self._max_size:
             self._idx = 0
             self._full = True
+
+    def _stored_count_data(self, write_idx):
+        """Return the stored goal-space observations and actions as a (N, D) and a (N,) array.
+
+        Both include the entry just written at write_idx, which add() has already
+        stored by the time counts are updated.
+        """
+
+        n = self._max_size if self._full else write_idx + 1
+        obs = np.asarray(self.obs[:n, ..., self.goal_idx])
+        return obs.reshape(n, -1), self.act[:n].ravel()
+
+    def _maybe_freeze_scale(self, write_idx, rebuild: bool = True):
+        """Refresh the pseudocount scale on a fixed cadence and freeze it once it stabilizes.
+
+        Returns True if the scale was frozen on this call. If rebuild is True,
+        every stored count has then been rebuilt and no incremental update is
+        needed; if it is False, the stored counts are left untouched.
+        """
+
+        if self._scale_frozen:
+            return False
+        self._since_scale_check += 1
+        if self._since_scale_check < self._scale_check_every:
+            return False
+        self._since_scale_check = 0
+
+        obs, _ = self._stored_count_data(write_idx)
+        n = obs.shape[0]
+        previous = self._count_scale
+        self._count_scale = robust_scale(obs, rel_floor=self._scale_rel_floor)
+        if previous is not None:
+            change = np.max(
+                np.abs(self._count_scale - previous)
+                / np.maximum(previous, SCALE_EPS)
+            )
+            if change < self._scale_tol:
+                self._freeze_scale(write_idx, rebuild=rebuild)
+                return True
+        if self._scale_max_samples is not None and n >= self._scale_max_samples:
+            self._freeze_scale(write_idx, rebuild=rebuild)
+            return True
+        return False
+
+    def _init_count_scale(self, write_idx):
+        """Compute the pseudocount scale from the samples stored so far."""
+
+        obs, _ = self._stored_count_data(write_idx)
+        self._count_scale = robust_scale(obs, rel_floor=self._scale_rel_floor)
+
+    def _init_scale_and_counts(self, write_idx):
+        """Compute the pseudocount scale from the warm-up data and build every count from it."""
+
+        self._init_count_scale(write_idx)
+        self._counts_initialized = True
+        self._rebuild_counts(write_idx)
+
+    def _freeze_scale(self, write_idx, rebuild: bool = True):
+        """Mark the pseudocount scale as final and, if rebuild is True, recompute every count."""
+
+        self._scale_frozen = True
+        if rebuild:
+            self._rebuild_counts(write_idx)
+
+    def _rebuild_counts(self, write_idx):
+        """Recompute every stored count from scratch under the current scale."""
+
+        obs, act = self._stored_count_data(write_idx)
+        n = obs.shape[0]
+        if n == 0:
+            return
+        n_actions = self.count.shape[-1]
+        scaled = obs.astype(float) / self._count_scale
+        squared = np.sum(scaled**2, axis=1)
+        onehot = np.zeros((n, n_actions), dtype=float)
+        onehot[np.arange(n), act] = 1.0
+
+        radius2 = self.rho**2
+        # Chunk the pairwise distances so the temporaries stay bounded regardless
+        # of how many samples are stored when the scale freezes.
+        chunk = max(1, int(2**22) // n)
+        for start in range(0, n, chunk):
+            stop = min(start + chunk, n)
+            dist2 = (
+                squared[start:stop, None]
+                + squared[None, :]
+                - 2.0 * scaled[start:stop] @ scaled.T
+            )
+            np.maximum(dist2, 0.0, out=dist2)  # clamp floating-point negatives
+            mask = (dist2 <= radius2).astype(float)
+            self.count[start:stop] = (mask @ onehot).astype(self.count.dtype)
+
+    def _update_counts(self, write_idx, kwargs, evicted):
+        n_actions = self.count.shape[-1]
+        new_obs = np.asarray(kwargs["obs"])[self.goal_idx]
+        new_act = int(np.asarray(kwargs["act"]).flat[0])
+
+        # No count is maintained during warm-up: the scale still moves there, and a
+        # count computed under one scale is not corrected when the scale changes.
+        # Once min_size samples are stored, the scale is computed once from all of
+        # them and every count is built from it in one pass.
+        n_stored = self._max_size if self._full else write_idx + 1
+        if n_stored < self._min_size:
+            return
+        if not self._counts_initialized:
+            self._init_scale_and_counts(write_idx)
+            return
+
+        # Use slice-based views over the stored arrays to avoid the O(N * obs_dim)
+        # copy that np.arange(N)-style fancy indexing would trigger every add().
+        if self._full:
+            stored_obs = self.obs[..., self.goal_idx]
+            stored_act = self.act[:].ravel()
+        else:
+            stored_obs = self.obs[:write_idx, ..., self.goal_idx]
+            stored_act = self.act[:write_idx].ravel()
+
+        # The incremental update only corrects pairs involving the new entry, so
+        # it maintains a fixed-radius count only if the scale does not change:
+        # otherwise two stored entries could become neighbors without either being
+        # a neighbor of the new entry, and neither count would be corrected. The
+        # scale is therefore refreshed until it stabilizes, then frozen once and
+        # all counts rebuilt under it.
+        if self._maybe_freeze_scale(write_idx):
+            return
+
+        # Decrement counts of entries that were neighbors of the now-evicted entry
+        if evicted is not None:
+            evicted_obs, evicted_act = evicted
+            close_to_evicted = is_neighbor(
+                evicted_obs,
+                stored_obs,
+                radius=self.rho,
+                scale=self._count_scale,
+            )
+            # write_idx row will be overwritten below; keep it out of the decrement.
+            close_to_evicted[write_idx] = False
+            evicted_rows = np.nonzero(close_to_evicted)[0]
+            self.count[evicted_rows, evicted_act] = np.maximum(
+                self.count[evicted_rows, evicted_act] - 1, 0
+            )
+
+        # Increment counts of entries that are neighbors of the new entry
+        close_to_new = is_neighbor(
+            new_obs,
+            stored_obs,
+            radius=self.rho,
+            scale=self._count_scale,
+        )
+        if self._full:
+            close_to_new[write_idx] = False
+        new_rows = np.nonzero(close_to_new)[0]
+        self.count[new_rows, new_act] += 1
+
+        # Set count for the newly written entry
+        count = np.bincount(
+            stored_act[close_to_new],
+            minlength=n_actions,
+        ).astype(np.int64)
+        count[new_act] += 1  # count self
+        self.count[write_idx] = count
+
+    def counts(self, obs):
+        """Count of every action in each observation of obs, shaped (..., n_actions).
+
+        For observations that are not stored, such as a goal candidate the actor
+        is considering. Stored entries are counted by get().
+        """
+
+        if self.rho is None:
+            return self.counter(obs)
+
+        assert self._count_scale is not None, (
+            "pseudocounts were queried before the scale exists, which happens "
+            "only before min_size samples have been stored; every action would "
+            "otherwise be counted under a scale of its own and the resulting "
+            "counts would not be comparable"
+        )
+        obs = np.asarray(obs)
+        n_actions = self.count.shape[-1]
+        stored_obs = self.obs[:self.size, ..., self.goal_idx]
+        stored_act = self.act[:self.size].ravel()
+        n = np.zeros(obs.shape[:-1] + (n_actions,))
+        for a in range(n_actions):
+            n[..., a] = pseudocount(
+                obs[..., self.goal_idx],
+                stored_obs[stored_act == a],
+                radius=self.rho,
+                scale=self._count_scale,
+            )
+        return n
 
     def get(
         self,

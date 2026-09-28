@@ -4,6 +4,8 @@ environment:
   id: Gym-Gridworlds/Wall-50x50-v0
 
 experiment:
+  replay_memory:
+    rho: null
   warm_up: 10_000
   cool_down: 10_000
   training_steps: 1_000_000

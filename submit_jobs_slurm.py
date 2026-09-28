@@ -241,20 +241,25 @@ MAX_ELEMENTS_PER_ARRAY = 200
 # this budget, not the sum over its seeds, because the seeds run concurrently as
 # tasks.
 TIMEOUTS_ENV = {
-    "lunar_lander": 280,
-    "cart_pole": 200,
-    "pendulum_discrete": 120,
-    "acrobot": 200,
-    "mountain_car": 200,
-    "four_rooms": 60,
-    "large": 30,
-    "travel_field_small": 90,
+    "three_rooms_wall_mini_nonuniform": 110,
+    "four_rooms_stuck_hard": 220,
+    "travel_field_small": 310,
+    #
+    "lunar_lander": 500,
+    "lunar_lander_full": 1900,
+    "cart_pole": 280,
+    "pendulum_discrete": 150,
+    "acrobot": 220,
+    "mountain_car": 300,
 }
 
 # Use this to customize timeouts: {algorithm: factor} applied to TIMEOUTS_ENV.
 # Algorithms not listed here use a factor of 1.
 TIMEOUTS_ADJUST_ALGO = {
-    "random": 0.8,
+    "random": 0.3,
+    "discover": 1.3,
+    "adagoal": 1.3,
+    "sun_ratio_step": 3.0,
 }
 
 # Memory: `mem_mb = BASE_MEM_MB + PER_SEED_MEM_MB[env] * len(seeds_in_chunk)`.

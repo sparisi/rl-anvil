@@ -18,3 +18,7 @@ experiment:
   cool_down: 50_000
   training_steps: 2_000_000
   testing_episodes: 0
+
+agent:
+  critic:
+    goal_idx: [0, 1]

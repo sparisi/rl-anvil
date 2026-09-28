@@ -1503,7 +1503,8 @@ def draw_bars(
 
     xs = bar_positions([entry for entry, _ in items], bar_width)
     # Every bar stands from one floor, so a negative value stands beside its
-    # neighbours. The floor sits below the lowest interval.
+    # neighbours and the comparison stays between the bars. The floor sits below
+    # the lowest interval, so the shortest bar still has a foot to be seen by.
     lows = [m - e for _, v in items if v is not None for m, e in [v] if np.isfinite(m)]
     floor = min(lows) - 0.1 * abs(min(lows)) if lows else 0.0
 

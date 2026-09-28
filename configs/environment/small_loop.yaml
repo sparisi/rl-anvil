@@ -4,6 +4,8 @@ environment:
   id: Gym-Gridworlds/Empty-Loop-3x3-v0
 
 experiment:
+  replay_memory:
+    rho: null
   warm_up: 500
   cool_down: 500
   training_steps: 5_000

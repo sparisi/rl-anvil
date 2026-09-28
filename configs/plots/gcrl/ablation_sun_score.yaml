@@ -1,0 +1,37 @@
+default:
+  - default
+
+legend_rows_cols: [2, 2]
+
+configs:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      # plot.label: Multiplicative $\displaystyle {V^\theta(s_t, g)}/{n_g}$
+      plot.label: Multiplicative
+  sun_ucb_adaptive:
+    - algorithm: sun_ucb_adaptive
+      # plot.label: Additive $\displaystyle V^\theta(s_t, g) + \textstyle{\sqrt{{\log N_\mathrm{tot}}/{n_g}}}$
+      plot.label: Addititve
+  sun_novelty_adaptive:
+    - algorithm: sun_novelty_adaptive
+      # plot.label: Novelty-Only $\displaystyle {1}/{n_g}$
+      plot.label: Novelty-Only
+  sun_reachability_adaptive:
+    - algorithm: sun_reachability_adaptive
+      # plot.label: Reachability-Only $\displaystyle V^\theta(s_t, g)$
+      plot.label: Reach.-Only
+
+environments:
+  gridworlds_and_control:
+    three_rooms_wall_mini_nonuniform: "ThreeRoom"
+    four_rooms_stuck_hard: "FourRoomStuck"
+    travel_field_small: "GridMaze"
+    mountain_car: "MountainCar"
+    pendulum_discrete: "Pendulum"
+    lunar_lander: "LunarLander"
+    acrobot: "Acrobot"
+    cart_pole: "CartPole"
+  selection:
+    three_rooms_wall_mini_nonuniform: "ThreeRoom"
+    four_rooms_stuck_hard: "FourRoomStuck"
+    mountain_car: "MountainCar"

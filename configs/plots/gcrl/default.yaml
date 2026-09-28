@@ -1,0 +1,59 @@
+# @package _global_
+rng_seed: 12
+
+# Keys to be ignored when matching configs
+ignored_cfg_keys:
+  experiment.testing_episodes
+
+# plots_rows_cols: [1, -1]  # defines how to arrange subplots (optional; default = one row)
+# legend_rows_cols: [1, -1]  # defines how to arrange legend entries
+
+color_scheme:
+  - sun_ratio_adaptive
+  - adagoal
+  - discover
+  - random
+  - sun_ratio_episodic
+  - sun_ratio_step
+  - sun_ucb_adaptive
+  - sun_novelty_adaptive
+  - sun_reachability_adaptive
+  - sun_ratio_adaptive_binned
+
+# Configurations to plot and their legend labels.
+# One group per algorithm, so each of them is a hue of its own.
+# Configurations not listed here are not plotted.
+configs:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      plot.label: "SUN"
+  adagoal:
+    - algorithm: adagoal
+      plot.label: "AdaGoal"
+  discover:
+    - algorithm: discover
+      plot.label: "DISCOVER"
+  random:
+    - algorithm: random
+      plot.label: "Random"
+
+# Statistics to plot and their y-axis labels.
+# Keys are statistic names (from .npz files); values are display names.
+# Statistics not listed here are not plotted.
+statistics:
+  sa_h: "Entropy"
+  sa_%: "Coverage"
+
+# Environments to plot and their figure title labels.
+# Keys are environment YAML names (from configs/environment/); values are display names.
+# If environments are grouped, they will be plotted separately.
+environments:
+  gridworlds_and_control:
+    three_rooms_wall_mini_nonuniform: "ThreeRoom"
+    four_rooms_stuck_hard: "FourRoomStuck"
+    travel_field_small: "GridMaze"
+    mountain_car: "MountainCar"
+    pendulum_discrete: "Pendulum"
+    lunar_lander: "LunarLander"
+    acrobot: "Acrobot"
+    cart_pole: "CartPole"

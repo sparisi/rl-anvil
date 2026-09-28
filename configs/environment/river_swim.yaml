@@ -4,6 +4,8 @@ environment:
   id: Gym-Gridworlds/RiverSwim-6-v0
 
 experiment:
+  replay_memory:
+    rho: null
   warm_up: 2_000
   cool_down: 2_000
   training_steps: 20_000

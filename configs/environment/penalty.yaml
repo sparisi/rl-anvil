@@ -4,6 +4,8 @@ environment:
   id: Gym-Gridworlds/Penalty-3x3-v0
 
 experiment:
+  replay_memory:
+    rho: null
   warm_up: 1_500
   cool_down: 1_500
   training_steps: 15_000

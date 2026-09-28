@@ -1,0 +1,33 @@
+default:
+  - default
+
+configs:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      plot.label: "Adaptive"
+  sun_ratio_step:
+    - algorithm: sun_ratio_step
+      plot.label: "Per-Step"
+  sun_ratio_episodic:
+    - algorithm: sun_ratio_episodic
+      plot.label: "Episodic"
+
+environments:
+  gridworlds_and_control:
+    three_rooms_wall_mini_nonuniform: "ThreeRoom"
+    four_rooms_stuck_hard: "FourRoomStuck"
+    travel_field_small: "GridMaze"
+    mountain_car: "MountainCar"
+    pendulum_discrete: "Pendulum"
+    lunar_lander: "LunarLander"
+    acrobot: "Acrobot"
+    cart_pole: "CartPole"
+  selection:
+    three_rooms_wall_mini_nonuniform: "ThreeRoom"
+    four_rooms_stuck_hard: "FourRoomStuck"
+    mountain_car: "MountainCar"
+
+statistics:
+  sa_h: "Entropy"
+  sa_%: "Coverage"
+  goal_reselections_%: "Goal Re-Selections (%)"

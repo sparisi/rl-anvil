@@ -4,6 +4,8 @@ environment:
   id: Gym-Gridworlds/Straight-20-v0
 
 experiment:
+  replay_memory:
+    rho: null
   warm_up: 3_000
   cool_down: 3_000
   training_steps: 30_000

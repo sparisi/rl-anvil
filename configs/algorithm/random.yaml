@@ -6,3 +6,7 @@ agent:
     eps:
       id: Constant
       value: 1.0
+
+experiment:
+  replay_memory:
+    rho: null

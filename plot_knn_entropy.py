@@ -24,7 +24,7 @@ Output goes to <data_dir>/<output>/knn_entropy/<plot config>/.
 
 Example
 
-    python plot_knn_entropy.py -f gcrl_lunar -p gcrl/lunar_full --discrete_cols 6 7 -v
+    python plot_knn_entropy.py -f data_gcrl_lunar_full -p gcrl_lunar --discrete_cols 6 7 --bins 10 20 30 40 50 60 70 80 90 100 101 -v
 """
 
 import matplotlib
@@ -48,7 +48,9 @@ import src.pseudocount as pseudocount
 from src.pseudocount import BinnedCount
 
 from src.utils.plot import (
+    BASE_BAR_GAP,
     ENV,
+    GROUP_GAP_BAR,
     assign_groups,
     ci_bounds,
     composed_mask,
@@ -78,6 +80,8 @@ for _stream in (sys.stdout, sys.stderr):
 FONT_SIZE = 12
 SUBPLOT_W = 3.0  # inches per subplot
 SUBPLOT_H = 2.4
+# Height one configuration takes under --horizontal_bars, in inches.
+HBAR_UNIT_INCHES = 0.28
 
 # Where a plot config named without a path is looked for.
 PLOT_CONFIG_DIR = "configs/plots"
@@ -100,38 +104,76 @@ STATISTICS = {
 # multiplying the per-dimension indices out.
 MAX_TABLE_SIZE = 2.0 ** 62
 
+# Where --save writes and --load reads, under the output directory.
+STATS_FILE = "statistics.gzip"
+
+# The bin size a row of that file carries for a statistic read off no binning.
+NO_BINS = -1
+
+# The columns of a row, in order. The settings come with the value: a statistic
+# computed at another counter, --knn_k or --discrete_cols is another quantity,
+# and --load compares them before it takes a row.
+STATS_COLUMNS = (
+    "config_id",
+    "rng_seed",
+    "statistic",
+    "n_bins",
+    "value",
+    "counter",
+    "knn_k",
+    "discrete_cols",
+    "dropped",
+)
+
+# The settings a row must agree with for --load to take it. The binned
+# statistics are decided by the counter and the bin size, which is a column of
+# its own; the kNN entropy reads no counter.
+BINNED_SETTINGS = ("counter",)
+KNN_SETTINGS = ("knn_k", "discrete_cols")
+
 # --- CLI ---
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "-f", "--folder",
+    "-f",
+    "--folder",
     default="data_dir",
     metavar="DIR",
-    help="A data directory, or a single seed directory "
-         "(<data_dir>/<config_id>/<rng_seed>) to read one run.",
+    help=(
+        "A data directory, or a single seed directory "
+        "(<data_dir>/<config_id>/<rng_seed>) to read one run."
+    ),
 )
 parser.add_argument(
-    "-p", "--plot_config",
+    "-p",
+    "--plot_config",
     required=True,
     metavar="NAME",
-    help=f"Plot config: which configurations become the bars, over which "
-         f"environments, and what to call them. A name without .yaml is looked for "
-         f"in {PLOT_CONFIG_DIR}, or give a path; a directory is a set of configs "
-         f"and every one of them is drawn.",
+    help=(
+        f"Plot config: which configurations become the bars, over which "
+        f"environments, and what to call them. A name without .yaml is looked for "
+        f"in {PLOT_CONFIG_DIR}, or give a path; a directory is a set of configs "
+        f"and every one of them is drawn."
+    ),
 )
 parser.add_argument(
-    "-o", "--output",
+    "-o",
+    "--output",
     default="plots",
-    help="Output root, under the data directory the runs came from. Figures go in "
-         "<root>/knn_entropy/<plot config>, so one data directory holds the output "
-         "of every plotting script without one overwriting another.",
+    help=(
+        "Output root, under the data directory the runs came from. Figures go in "
+        "<root>/knn_entropy/<plot config>, so one data directory holds the output "
+        "of every plotting script without one overwriting another."
+    ),
 )
 parser.add_argument(
-    "-a", "--algorithms",
+    "-a",
+    "--algorithms",
     default="configs/algorithm",
     help="Directory of algorithm YAMLs.",
 )
 parser.add_argument(
-    "-e", "--environments",
+    "-e",
+    "--environments",
     default="configs/environment",
     help="Directory of environment YAMLs.",
 )
@@ -141,8 +183,10 @@ parser.add_argument(
     nargs="+",
     default=None,
     metavar="N",
-    help="Which seeds of each configuration to read. Default: every seed that "
-         "saved a memory.",
+    help=(
+        "Which seeds of each configuration to read. Default: every seed that "
+        "saved a memory."
+    ),
 )
 parser.add_argument(
     "--bins",
@@ -150,18 +194,35 @@ parser.add_argument(
     nargs="+",
     default=[40],
     metavar="N",
-    help="Bins per observation dimension the coverage and the binned entropy are "
-         "read at, one FIGURE per value: the memory is binned again at each of "
-         "them, so a run's coverage can be read at a resolution it was never "
-         "launched with. Default: 40.",
+    help=(
+        "Bins per observation dimension the coverage and the binned entropy are "
+        "read at, one FIGURE per value: the memory is binned again at each of "
+        "them, so a run's coverage can be read at a resolution it was never "
+        "launched with. Default: 40."
+    ),
+)
+parser.add_argument(
+    "--counter",
+    default=None,
+    metavar="CLASS",
+    help=(
+        "Name of the counter in src/pseudocount.py to bin with, for every "
+        "environment (e.g. BinnedCountLunarLanderFull). An environment of a "
+        "plot config can name one with a `counter` key beside its label; the "
+        "two naming different counters is an error. Default: the counter "
+        "`tabular_count` in src/pseudocount.py builds for the environment, "
+        "which for LunarLander bins the first two observation dimensions."
+    ),
 )
 parser.add_argument(
     "--knn_k",
     type=int,
     default=10,
     metavar="K",
-    help="Neighbours the entropy is estimated from. Small k is low bias and high "
-         "variance. Default: 10.",
+    help=(
+        "Neighbours the entropy is estimated from. Small k is low bias and high "
+        "variance. Default: 10."
+    ),
 )
 parser.add_argument(
     "--discrete_cols",
@@ -169,12 +230,14 @@ parser.add_argument(
     nargs="+",
     default=[],
     metavar="J",
-    help="Indices of the observation columns to condition on, for a column that "
-         "takes a handful of values and so carries a discrete entropy of its "
-         "own. The entropy is then H(b) + sum_b p(b) H(s_cont | b) over their "
-         "joint values and the action's, estimated over the columns left. "
-         "Default: every column goes to the estimator, which reports -inf where "
-         "enough observations coincide exactly.",
+    help=(
+        "Indices of the observation columns to condition on, for a column that "
+        "takes a handful of values and so carries a discrete entropy of its "
+        "own. The entropy is then H(b) + sum_b p(b) H(s_cont | b) over their "
+        "joint values and the action's, estimated over the columns left. "
+        "Default: every column goes to the estimator, which reports -inf where "
+        "enough observations coincide exactly."
+    ),
 )
 parser.add_argument(
     "--bar_width",
@@ -184,12 +247,42 @@ parser.add_argument(
     help="Bar width as a fraction of the slot it sits in.",
 )
 parser.add_argument(
+    "--horizontal_bars",
+    action="store_true",
+    help=(
+        "Lay the bars along the x axis, one configuration per row, named on the "
+        "y axis. The subplot grows with the number of configurations."
+    ),
+)
+parser.add_argument(
+    "--save",
+    action="store_true",
+    help=(
+        f"Write the statistics to {STATS_FILE} under the output directory, one "
+        f"row per (run, statistic, bin size) with the settings that produced "
+        f"it. A row already in the file is replaced only by the same statistic "
+        f"of the same run at the same settings, so one file holds several "
+        f"sweeps."
+    ),
+)
+parser.add_argument(
+    "--load",
+    action="store_true",
+    help=(
+        f"Read the statistics from {STATS_FILE} under the output directory and "
+        f"compute only what it does not hold. A row counts only when it was "
+        f"written at the same counter, --knn_k and --discrete_cols; a run "
+        f"whose every statistic is there is not read from memory.npz at all."
+    ),
+)
+parser.add_argument(
     "--no_legend",
     action="store_true",
     help="Leave the legend off the figures.",
 )
 parser.add_argument(
-    "-v", "--verbose",
+    "-v",
+    "--verbose",
     action="store_true",
     help="Print progress messages. The recap is always printed.",
 )
@@ -225,10 +318,10 @@ def vprint(*a, **kw):
 class _NoTable:
     """Mixin that gives a counter its binning with an empty table.
 
-    A counter's table holds one cell per (bin, action) pair, which at the bin
-    counts swept here is orders of magnitude larger than the memory being binned.
-    The bin edges and the flat index are all this script reads of a counter, so
-    the allocation is skipped and the bin count is free to grow past what fits.
+    A counter's table holds one cell per (bin, action) pair, which at large bin
+    counts can be orders of magnitude larger than the observations being binned.
+    The allocation is skipped, so only the bin edges and the flat index are
+    usable, and the bin count is free to grow past what a table would fit in.
     """
 
     def reset(self, seed=None):
@@ -236,22 +329,103 @@ class _NoTable:
 
 
 def env_family(env):
-    """The environment's name without its version, e.g. `LunarLander-v3` ->
-    `LunarLander`, which is what a counter is named after."""
+    """Return the environment's name without its version, for example
+    `LunarLander-v3` -> `LunarLander`."""
 
     spec = getattr(getattr(env, "unwrapped", env), "spec", None)
     env_id = str(getattr(spec, "id", "") or "")
     return re.sub(r"-v\d+$", "", env_id.split("/")[-1])
 
 
-def counter_class(env):
+def draw_hbars(ax, items, label, bar_width, font_size=FONT_SIZE, names=False):
+    """Draw one horizontal bar per (entry, summary) of `items` on `ax`, stacked
+    top to bottom in the order given.
+
+    The same floor, group gaps, colours, hatches and error bars as `draw_bars`,
+    with the value on the x axis. A summary of None keeps its slot empty, so the
+    same entry is in the same row wherever the same `items` order is drawn.
+
+    `names` writes each entry's label beside its row.
+    """
+
+    drawn = [entry for entry, _ in items]
+    slot = bar_width + BASE_BAR_GAP
+    ys = [0.0]
+    for prev, cur in zip(drawn, drawn[1:]):
+        gap = GROUP_GAP_BAR if cur["group"] != prev["group"] else 0.0
+        ys.append(ys[-1] + slot + gap)
+
+    lows = [m - e for _, v in items if v is not None for m, e in [v] if np.isfinite(m)]
+    floor = min(lows) - 0.1 * abs(min(lows)) if lows else 0.0
+
+    for y, (entry, value) in zip(ys, items):
+        if value is None:
+            continue
+        mean, err = value
+        ax.barh(
+            y,
+            mean - floor,
+            left=floor,
+            height=bar_width,
+            xerr=err,
+            color=entry["color"],
+            hatch=entry["hatch"],
+            edgecolor="black",
+            linewidth=0.6,
+            capsize=2,
+            error_kw={"linewidth": 0.8, "ecolor": "black"},
+        )
+
+    if ys:
+        # Inverted, so the first configuration is on top.
+        ax.set_ylim(ys[-1] + slot / 2, ys[0] - slot / 2)
+        ax.set_xlim(left=floor)
+    if names:
+        ax.set_yticks(ys)
+        ax.set_yticklabels([e["label"] for e in drawn], fontsize=font_size - 2)
+        for text in ax.get_yticklabels():
+            text.set(**tex_kwargs(text.get_text()))
+        ax.tick_params(axis="y", length=0, pad=2)
+    else:
+        ax.set_yticks([])
+    ax.tick_params(axis="x", labelsize=font_size - 2, pad=1)
+    ax.set_xlabel(label, fontsize=font_size, **tex_kwargs(label))
+    # darkgrid would otherwise draw a line through every bar at its tick.
+    ax.yaxis.grid(False)
+
+
+def binned_counters():
+    """Collect every binned counter src/pseudocount.py defines and return them as
+    {name: class}.
+
+    The generic `BinnedCount` is included under its own name, for an environment
+    binned on the bounds of its observation space.
+    """
+
+    return {
+        name: obj
+        for name, obj in vars(pseudocount).items()
+        if isinstance(obj, type) and issubclass(obj, BinnedCount)
+    }
+
+
+def counter_class(env, name):
     """Return the counter class to bin `env` with, or None when it has no binning.
 
-    The class is the one `tabular_count` in src/pseudocount.py builds for the
-    environment, and it is returned when that counter is a `BinnedCount`. Any
-    other counter reads a discrete observation, which has one binning available
-    to it, so its bin size is left out of the sweep.
+    The class is the binned counter `name` names in src/pseudocount.py. When
+    `name` is None it is the one `tabular_count` builds for the environment,
+    returned when that counter is a `BinnedCount`: any other counter reads a
+    discrete observation, which has a single binning, and gives None.
     """
+
+    counters = binned_counters()
+    if name is not None:
+        if name not in counters:
+            raise SystemExit(
+                f"Counter {name} is not a binned counter in "
+                f"src/pseudocount.py. It defines: {', '.join(sorted(counters))}."
+            )
+        return counters[name]
 
     # One bin per dimension: only the class of the counter is read here, and it
     # is the same class at any bin count, while `tabular_count` allocates a table
@@ -264,7 +438,8 @@ def counter_class(env):
 
 
 def make_counter(env, cls, n_bins):
-    """An instance of `cls` binning `env` at `n_bins` bins per dimension.
+    """Build an instance of `cls` binning `env` at `n_bins` bins per dimension
+    and return it.
 
     A counter decides for itself how many bins a dimension gets: `n_bins` is what
     a continuous dimension is given, and a dimension that takes two values gets
@@ -281,8 +456,8 @@ def make_counter(env, cls, n_bins):
 
 
 def stats_from_nonzero(counts, size):
-    """Coverage and normalized entropy of a histogram, from its occupied bins
-    alone, as (coverage, entropy).
+    """Compute the coverage and normalized entropy of a histogram from its
+    occupied bins alone and return them as (coverage, entropy).
 
     `counts` holds the visits of every bin visited at least once and `size` is how
     many bins there are in all. This is what `exploration_stats` in
@@ -298,24 +473,28 @@ def stats_from_nonzero(counts, size):
     return float(counts.size / size), entropy
 
 
-def binned_stats(env, cls, obs, act):
-    """The binned statistics of a whole memory, as {n_bins: {statistic: value}}.
+def binned_stats(env, cls, obs, act, bins):
+    """Bin a whole memory at every size in `bins` and return its binned
+    statistics as {n_bins: {statistic: value}}.
 
     One binning of the memory per bin size, and the (bin, action) pairs it
     visited counted once: `np.unique` gives the counts of the occupied pairs
     directly, which is what lets a bincount stand in for a table too large to
     hold.
 
-    The bin sizes kept are the ones whose flat index fits an int64, which is what
-    a figure is written for.
+    A bin size whose flat index does not fit an int64 gets NaN for every
+    statistic.
     """
 
     n_actions = int(env.action_space.n)
     per_bins = {}
-    for n_bins in BINS:
+    for n_bins in bins:
         counter = make_counter(env, cls, n_bins)
         size_s = float(np.prod(counter.n_bins, dtype=np.float64))
         if size_s * n_actions > MAX_TABLE_SIZE:
+            per_bins[n_bins] = {
+                statistic: float("nan") for statistic in BINNED_STATISTICS
+            }
             continue
         state = counter.bin_index(obs).astype(np.int64, copy=False)
         _, counts = np.unique(state * n_actions + act, return_counts=True)
@@ -325,11 +504,17 @@ def binned_stats(env, cls, obs, act):
 
 
 _env_cache: dict = {}
+_class_cache: dict = {}
+
+
+def cfg_key(env_cfg: dict):
+    """Return a string identifying `env_cfg`, equal for equal configs."""
+
+    return yaml.safe_dump(env_cfg, sort_keys=True, default_flow_style=True)
 
 
 def env_of_cfg(env_cfg: dict):
-    """The environment a saved run was launched with, and the counter class it is
-    binned with, as (env, counter class).
+    """Build the environment a saved run was launched with and return it.
 
     `env_cfg` is the `environment` section of that run's config, as written to
     cfg.yaml. Creation is often 0.5-3s and dominates when many runs share one
@@ -338,17 +523,118 @@ def env_of_cfg(env_cfg: dict):
 
     from src.wrappers import gym_wrappers
 
-    key = yaml.safe_dump(env_cfg, sort_keys=True, default_flow_style=True)
+    key = cfg_key(env_cfg)
     if key not in _env_cache:
-        env = gym_wrappers.make_gym_env(**env_cfg)
-        _env_cache[key] = (env, counter_class(env))
+        _env_cache[key] = gym_wrappers.make_gym_env(**env_cfg)
     return _env_cache[key]
+
+
+def class_of_cfg(env_cfg: dict, name):
+    """Return the counter class `counter_class` gives the environment of
+    `env_cfg` under the counter name `name`, or None.
+
+    Resolved once per (environment config, name).
+    """
+
+    key = (cfg_key(env_cfg), name)
+    if key not in _class_cache:
+        _class_cache[key] = counter_class(env_of_cfg(env_cfg), name)
+    return _class_cache[key]
+
+
+def wanted_statistics(plot_cfg):
+    """Read the statistics a plot config draws and return them as (binned, kNN),
+    each {name: label}.
+
+    A plot config's `statistics` names what to draw and what to call it; one
+    naming none of this script's statistics draws them all. A name that is none
+    of them belongs to another script and is left to it.
+    """
+
+    stat_labels = plot_labels(plot_cfg)[0]
+    binned = {k: v for k, v in stat_labels.items() if k in BINNED_STATISTICS}
+    knn = {k: v for k, v in stat_labels.items() if k in STATISTICS}
+    if binned or knn:
+        return binned, knn
+    return dict(BINNED_STATISTICS), dict(STATISTICS)
+
+
+def plot_counters(config_name, plot_cfg):
+    """Read the counters the environments of a plot config name and return them
+    as {environment: counter name}.
+
+    An environment names one with a `counter` key anywhere under `environments`:
+    in the mapping that gives its own label and y-axis limits, which is one
+    counter for that environment, or beside the `environment: label` entries of a
+    block, which is one counter for every environment of it. Which of the two a
+    `counter` is comes from what stands beside it: `label` and `ylim` are an
+    environment's own keys, and anything else is an environment.
+
+    The key is taken out of the mapping, so the helpers that read the
+    environments of a plot config see only environments. `plot_cfg` is therefore
+    changed in place and a second call on it finds nothing. A name that is not a
+    binned counter in src/pseudocount.py is an error, and so is one that differs
+    from --counter.
+    """
+
+    found = {}
+
+    def walk(node, env=None):
+        """Walk `node`, which sits under the key `env` when it has one above it.
+
+        A mapping is walked under the key that holds it, so an environment's own
+        mapping is always reached under that environment's name however deeply
+        the groups above it nest.
+        """
+
+        if isinstance(node, list):
+            for value in node:
+                walk(value, env)
+            return
+        if not isinstance(node, dict):
+            return
+        # Taken out of the mapping, so that `env_groups` and `plot_labels` read
+        # the environments beside it and nothing else.
+        counter = node.pop("counter", None)
+        if counter is not None:
+            if not isinstance(counter, str):
+                raise SystemExit(
+                    f"{config_name}: a `counter` names a counter of "
+                    f"src/pseudocount.py as a string, and this one is "
+                    f"{counter!r}."
+                )
+            beside = set(node) - {"label", "ylim"}
+            if not beside and env is not None:
+                found[env] = counter
+            else:
+                for key in beside:
+                    found[key] = counter
+        for key, value in node.items():
+            walk(value, key)
+
+    walk(plot_cfg.get("environments"))
+
+    counters = binned_counters()
+    for env, name in found.items():
+        if name not in counters:
+            raise SystemExit(
+                f"{config_name}: {env} names {name}, which is not a binned "
+                f"counter in src/pseudocount.py. It defines: "
+                f"{', '.join(sorted(counters))}."
+            )
+        if args.counter is not None and name != args.counter:
+            raise SystemExit(
+                f"{config_name}: {env} names the counter {name} and --counter "
+                f"names {args.counter}. Drop one of the two."
+            )
+    return found
 
 
 # --- kNN entropy --------------------------------------------------------------
 
 def knn_entropy(x, k=10):
-    """Estimate the differential entropy of samples x with the Kozachenko-Leonenko k-NN estimator and return it in nats."""
+    """Estimate the differential entropy of samples x with the
+    Kozachenko-Leonenko k-NN estimator and return it in nats."""
 
     x = np.asarray(x, dtype=float)
     if x.ndim == 1:
@@ -361,7 +647,8 @@ def knn_entropy(x, k=10):
 
 
 def memory_entropy(obs, act, k, discrete_cols):
-    """The joint kNN entropy H(s, a) of a whole memory, as (nats, dropped mass).
+    """Estimate the joint kNN entropy H(s, a) of a whole memory and return it as
+    (nats, dropped mass).
 
     It is H(b) + sum_b p(b) H(s_cont | b): b ranges over the joint values of the
     action and of the columns `discrete_cols` names, and s_cont over the
@@ -398,8 +685,8 @@ def memory_entropy(obs, act, k, discrete_cols):
         _, inverse = np.unique(np.column_stack(cols), axis=0, return_inverse=True)
         return inverse.ravel()
 
-    def entropy(labels):
-        values, counts = np.unique(labels, return_counts=True)
+    def entropy(codes):
+        values, counts = np.unique(codes, return_counts=True)
         p = counts / counts.sum()
         h = float(-np.sum(p * np.log(p)))
         if cont.shape[1] == 0:
@@ -407,7 +694,7 @@ def memory_entropy(obs, act, k, discrete_cols):
         dropped = 0.0
         for value, pv, count in zip(values, p, counts):
             if count > k:
-                h += pv * float(knn_entropy(cont[labels == value], k=k))
+                h += pv * float(knn_entropy(cont[codes == value], k=k))
             else:
                 dropped += float(pv)
         return h, dropped
@@ -415,11 +702,139 @@ def memory_entropy(obs, act, k, discrete_cols):
     return entropy(labels(disc, np.asarray(act).ravel()))
 
 
+# --- Saved statistics ---------------------------------------------------------
+# One row per (run, statistic, bin size, settings), written as the parquet
+# process_data.py writes its own frame to. --load takes a row when its settings
+# are the ones asked for now, and --save under --load writes back every row it
+# read, so a sweep can be extended a bin size at a time.
+
+def settings_now(counter_name):
+    """Return the settings a row computed now carries, as {column: value}."""
+
+    return {
+        "counter": counter_name,
+        "knn_k": int(args.knn_k),
+        "discrete_cols": ",".join(str(int(c)) for c in args.discrete_cols),
+    }
+
+
+def settings_of(statistic):
+    """Return the columns of `settings_now` a row of `statistic` is compared on."""
+
+    return KNN_SETTINGS if statistic in STATISTICS else BINNED_SETTINGS
+
+
+def row_key(row):
+    """Return the key a row is held under, as (run, statistic, bin size,
+    settings).
+
+    The settings are the values of the columns `settings_of` names for the row's
+    statistic, as strings, so a value read back from the file and the same value
+    computed now give the same key.
+    """
+
+    return (
+        f"{row['config_id']}/{row['rng_seed']}",
+        row["statistic"],
+        int(row["n_bins"]),
+        tuple(str(row[column]) for column in settings_of(row["statistic"])),
+    )
+
+
+def load_statistics(path):
+    """Read the rows of `path` and return them as {row key: row}, keyed by
+    `row_key`.
+
+    Every row is returned, whatever its settings. Which of them a run may take
+    depends on the counter its environment resolves to, so the settings are
+    matched at the lookup, where that is known.
+    """
+
+    if not path.is_file():
+        print(f"No statistics at {path}.")
+        return {}
+    frame = pd.read_parquet(path)
+    missing = [c for c in STATS_COLUMNS if c not in frame.columns]
+    if missing:
+        raise SystemExit(
+            f"{path} is missing the column(s) {', '.join(missing)}, so it was "
+            f"written by another version of this script. Delete it or point "
+            f"--output elsewhere."
+        )
+    rows = {}
+    for row in frame.to_dict(orient="records"):
+        rows[row_key(row)] = row
+    # Read, not taken: --save reads the file to keep the rows it does not
+    # recompute, and reuses none of them. What --load took is in the recap.
+    print(f"Read {len(rows)} statistic(s) from {path}")
+    return rows
+
+
+def cached_value(held, name, statistic, n_bins, settings):
+    """Return the row `held` holds for one (run, statistic, bin size) under
+    `settings`, or None.
+
+    A row written at other settings is a different quantity under the same name,
+    so it is not returned and the statistic is computed again.
+    """
+
+    key = (
+        name,
+        statistic,
+        n_bins,
+        tuple(str(settings[column]) for column in settings_of(statistic)),
+    )
+    return held.get(key)
+
+
+def statistics_frame(binned, knn, dropped):
+    """Build the rows to write and return them as a DataFrame with STATS_COLUMNS
+    in order."""
+
+    rows = []
+    for name, per_counter in binned.items():
+        config_id, _, rng_seed = name.rpartition("/")
+        for counter_name, per_bins in per_counter.items():
+            for n_bins, stats in per_bins.items():
+                for statistic, value in stats.items():
+                    rows.append(
+                        {
+                            "config_id": config_id,
+                            "rng_seed": rng_seed,
+                            "statistic": statistic,
+                            "n_bins": int(n_bins),
+                            "value": float(value),
+                            "counter": counter_name,
+                            "knn_k": int(args.knn_k),
+                            "discrete_cols": "",
+                            "dropped": float("nan"),
+                        }
+                    )
+    for name, stats in knn.items():
+        config_id, _, rng_seed = name.rpartition("/")
+        for statistic, value in stats.items():
+            rows.append(
+                {
+                    "config_id": config_id,
+                    "rng_seed": rng_seed,
+                    "statistic": statistic,
+                    "n_bins": NO_BINS,
+                    "value": float(value),
+                    "counter": "",
+                    "knn_k": int(args.knn_k),
+                    "discrete_cols": ",".join(str(int(c)) for c in args.discrete_cols),
+                    "dropped": float(dropped.get(name, 0.0)),
+                }
+            )
+    return pd.DataFrame(rows, columns=list(STATS_COLUMNS))
+
+
 # --- Resolve which runs to read -----------------------------------------------
 
 def resolve_runs(path):
     """Walk what `-f` was given and return (seed directories to read,
-    configurations that had none).
+    configurations that had none, configurations whose memories are all outside
+    --rng_seeds).
 
     A seed directory is one holding a memory.npz, and `path` is taken to be one
     when it holds it -- that is how a single run is read. Anything else is read as
@@ -428,7 +843,7 @@ def resolve_runs(path):
     """
 
     if (path / "memory.npz").is_file():
-        return [path], []
+        return [path], [], []
 
     # A cfg.yaml one level up makes this a run directory that saved no memory,
     # which the message below says outright.
@@ -440,7 +855,7 @@ def resolve_runs(path):
             f"when results.save_memory=True."
         )
 
-    found, without = [], []
+    found, without, filtered = [], [], []
     for cfg_dir in sorted(p for p in path.iterdir() if p.is_dir()):
         seed_dirs = sorted(
             (p for p in cfg_dir.iterdir() if (p / "memory.npz").is_file()),
@@ -448,23 +863,28 @@ def resolve_runs(path):
         )
         if args.rng_seeds is not None:
             wanted = {str(s) for s in args.rng_seeds}
-            seed_dirs = [p for p in seed_dirs if p.name in wanted]
+            kept = [p for p in seed_dirs if p.name in wanted]
+            if seed_dirs and not kept:
+                filtered.append(cfg_dir.name)
+                continue
+            seed_dirs = kept
         if seed_dirs:
             found.extend(seed_dirs)
         elif (cfg_dir / "cfg.yaml").is_file():
             without.append(cfg_dir.name)
-    return found, without
+    return found, without, filtered
 
 
 root = Path(args.folder)
 if not root.is_dir():
     raise SystemExit(f"Not a directory: {root}")
-run_dirs, no_memory_dirs = resolve_runs(root)
+run_dirs, no_memory_dirs, filtered_dirs = resolve_runs(root)
 
 if not run_dirs:
     raise SystemExit(
         f"No memory.npz under {root} ({len(no_memory_dirs)} configuration(s) had "
-        f"none). memory.npz is only written when results.save_memory=True."
+        f"none, {len(filtered_dirs)} had none of --rng_seeds). memory.npz is only "
+        f"written when results.save_memory=True."
     )
 
 # A seed directory sits at <data_dir>/<config_id>/<rng_seed>, so the data
@@ -520,8 +940,8 @@ _assigned: dict = {}
 
 
 def runs_of(env, entry, ignored, matched):
-    """The runs of one environment that an entry selects: the ones whose whole
-    recorded configuration is the one the entry composes to there.
+    """Return the runs of one environment that an entry selects: the ones whose
+    whole recorded configuration is the one the entry composes to there.
 
     The comparison covers every key, the ones the entry leaves out included: a
     run launched with another value for one of those is a different
@@ -541,7 +961,8 @@ def runs_of(env, entry, ignored, matched):
 # --- Which runs the plot configs ask for ---
 # Decided before any memory is read, and read once for all of them: a memory.npz
 # costs a decompression whether it ends up in a figure or not.
-# config name -> (entries, {group: envs}, {(entry, env): runs}, environments).
+# config name -> (entries, {group: envs}, {(entry, env): runs}, environments,
+# {environment: counter name}).
 # The environments are its own: which YAML a run matches depends on the
 # exemptions, and those are the config's.
 layout: dict = {}
@@ -554,6 +975,7 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
     # This config's own exemptions, not every config's: exempting a key changes
     # which YAML a run matches, and one config's `ignored_cfg_keys` says nothing
     # about the runs another one draws.
+    named_counters = plot_counters(config_name, plot_cfg)
     ignored_keys = ignored_cfg_keys(plot_cfg)
     if ignored_keys:
         vprint(f"{config_name} exempts from config matching: {sorted(ignored_keys)}")
@@ -591,6 +1013,16 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
     # The stems of the matched runs alone, so a config that declares no
     # environment group of its own gets one group per environment a YAML named.
     envs = sorted(set(env_stem[matched]), key=str)
+    # A counter is named for an environment, and a name that is none of the ones
+    # drawn -- a group's, a misspelling, or an environment no run here matches --
+    # would otherwise be read by nothing.
+    unplaced = sorted(set(named_counters) - set(envs), key=str)
+    if unplaced:
+        print(
+            f"WARNING: {config_name} names a counter for "
+            f"{', '.join(unplaced)}, which no run here matches. A `counter` "
+            f"belongs beside an environment, not a group."
+        )
     groups = env_groups(plot_cfg) or {"": envs}
     selected = {
         (li, env): runs_of(env, entry, ignored_keys, matched)
@@ -602,12 +1034,15 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
         groups,
         {k: n for k, n in selected.items() if n},
         envs,
+        {env: named_counters.get(env, args.counter) for env in envs},
     )
 
-needed = sorted({
-    n for _e, _g, sel, _v in layout.values()
-    for names in sel.values() for n in names
-})
+needed = sorted(
+    {
+        n for _e, _g, sel, _v, _c in layout.values()
+        for names in sel.values() for n in names
+    }
+)
 if not needed:
     raise SystemExit("No run matches any configuration of the plot config(s).")
 vprint(f"{len(needed)} run(s) to read, of {len(df)} found")
@@ -617,12 +1052,18 @@ vprint(f"{len(needed)} run(s) to read, of {len(df)} found")
 # frame's own labels are whichever config `assign_groups` was last called for.
 env_of_run = {
     name: env
-    for _entries, _groups, sel, _envs in layout.values()
+    for _entries, _groups, sel, _envs, _counter in layout.values()
     for (_li, env), names in sel.items() for name in names
 }
 
+counters_of_run: dict = {}
+for _entries, _groups, sel, _envs, counter_of_env in layout.values():
+    for (_li, env), names in sel.items():
+        for name in names:
+            counters_of_run.setdefault(name, set()).add(counter_of_env[env])
+
 # --- Load each memory, bin it and estimate its entropy ------------------------
-collected:       dict = {}   # name -> {n_bins: {statistic: value}}
+collected:       dict = {}   # name -> {counter class: {n_bins: {statistic: value}}}
 collected_knn:   dict = {}   # name -> {statistic: value}
 no_counter_dirs: list = []
 non_finite_dirs: list = []
@@ -630,16 +1071,109 @@ corrupt_dirs:    list = []
 # name -> the share of that run's memory the kNN sum passed over, where it is
 # above zero. What it costs the estimate is in `memory_entropy`.
 dropped_of:      dict = {}
+# (name, counter name) -> the name of the counter class it resolved to, or None,
+# for the figures to find the binned statistics of a run.
+resolved:        dict = {}
+
+# What the plot configs draw decides what is computed: a statistic no figure
+# asks for is an estimate nothing reads, and the kNN entropy is the expensive
+# half of a run.
+drawn_binned, drawn_knn = set(), set()
+for config_name, _cfg_path, plot_cfg in plot_cfgs:
+    if config_name in layout:
+        binned, knn = wanted_statistics(plot_cfg)
+        drawn_binned.update(binned)
+        drawn_knn.update(knn)
+
+# Read under --save as well as --load, so that a save replaces the rows it
+# recomputed and no others. A run computes only the statistics its plot configs
+# draw, so the rows of a statistic none of them draws are on file and nowhere
+# else. Read here, before any memory is, so a file that cannot be read stops the
+# script before the work rather than after it.
+on_file = (
+    load_statistics(output_root / STATS_FILE)
+    if args.load or args.save
+    else {}
+)
+held = on_file if args.load else {}
+reused = 0
+read_runs = 0
+filled_runs = 0
+idle_runs = 0
 
 with tqdm(needed, desc="Reading memory", unit="run", disable=not args.verbose) as pbar:
     for name in pbar:
         pbar.set_postfix_str(str(env_of_run.get(name, "")))
 
+        env_cfg = run_cfgs[name].get("environment") or {}
         try:
-            env, cls = env_of_cfg(run_cfgs[name].get("environment") or {})
+            env = env_of_cfg(env_cfg)
+            classes = {
+                counter_name: class_of_cfg(env_cfg, counter_name)
+                for counter_name in sorted(counters_of_run[name], key=str)
+            }
         except Exception as e:
             vprint(f"  WARNING: could not build the environment of {name}: {e}")
             corrupt_dirs.append(name)
+            continue
+
+        # The kNN entropy reads the observations themselves, so every
+        # environment has one where a plot config draws it; the binned
+        # statistics need a counter as well.
+        for counter_name, cls in classes.items():
+            resolved[(name, counter_name)] = None if cls is None else cls.__name__
+        if any(cls is None for cls in classes.values()):
+            no_counter_dirs.append((name, env_of_run.get(name, "")))
+        to_count = (
+            {cls.__name__: cls for cls in classes.values() if cls is not None}
+            if drawn_binned
+            else {}
+        )
+
+        # What the saved rows already hold, so that the memory is read only for
+        # what they do not. The counter is known by here and the observations
+        # are not, which is what lets a run be filled without decompressing one.
+        to_bin = {}
+        took_from_file = 0
+        for cls_name in to_count:
+            settings = settings_now(cls_name)
+            per_bins = collected.setdefault(name, {}).setdefault(cls_name, {})
+            for n_bins in BINS:
+                from_file = {
+                    statistic: cached_value(held, name, statistic, n_bins, settings)
+                    for statistic in BINNED_STATISTICS
+                }
+                if all(row is not None for row in from_file.values()):
+                    per_bins[n_bins] = {
+                        statistic: float(row["value"])
+                        for statistic, row in from_file.items()
+                    }
+                    reused += len(from_file)
+                    took_from_file += len(from_file)
+            missing = [b for b in BINS if b not in per_bins]
+            if missing:
+                to_bin[cls_name] = missing
+        knn_row = (
+            cached_value(held, name, "sa_h_knn", NO_BINS, settings_now(""))
+            if drawn_knn
+            else None
+        )
+        if knn_row is not None:
+            collected_knn[name] = {"sa_h_knn": float(knn_row["value"])}
+            if float(knn_row["dropped"]) > 0.0:
+                dropped_of[name] = float(knn_row["dropped"])
+            reused += 1
+            took_from_file += 1
+
+        needs_knn = bool(drawn_knn) and knn_row is None
+        if not to_bin and not needs_knn:
+            # Counted only where a row stood in for the memory: a run whose
+            # statistics are none of the ones drawn was not filled, it was
+            # never wanted.
+            if took_from_file:
+                filled_runs += 1
+            else:
+                idle_runs += 1
             continue
 
         try:
@@ -653,13 +1187,16 @@ with tqdm(needed, desc="Reading memory", unit="run", disable=not args.verbose) a
             vprint(f"  WARNING: could not read {mem_files[name]}: {e}")
             corrupt_dirs.append(name)
             continue
+        read_runs += 1
 
-        # The kNN entropy is estimated for every environment, reading the
-        # observations themselves; the binned statistics need a counter.
-        if cls is None:
-            no_counter_dirs.append((name, env_of_run.get(name, "")))
-        else:
-            collected[name] = binned_stats(env, cls, obs, act)
+        for cls_name, bins in to_bin.items():
+            collected[name][cls_name].update(
+                binned_stats(env, to_count[cls_name], obs, act, bins)
+            )
+        if not needs_knn:
+            del obs, act
+            continue
+
         estimate, dropped = memory_entropy(
             obs,
             act,
@@ -677,24 +1214,70 @@ with tqdm(needed, desc="Reading memory", unit="run", disable=not args.verbose) a
             non_finite_dirs.append((name, estimate))
         del obs, act
 
+if args.save:
+    path = output_root / STATS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    new_rows = statistics_frame(collected, collected_knn, dropped_of).to_dict(
+        orient="records"
+    )
+    new_keys = {row_key(row) for row in new_rows}
+    kept = [row for key, row in on_file.items() if key not in new_keys]
+    if kept:
+        print(f"Keeping {len(kept)} statistic(s) already in {path}")
+    frame = pd.DataFrame(kept + new_rows, columns=list(STATS_COLUMNS))
+    try:
+        frame.to_parquet(path, index=False)
+        print(f"\n{len(frame)} statistic(s) saved to {path}")
+    except Exception as e:
+        print(f"\nError saving the statistics to {path}: {e}")
+
 # --- Recap --------------------------------------------------------------------
 # The runs matching no YAML are reported per plot config, above, where the
 # exemptions that decide the matching are known.
-print(f"Runs found : {len(run_dirs)}")
 print(
-    f"Runs read  : {len(collected_knn)}"
-    f"  ({len(no_cfg_dirs)} no cfg,"
-    f" {len(no_memory_dirs)} configs with no memory.npz,"
-    f" {len(no_counter_dirs)} no binned counter,"
+    f"Runs found : {len(run_dirs)}"
+    f"  ({len(no_cfg_dirs)} without a cfg.yaml;"
+    f" {len(no_memory_dirs)} config(s) with no memory.npz,"
+    f" {len(filtered_dirs)} with none of --rng_seeds)"
+)
+print(
+    f"Runs needed: {len(needed)}"
+    f"  ({read_runs} read from memory.npz,"
+    f" {filled_runs} filled from {STATS_FILE},"
+    f" {idle_runs} with nothing drawn to compute,"
     f" {len(corrupt_dirs)} unreadable)"
 )
 print(
-    f"Estimator  : k={args.knn_k}, whole memory, no subsampling, "
-    f"conditioned on {list(args.discrete_cols) or 'no column'} and the action"
+    f"kNN entropy: {len(collected_knn)} run(s)"
+    f"  ({len(non_finite_dirs)} not finite)"
+    if drawn_knn
+    else "kNN entropy: no plot config draws it, so none was estimated"
 )
+# The runs holding a statistic, not the ones given an entry: `collected` is given
+# a run's entry while its counters are resolved, which is before the memory it
+# needs is read.
+binned_runs = sum(
+    1
+    for per_counter in collected.values()
+    if any(per_bins for per_bins in per_counter.values())
+)
+print(
+    f"Binned     : {binned_runs} run(s)"
+    f"  ({len(no_counter_dirs)} with no binned counter)"
+    if drawn_binned
+    else "Binned     : no plot config draws them, so no memory was binned"
+)
+# Both lines are about the kNN estimate, so they are printed where one was made.
+if drawn_knn:
+    print(
+        f"Estimator  : k={args.knn_k}, whole memory, no subsampling, "
+        f"conditioned on {list(args.discrete_cols) or 'no column'} and the action"
+    )
+if args.load:
+    print(f"Loaded     : {reused} statistic(s) taken from {STATS_FILE}")
 # How much of each memory the kNN sum passed over. What it costs the estimate is
 # in `memory_entropy`.
-if dropped_of:
+if drawn_knn and dropped_of:
     worst = max(dropped_of, key=dropped_of.get)
     print(
         f"Dropped    : {len(dropped_of)} of {len(collected_knn)} run(s) hold "
@@ -703,27 +1286,50 @@ if dropped_of:
     )
     for name in sorted(dropped_of, key=dropped_of.get, reverse=True):
         vprint(f"  {name}: {dropped_of[name]:.3g}")
-else:
+elif drawn_knn:
     print(
         f"Dropped    : none, every conditioning value holds more than "
         f"{args.knn_k} observations"
     )
-for _key, (env, cls) in _env_cache.items():
+binning_lines = []
+for (key, _counter_name), cls in _class_cache.items():
+    env = _env_cache[key]
     if cls is None:
         how = "no binned counter"
     else:
         n_bins = [int(b) for b in make_counter(env, cls, BINS[0]).n_bins]
         how = f"{cls.__name__}, {n_bins} at {BINS[0]} bins per dimension"
-    print(f"Binning    : {env_family(env)}  ->  {how}")
+    line = f"Binning    : {env_family(env)}  ->  {how}"
+    if line not in binning_lines:
+        binning_lines.append(line)
+for line in binning_lines:
+    print(line)
 if no_counter_dirs:
-    print("\nNo binned statistics (the environment has no binned counter, so no "
-          "bin size to vary):")
+    print(
+        "\nNo binned statistics (the environment has no binned counter, so no "
+        "bin size to vary):"
+    )
     for d, en in no_counter_dirs:
         print(f"  {d}  →  {en}")
+oversized: dict = {}
+for name, per_counter in collected.items():
+    for per_bins in per_counter.values():
+        for n_bins, per_stat in per_bins.items():
+            if not all(np.isfinite(v) for v in per_stat.values()):
+                oversized.setdefault(env_of_run.get(name, ""), set()).add(n_bins)
+if oversized:
+    print(
+        "\nNo binned statistics at these bin sizes (the (bin, action) table is "
+        "too large for an int64 flat index):"
+    )
+    for en, sizes in sorted(oversized.items(), key=lambda kv: str(kv[0])):
+        print(f"  {en}: {', '.join(str(b) for b in sorted(sizes))} bins")
 if non_finite_dirs:
-    print("\nNo kNN entropy (observations coincide exactly in the estimated "
-          "columns, so the k-th neighbour sits at distance zero). "
-          "--discrete_cols may be naming too few columns:")
+    print(
+        "\nNo kNN entropy (observations coincide exactly in the estimated "
+        "columns, so the k-th neighbour sits at distance zero). "
+        "--discrete_cols may be naming too few columns:"
+    )
     for d, value in non_finite_dirs:
         print(f"  {d}: {value}")
 if corrupt_dirs:
@@ -731,7 +1337,7 @@ if corrupt_dirs:
     for d in corrupt_dirs:
         print(f"  {d}")
 
-if not collected_knn:
+if not collected_knn and not binned_runs:
     raise SystemExit("Nothing to plot.")
 
 # --- Figures ------------------------------------------------------------------
@@ -743,37 +1349,33 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
     if config_name not in layout:
         continue
     vprint(f"\n{'#' * 60}\nPlot config: {config_name}\n{'#' * 60}")
-    stat_labels, env_labels, ylims = plot_labels(plot_cfg)
-    entries, groups, selected, envs = layout[config_name]
+    _stat_labels, env_labels, ylims = plot_labels(plot_cfg)
+    entries, groups, selected, envs, counter_of_env = layout[config_name]
 
-    # A plot config's `statistics` names what to draw and what to call it; one
-    # naming none draws them all. A name that is none of them belongs to another
-    # script and is left to it.
-    binned_stat_labels = {
-        k: v for k, v in stat_labels.items() if k in BINNED_STATISTICS
-    } or BINNED_STATISTICS
-    stats = {k: v for k, v in stat_labels.items() if k in STATISTICS} or STATISTICS
+    binned_stat_labels, stats = wanted_statistics(plot_cfg)
 
     output_dir = output_root / config_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     def bars_of(env, stat, n_bins):
-        """The value of one environment and statistic per entry, as
-        [(entry, (mean, half-width) or None)] and the seeds each was read from.
+        """Collect the value of one environment and statistic per entry and
+        return it as [(entry, (mean, half-width) or None)], with the seeds each
+        was read from.
 
         `n_bins` of None reads the kNN entropy, which stands on its own for every
         binning. Every entry keeps its slot, with None where its runs hold no
         finite value, so the same configuration is the same bar in every subplot.
         """
 
-        held = collected if n_bins is not None else collected_knn
+        known = collected if n_bins is not None else collected_knn
         items, alive_of = [], {}
         for li, entry in enumerate(entries):
             values = []
             for name in selected.get((li, env), []):
-                run = held.get(name)
+                run = known.get(name)
                 if run is not None and n_bins is not None:
-                    run = run.get(n_bins)
+                    cls_name = resolved.get((name, counter_of_env.get(env)))
+                    run = run.get(cls_name, {}).get(n_bins)
                 if run is not None and stat in run:
                     values.append(run[stat])
             values = [v for v in values if np.isfinite(v)]
@@ -788,17 +1390,25 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
         return items, alive_of
 
     def draw_entropy(stat, ylabel, group_name, drawn_envs, n_bins=None):
-        """One figure: a subplot per environment, a bar per configuration, and a
-        95% confidence interval over the seeds."""
+        """Draw one figure, a subplot per environment, a bar per configuration
+        and a 95% confidence interval over the seeds, and return how many
+        figures were written (0 or 1)."""
 
+        # A horizontal subplot holds its configurations down the side, so it
+        # grows with how many of them there are rather than with the value axis.
+        height = (
+            max(SUBPLOT_H, HBAR_UNIT_INCHES * len(entries))
+            if args.horizontal_bars
+            else SUBPLOT_H
+        )
         fig, axs = plt.subplots(
             1,
             len(drawn_envs),
-            figsize=(SUBPLOT_W * len(drawn_envs), SUBPLOT_H),
+            figsize=(SUBPLOT_W * len(drawn_envs), height),
             squeeze=False,
         )
         fig.subplots_adjust(wspace=0.3)
-        handles = []
+        shown = set()
         drew = False
 
         for col, env in enumerate(drawn_envs):
@@ -808,41 +1418,65 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
 
             items, _alive = bars_of(env, stat, n_bins)
             if not any(v is not None for _e, v in items):
-                continue
-            # draw_bars names the configurations by colour and hatch, which the
-            # legend spells out once for the figure, and stands every bar from
-            # one floor below the lowest interval.
-            draw_bars(
-                ax,
-                items,
-                ylabel=ylabel if col == 0 else "",
-                bar_width=args.bar_width,
-                font_size=FONT_SIZE,
-            )
-            drew = True
-            # From the first subplot that drew anything, not from the first
-            # subplot: an environment holding none of the configurations would
-            # otherwise leave the figure without a legend.
-            if not handles:
-                handles = [
-                    mpatches.Patch(
-                        facecolor=entry["color"],
-                        hatch=entry["hatch"],
-                        edgecolor="black",
-                        linewidth=0.6,
-                        label=entry["label"],
+                if col == 0 and args.horizontal_bars:
+                    draw_hbars(
+                        ax,
+                        items,
+                        label=ylabel,
+                        bar_width=args.bar_width,
+                        font_size=FONT_SIZE,
+                        names=True,
                     )
-                    for entry, value in items if value is not None
-                ]
+                elif col == 0:
+                    ax.set_ylabel(ylabel, fontsize=FONT_SIZE, **tex_kwargs(ylabel))
+                continue
+            # The bars name the configurations by colour and hatch, which the
+            # legend spells out once for the figure, and every bar stands from
+            # one floor below the lowest interval.
+            if args.horizontal_bars:
+                draw_hbars(
+                    ax,
+                    items,
+                    label=ylabel,
+                    bar_width=args.bar_width,
+                    font_size=FONT_SIZE,
+                    names=col == 0,
+                )
+            else:
+                draw_bars(
+                    ax,
+                    items,
+                    ylabel=ylabel if col == 0 else "",
+                    bar_width=args.bar_width,
+                    font_size=FONT_SIZE,
+                )
+            drew = True
+            shown.update(li for li, (_e, v) in enumerate(items) if v is not None)
 
+            # The plot config's limits are on the value axis, whichever one that
+            # is.
+            axis = "x" if args.horizontal_bars else "y"
             if (env, stat) in ylims:
-                ax.set_ylim(*ylims[(env, stat)])
-            set_3_ticks(ax, "y")
+                (ax.set_xlim if args.horizontal_bars else ax.set_ylim)(
+                    *ylims[(env, stat)]
+                )
+            set_3_ticks(ax, axis)
 
         if not drew:
             plt.close(fig)
             return 0
 
+        # Every configuration drawn in any subplot, in the plot config's order.
+        handles = [
+            mpatches.Patch(
+                facecolor=entry["color"],
+                hatch=entry["hatch"],
+                edgecolor="black",
+                linewidth=0.6,
+                label=entry["label"],
+            )
+            for li, entry in enumerate(entries) if li in shown
+        ]
         if handles and not args.no_legend:
             legend = fig.legend(
                 handles,

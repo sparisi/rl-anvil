@@ -11,8 +11,10 @@ configuration, and a 95% confidence interval over the seeds.
 The first two are what `exploration_stats` in src/experiment.py computes, read
 off a fresh binning of the observations. The binning comes from
 src/pseudocount.py, so an observation lands in the bin the run would have put it
-in, and --bins writes a figure per bin size. An environment whose counter bins
-nothing gets the kNN entropy alone.
+in, and --bins writes a figure per bin size. Which counter an environment gets is
+the one `tabular_count` builds for it, or the one a `counter` key names beside
+that environment in the plot config. An environment whose counter bins nothing
+gets the kNN entropy alone.
 
 The third is estimated from the observations themselves (does not depend on bin
 size).
@@ -31,6 +33,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.patches as mpatches
 from matplotlib import pyplot as plt
+from matplotlib.ticker import ScalarFormatter
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -48,7 +51,6 @@ import src.pseudocount as pseudocount
 from src.pseudocount import BinnedCount
 
 from src.utils.plot import (
-    BASE_BAR_GAP,
     ENV,
     GROUP_GAP_BAR,
     assign_groups,
@@ -64,6 +66,7 @@ from src.utils.plot import (
     load_config_group,
     load_plot_configs,
     plot_labels,
+    rows_cols,
     save_figure,
     set_3_ticks,
     style_entries,
@@ -80,8 +83,25 @@ for _stream in (sys.stdout, sys.stderr):
 FONT_SIZE = 12
 SUBPLOT_W = 3.0  # inches per subplot
 SUBPLOT_H = 2.4
-# Height one configuration takes under --horizontal_bars, in inches.
-HBAR_UNIT_INCHES = 0.28
+# Height one configuration takes under --horizontal_bars, in inches. The bar
+# takes --bar_width of it and the rest is the gap to the next, so this sets how
+# thick a bar is and --bar_width how much air stands around it.
+HBAR_UNIT_INCHES = 0.18
+# Room above the bars for the title and below them for the value axis, in
+# inches. The figure is these plus the bars, so a row is HBAR_UNIT_INCHES tall
+# whatever the configuration count; a floor on the whole figure would instead
+# stretch the rows to fill it.
+HBAR_TOP_INCHES = 0.30
+HBAR_BOTTOM_INCHES = 0.55
+
+# A value axis whose ticks all sit below this is labelled in scientific
+# notation. `set_3_ticks` writes at most four decimals on x, so a tick whose
+# first significant digit falls past the fourth reads as 0.0000.
+SCIENTIFIC_BELOW = 1e-4
+# Widths of the lines a bar is drawn with, in points: its outline, which the
+# legend's patches carry too, and its error bar.
+BAR_EDGE_WIDTH = 0.25
+ERROR_BAR_WIDTH = 0.4
 
 # Where a plot config named without a path is looked for.
 PLOT_CONFIG_DIR = "configs/plots"
@@ -202,19 +222,6 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
-    "--counter",
-    default=None,
-    metavar="CLASS",
-    help=(
-        "Name of the counter in src/pseudocount.py to bin with, for every "
-        "environment (e.g. BinnedCountLunarLanderFull). An environment of a "
-        "plot config can name one with a `counter` key beside its label; the "
-        "two naming different counters is an error. Default: the counter "
-        "`tabular_count` in src/pseudocount.py builds for the environment, "
-        "which for LunarLander bins the first two observation dimensions."
-    ),
-)
-parser.add_argument(
     "--knn_k",
     type=int,
     default=10,
@@ -242,7 +249,7 @@ parser.add_argument(
 parser.add_argument(
     "--bar_width",
     type=float,
-    default=0.85,
+    default=0.95,
     metavar="W",
     help="Bar width as a fraction of the slot it sits in.",
 )
@@ -278,7 +285,8 @@ parser.add_argument(
 parser.add_argument(
     "--no_legend",
     action="store_true",
-    help="Leave the legend off the figures.",
+    help="Leave the legend off the figures. The standalone legend is still "
+         "written.",
 )
 parser.add_argument(
     "-v",
@@ -349,7 +357,10 @@ def draw_hbars(ax, items, label, bar_width, font_size=FONT_SIZE, names=False):
     """
 
     drawn = [entry for entry, _ in items]
-    slot = bar_width + BASE_BAR_GAP
+    # A slot of one, so `bar_width` is the share of it the bar takes and what is
+    # left is the gap. A slot that grew with the bar would leave it filling the
+    # same share of its row whatever `bar_width` said.
+    slot = 1.0
     ys = [0.0]
     for prev, cur in zip(drawn, drawn[1:]):
         gap = GROUP_GAP_BAR if cur["group"] != prev["group"] else 0.0
@@ -371,9 +382,9 @@ def draw_hbars(ax, items, label, bar_width, font_size=FONT_SIZE, names=False):
             color=entry["color"],
             hatch=entry["hatch"],
             edgecolor="black",
-            linewidth=0.6,
+            linewidth=BAR_EDGE_WIDTH,
             capsize=2,
-            error_kw={"linewidth": 0.8, "ecolor": "black"},
+            error_kw={"linewidth": ERROR_BAR_WIDTH, "ecolor": "black"},
         )
 
     if ys:
@@ -542,6 +553,82 @@ def class_of_cfg(env_cfg: dict, name):
     return _class_cache[key]
 
 
+def value_ticks(ax, axis):
+    """Put three ticks on the value `axis` of `ax`, in scientific notation where
+    a fixed number of decimals would read as zero.
+
+    `set_3_ticks` formats an axis with a fixed number of decimal places, four of
+    them at most on x, so a tick whose first significant digit falls past the
+    fourth formats as 0.0000. Those axes get a mantissa per tick and one exponent
+    for the axis instead. Coverage over a fine binning of a high-dimensional
+    space is the case this is here for.
+    """
+
+    set_3_ticks(ax, axis)
+    which = ax.xaxis if axis == "x" else ax.yaxis
+    ticks = [abs(t) for t in which.get_ticklocs() if np.isfinite(t) and t != 0.0]
+    if ticks and max(ticks) < SCIENTIFIC_BELOW:
+        formatter = ScalarFormatter(useMathText=True)
+        formatter.set_scientific(True)
+        formatter.set_powerlimits((0, 0))
+        which.set_major_formatter(formatter)
+
+
+def write_legend(entries, plot_cfg, output_dir):
+    """Write the legend on its own, for a figure that has to carry one
+    elsewhere, and return how many were written.
+
+    Both shapes go out every time, since which one fits depends on the document
+    the figure goes into rather than on the data. The horizontal is laid out by
+    `legend_rows_cols`; the vertical is one entry per row. --no_legend takes the
+    legend off the figures and leaves these alone.
+    """
+
+    handles = [
+        mpatches.Patch(
+            facecolor=entry["color"],
+            hatch=entry["hatch"],
+            edgecolor="black",
+            linewidth=BAR_EDGE_WIDTH,
+            label=entry["label"],
+        )
+        for entry in entries
+    ]
+    if not handles:
+        return 0
+    _n_rows, n_cols = rows_cols(plot_cfg.get("legend_rows_cols"), len(handles))
+
+    written = 0
+    for name, cols in (("legend_horizontal", n_cols), ("legend_vertical", 1)):
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        ax.axis("off")
+        legend = ax.legend(
+            handles,
+            [h.get_label() for h in handles],
+            fontsize=FONT_SIZE,
+            frameon=True,
+            loc="center",
+            ncol=cols,
+            # In font units. The defaults (2.0 and 0.7) draw a block half the
+            # height of the text beside it.
+            handlelength=2.6,
+            handleheight=1.3,
+        )
+        for text in legend.get_texts():
+            text.set(**tex_kwargs(text.get_text()))
+        # The canvas is cut to the legend rather than guessed at. A figure sized
+        # by a rule of thumb is a floor the crop cannot go below, and one entry
+        # per row in a canvas wide enough for four is all margin.
+        fig.canvas.draw()
+        box = legend.get_window_extent().transformed(fig.dpi_scale_trans.inverted())
+        fig.set_size_inches(box.width, box.height)
+        vprint(f"  Saved: {save_figure(fig, output_dir, name)}")
+        plt.close(fig)
+        written += 1
+    return written
+
+
 def wanted_statistics(plot_cfg):
     """Read the statistics a plot config draws and return them as (binned, kNN),
     each {name: label}.
@@ -573,8 +660,7 @@ def plot_counters(config_name, plot_cfg):
     The key is taken out of the mapping, so the helpers that read the
     environments of a plot config see only environments. `plot_cfg` is therefore
     changed in place and a second call on it finds nothing. A name that is not a
-    binned counter in src/pseudocount.py is an error, and so is one that differs
-    from --counter.
+    binned counter in src/pseudocount.py is an error.
     """
 
     found = {}
@@ -621,11 +707,6 @@ def plot_counters(config_name, plot_cfg):
                 f"{config_name}: {env} names {name}, which is not a binned "
                 f"counter in src/pseudocount.py. It defines: "
                 f"{', '.join(sorted(counters))}."
-            )
-        if args.counter is not None and name != args.counter:
-            raise SystemExit(
-                f"{config_name}: {env} names the counter {name} and --counter "
-                f"names {args.counter}. Drop one of the two."
             )
     return found
 
@@ -1034,7 +1115,7 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
         groups,
         {k: n for k, n in selected.items() if n},
         envs,
-        {env: named_counters.get(env, args.counter) for env in envs},
+        {env: named_counters.get(env) for env in envs},
     )
 
 needed = sorted(
@@ -1394,10 +1475,17 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
         and a 95% confidence interval over the seeds, and return how many
         figures were written (0 or 1)."""
 
-        # A horizontal subplot holds its configurations down the side, so it
-        # grows with how many of them there are rather than with the value axis.
+        # A horizontal subplot holds its configurations down the side, so its
+        # height is theirs: a row each, the wider gaps between colour groups, and
+        # a fixed allowance above and below for the title and the value axis. The
+        # axes are then pinned to that allowance, so a row is HBAR_UNIT_INCHES
+        # tall whatever the configuration count.
+        slots = len(entries) + GROUP_GAP_BAR * sum(
+            1 for a, b in zip(entries, entries[1:]) if a["group"] != b["group"]
+        )
+        bars_inches = HBAR_UNIT_INCHES * slots
         height = (
-            max(SUBPLOT_H, HBAR_UNIT_INCHES * len(entries))
+            bars_inches + HBAR_TOP_INCHES + HBAR_BOTTOM_INCHES
             if args.horizontal_bars
             else SUBPLOT_H
         )
@@ -1407,7 +1495,14 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
             figsize=(SUBPLOT_W * len(drawn_envs), height),
             squeeze=False,
         )
-        fig.subplots_adjust(wspace=0.3)
+        if args.horizontal_bars:
+            fig.subplots_adjust(
+                wspace=0.3,
+                top=1.0 - HBAR_TOP_INCHES / height,
+                bottom=HBAR_BOTTOM_INCHES / height,
+            )
+        else:
+            fig.subplots_adjust(wspace=0.3)
         shown = set()
         drew = False
 
@@ -1460,7 +1555,7 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
                 (ax.set_xlim if args.horizontal_bars else ax.set_ylim)(
                     *ylims[(env, stat)]
                 )
-            set_3_ticks(ax, axis)
+            value_ticks(ax, axis)
 
         if not drew:
             plt.close(fig)
@@ -1472,7 +1567,7 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
                 facecolor=entry["color"],
                 hatch=entry["hatch"],
                 edgecolor="black",
-                linewidth=0.6,
+                linewidth=BAR_EDGE_WIDTH,
                 label=entry["label"],
             )
             for li, entry in enumerate(entries) if li in shown
@@ -1484,7 +1579,7 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
                 fontsize=FONT_SIZE - 2,
                 frameon=True,
                 loc="lower center",
-                ncol=len(handles),
+                ncol=rows_cols(plot_cfg.get("legend_rows_cols"), len(handles))[1],
                 bbox_to_anchor=(0.5, -0.22),
             )
             for text in legend.get_texts():
@@ -1541,5 +1636,7 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
                     f"  {env:<20} {label:<28} "
                     f"{mean:.{prec}f} ± {half:.{prec}f}  ({alive} seed(s))"
                 )
+
+    written += write_legend(entries, plot_cfg, output_dir)
 
 print(f"\n{written} figure(s) written to {output_root}")

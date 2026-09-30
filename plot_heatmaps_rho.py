@@ -680,7 +680,7 @@ with tqdm(
 # writes those on every call, so by now they hold whichever exemption set was
 # labelled last. The recap is about the runs the scan kept, which is the union's
 # question.
-_union_env, _union_algo = _assigned[_ignored_keys]
+_union_env, _union_algo = _assigned[(_ignored_keys, False, False)]
 inexact = sorted({
     str(c) for c in [*_union_env, *_union_algo] if split_config_label(str(c))[1]
 })

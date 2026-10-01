@@ -28,10 +28,12 @@ what the agent learns. Branches:
 - Built on [Hydra](https://hydra.cc/docs/intro/) (configuration and sweeps),
   [Submitit](https://github.com/facebookincubator/submitit) (SLURM),
   [Pandas](https://pandas.pydata.org/) (processing sweep data),
-  [W&B](https://wandb.ai/site/), [Rich](https://github.com/Textualize/rich/) (reports), and
-  [Matplotlib](https://matplotlib.org/), [Seaborn](https://seaborn.pydata.org/),
-  [Vega-Lite](https://vega.github.io/vega-lite/) and [OpenCV](https://opencv.org/)
-  (custom plots, heatmaps, and videos).
+  [W&B](https://wandb.ai/site/),
+  [Rich](https://github.com/Textualize/rich/) (reports), and
+  [Matplotlib](https://matplotlib.org/),
+  [Seaborn](https://seaborn.pydata.org/),
+  [Vega-Lite](https://vega.github.io/vega-lite/),
+  [OpenCV](https://opencv.org/) (custom plots, heatmaps, and videos).
 
 ## Installation
 Requires Python 3.10 or newer.
@@ -304,6 +306,13 @@ python plot_heatmaps.py -f data_example --plot_config=example -v --progression_s
   <img src="assets/train_gridworlds_curves.png" width="400" alt="Example Plots"> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
   <img src="assets/four_rooms.png" width="300" alt="Example Heatmaps">
 </p>
+
+> All plotting scripts take optional arguments for further customization. For
+example, both `interactive_curves.py` and `plot_results.py` can aggregate results
+over environments with the metrics of [rliable](https://github.com/google-research/rliable):
+interquartile mean, probability of improvement, and performance profiles,
+all with stratified-bootstrap confidence intervals.
+Refer to each script's docstring and `--help` for the full list of options.
 
 ## W&B Logging
 All statistics are also uploaded to W&B if the run is configured with `wandb.mode=online`

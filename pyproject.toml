@@ -15,7 +15,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rl-anvil"
 version = "0.1.0"
-description = "Train, sweep, and benchmark RL agents on Gymnasium environments, locally or on SLURM"
+description = "Codebase for RL algorithms"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
@@ -41,7 +41,7 @@ dependencies = [
     "imageio",
     "imageio-ffmpeg",
     "pathvalidate",
-    "pyrarrow",
+    "pyarrow",
     "fastparquet",
 ]
 

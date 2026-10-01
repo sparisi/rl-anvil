@@ -1,51 +1,11 @@
-#         None
-#     +---------+
-#     |         |
-#     +---------+
-#
-#           RawGridEncoder              (num_centers = 20, hidden_size = 64)
-#        Fuzzy         Gaussian
-#     +---------+    +---------+
-#     |         |    |         |
-#     +---------+    +---------+
-#
-#         MaxoutGridEncoder             (num_centers = 8, hidden_size = 64)
-#        Fuzzy         Gaussian
-#     +---------+    +---------+
-#     |         |    |         |
-#     +---------+    +---------+
-#
-#       GridAggregationEncoder          (num_centers = 8, hidden_size = 16)
-#        Fuzzy         Gaussian
-#     +---------+    +---------+
-#     |         |    |         |   [mean, max]
-#     +---------+    +---------+
-#     +---------+    +---------+
-#     |         |    |         |   [mean, max, std, min]
-#     +---------+    +---------+
-#     +---------+    +---------+
-#     |         |    |         |   [raw]
-#     +---------+    +---------+
-#     +---------+    +---------+
-#     |         |    |         |   [mean, prod]
-#     +---------+    +---------+
-#
-# That is, some hyperparameters (`num_centers`, `hidden_size`) are fixed but
-# different across configurations, and some configurations define sub-sweeps
-# (only GridAggregationEncoder sweeps over `aggregation_stats`).
-# Total sub-configurations: 1 + 2 + 2 + 8 = 13.
-#
-# All the above configurations sweep over `dropout_p` and `environment`.
-# Total configurations: 13 x 3 x 3 = 117.
+# Like encoders.yaml but only for lunar_lander, with an additional sweep over
+# `passthrough` (whether to pass its binary observations or not to the encoder).
 
 global_sweep:
   environment:
     - lunar_lander
-    - cart_pole
-    - pendulum_discrete
   algorithm:
     - eps_greedy
-  agent.critic.approximator.encoder.passthrough: null
   agent.critic.approximator.dropout_p:
     - 0.0
     - 0.05
@@ -55,7 +15,7 @@ global_sweep:
     # - LeakyReLU
 
 config_sweep:
-  # config_sweep is parsed after global_sweep, so "null" here deletes v_max, normalization, ceneters_mode
+  # config_sweep is parsed after global_sweep, so "null" here deletes v_max, normalization, centers_mode
   - agent.critic.approximator.encoder: null
 
   - agent.critic.approximator.encoder.id: RawGridEncoder
@@ -66,6 +26,9 @@ config_sweep:
     agent.critic.approximator.encoder.v_max: 3.0
     agent.critic.approximator.encoder.normalization: null
     agent.critic.approximator.encoder.centers_mode: learned
+    agent.critic.approximator.encoder.passthrough:
+      - null
+      - [6, 7]
 
   - agent.critic.approximator.encoder.id: MaxoutGridEncoder
     agent.critic.approximator.encoder.grid_id:
@@ -77,6 +40,9 @@ config_sweep:
     agent.critic.approximator.encoder.v_max: 3.0
     agent.critic.approximator.encoder.normalization: null
     agent.critic.approximator.encoder.centers_mode: learned
+    agent.critic.approximator.encoder.passthrough:
+      - null
+      - [6, 7]
 
   - agent.critic.approximator.encoder.id: GridAggregationEncoder
     agent.critic.approximator.encoder.grid_id:
@@ -88,6 +54,9 @@ config_sweep:
     agent.critic.approximator.encoder.v_max: 3.0
     agent.critic.approximator.encoder.normalization: null
     agent.critic.approximator.encoder.centers_mode: learned
+    agent.critic.approximator.encoder.passthrough:
+      - null
+      - [6, 7]
     agent.critic.approximator.encoder.aggregation_stats:
       - [mean, max]
       - [mean, max, std, min]

@@ -1285,10 +1285,11 @@ def save_figure(fig, folder, name, dpi=300):
     """Save `fig` as `folder/name.png` and return the path to it.
 
     The name is sanitized with pathvalidate, which strips the characters a
-    filename cannot hold."""
+    filename cannot hold, and the path is normalized so its separators are the
+    platform's own."""
 
     name = sanitize_filename(name, platform="auto")
-    path = os.path.join(folder, name + ".png")
+    path = os.path.normpath(os.path.join(folder, name + ".png"))
     fig.savefig(path, bbox_inches="tight", pad_inches=0.1, dpi=dpi)
     return path
 
@@ -1503,7 +1504,8 @@ def draw_bars(
 
     xs = bar_positions([entry for entry, _ in items], bar_width)
     # Every bar stands from one floor, so a negative value stands beside its
-    # neighbours. The floor sits below the lowest interval.
+    # neighbours and the comparison stays between the bars. The floor sits below
+    # the lowest interval, so the shortest bar still has a foot to be seen by.
     lows = [m - e for _, v in items if v is not None for m, e in [v] if np.isfinite(m)]
     floor = min(lows) - 0.1 * abs(min(lows)) if lows else 0.0
 

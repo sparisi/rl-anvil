@@ -1285,10 +1285,11 @@ def save_figure(fig, folder, name, dpi=300):
     """Save `fig` as `folder/name.png` and return the path to it.
 
     The name is sanitized with pathvalidate, which strips the characters a
-    filename cannot hold."""
+    filename cannot hold, and the path is normalized so its separators are the
+    platform's own."""
 
     name = sanitize_filename(name, platform="auto")
-    path = os.path.join(folder, name + ".png")
+    path = os.path.normpath(os.path.join(folder, name + ".png"))
     fig.savefig(path, bbox_inches="tight", pad_inches=0.1, dpi=dpi)
     return path
 

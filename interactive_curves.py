@@ -9,7 +9,14 @@ that run's own curve.
 
 "Show" picks what a subplot draws:
 
-  Curves        the training curves themselves.
+  Curves mean   the training curves themselves: the mean over seeds and its
+                confidence band.
+  Curves IQM    the interquartile mean over seeds at every point, with its 95%
+                bootstrap interval. Written under --with_rliable. A point where
+                any seed of the curve has no value is left out of it. With
+                fewer than four seeds no seed is cut and the IQM is the mean;
+                the interval is over resamples of those few seeds, so it takes
+                few distinct values.
   AUC Bars      one bar per curve: the area under it divided by the training
                 steps it covers, so the bar is in the units of the y axis and
                 configurations trained for different lengths stay comparable.
@@ -25,12 +32,24 @@ that run's own curve.
                 its best point, or its last.
 
 Every row ends in an extra "all" subplot, pooling every run of that row. In the
-violin modes it is their density; in Curves, AUC Bars and Time Bars it is their
-average.
+violin modes it is their density; in the curve and bar modes it is their average.
 
 The "avg. AUC" tab that follows the environments is the AUC bars with the
-environment averaged away, and "parameters" regroups the same runs by one
-hyperparameter at a time. Both are tabs, not modes of this dropdown.
+environment averaged away, "rliable" aggregates the runs of every environment
+with stratified-bootstrap intervals, and "parameters" regroups the same runs by
+one hyperparameter at a time. All are tabs, not modes of this dropdown.
+
+The "rliable" tab (Agarwal et al., NeurIPS 2021), written under --with_rliable,
+scores every run by its final value or its area under the curve, chosen with the
+"Type" dropdown, and normalizes each environment's scores by the lowest and
+highest score of any run of that environment and statistic on the page. A
+configuration is one cell's curve, matched across environments by its block,
+row, column and curve, and only configurations with runs in every environment
+are counted; environments holding different numbers of its runs are padded
+rather than cut, and each is weighed the same whatever its run count, except in
+the IQM, which pools the runs. The tab shows the median, IQM, mean and
+optimality gap of each configuration, the probability of improvement of every
+pair of configurations within one sweep entry, and the performance profiles.
 
 After the environment tabs comes "parameters", which regroups the same
 runs by one hyperparameter at a time, chosen from a dropdown. A row of its grid
@@ -85,7 +104,17 @@ from ast import literal_eval
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
+from src.utils.aggregate import (
+    METRICS,
+    aggregate_metrics,
+    interval_estimates,
+    iqm,
+    performance_profile,
+    probability_of_improvement,
+    stack_runs,
+)
 from src.utils.plot import (
     ALGO,
     ENV,
@@ -172,6 +201,17 @@ parser.add_argument(
          "0 to annotate the mean over all of them.",
 )
 parser.add_argument(
+    "--with_rliable",
+    action="store_true",
+    help="Add the rliable tab.",
+)
+parser.add_argument(
+    "--rliable_reps",
+    type=int,
+    default=2000,
+    help="Bootstrap replicates behind every interval of the rliable tab.",
+)
+parser.add_argument(
     "--prepare_missing_runs",
     action="store_true",
     help="Write a submit script for configurations missing seeds below the "
@@ -195,13 +235,21 @@ CELL_HEIGHT = 120
 # The violin modes are told apart by their shared prefix rather than by being
 # listed, since which score they take is the only thing that separates them.
 VIOLIN_PREFIX = "Violin"
+CURVES_MEAN = "Curves mean"
+CURVES_IQM = "Curves IQM"
+AUC_BARS = "AUC Bars"
+TIME_BARS = "Time Bars"
+VIOLIN_AUC = f"{VIOLIN_PREFIX} AUC"
+VIOLIN_MAX = f"{VIOLIN_PREFIX} max"
+VIOLIN_FINAL = f"{VIOLIN_PREFIX} final"
 MODES = [
-    "Curves",
-    "AUC Bars",
-    "Time Bars",
-    f"{VIOLIN_PREFIX} AUC",
-    f"{VIOLIN_PREFIX} max",
-    f"{VIOLIN_PREFIX} final",
+    CURVES_MEAN,
+    *([CURVES_IQM] if args.with_rliable else []),
+    AUC_BARS,
+    TIME_BARS,
+    VIOLIN_AUC,
+    VIOLIN_MAX,
+    VIOLIN_FINAL,
 ]
 
 # The name of the column that pools a whole row.
@@ -296,6 +344,8 @@ def rows_of(frame, stat):
         }
         for i, (m, h, n) in enumerate(zip(mean, half, alive)) if not np.isnan(m)
     ]
+    if args.with_rliable:
+        rows += iqm_rows(series, stepsize)
     for j, seed in enumerate(seeds):
         seed_id = int(seed) if seed is not None and pd.notna(seed) else None
         rows += [
@@ -326,6 +376,35 @@ def rows_of(frame, stat):
         for k, s in enumerate(scores)
     ]
     return rows, seeds
+
+
+def iqm_rows(series, stepsize):
+    """The rows of the "Curves IQM" mode for one curve: the IQM over its seeds at
+    every point, with its 95% bootstrap interval.
+
+    The bootstrap resamples whole runs, so every seed needs a value at every
+    point it is taken at, and a point where any seed has none is left out."""
+
+    values = series.to_numpy(dtype=float)
+    kept = np.all(np.isfinite(values), axis=1)
+    if not kept.any():
+        return []
+    # (points, seeds, one environment): the metrics reduce the last two axes.
+    point, lo, hi = interval_estimates(
+        iqm,
+        values[kept][:, :, None],
+        reps=args.rliable_reps,
+    )
+    return [
+        {
+            "x": float(i * stepsize),
+            "iqm": float(p),
+            "iqm_lo": float(l),
+            "iqm_hi": float(h),
+            "_kind": "iqm",
+        }
+        for i, p, l, h in zip(np.flatnonzero(kept), point, lo, hi)
+    ]
 
 
 def scores_of(series):
@@ -521,16 +600,24 @@ def pooled_rows(rows):
 
     Only the fields the pooled layers draw come along. A copy of the cells' own
     rows would carry the curve, its index and its seed count into a cell that
-    draws one line."""
+    draws one line.
 
+    The IQM curves of the "Curves IQM" mode are averaged the same way, into
+    `iqm_all` rows carrying the average under the mean curve's field names, so
+    the pooled layers draw either."""
+
+    # The fields a curve kind carries its value and band in.
+    curve_fields = {
+        "agg": ("mean", "ci_lo", "ci_hi"),
+        "iqm": ("iqm", "iqm_lo", "iqm_hi"),
+    }
     curves, areas, times = {}, {}, {}
     for r in rows:
-        if r["_kind"] == "agg":
-            key = (r["_block"], r["_row"], r["statistic"])
+        if r["_kind"] in curve_fields:
+            key = (r["_kind"], r["_block"], r["_row"], r["statistic"])
             acc = curves.setdefault(key, {}).setdefault(r["x"], [0.0, 0.0, 0.0, 0])
-            acc[0] += r["mean"]
-            acc[1] += r["ci_lo"]
-            acc[2] += r["ci_hi"]
+            for k, f in enumerate(curve_fields[r["_kind"]]):
+                acc[k] += r[f]
             acc[3] += 1
         elif r["_kind"] == "auc":
             key = (r["_block"], r["_row"], r["statistic"])
@@ -548,14 +635,14 @@ def pooled_rows(rows):
             acc[3] += 1
 
     out = []
-    for (block, row, stat), per_x in curves.items():
+    for (kind, block, row, stat), per_x in curves.items():
         out += [
             {
                 "_block": block,
                 "_row": row,
                 "_col": ALL_COL,
                 "statistic": stat,
-                "_kind": "agg_all",
+                "_kind": f"{kind}_all",
                 "x": x,
                 "mean": s[0] / s[3],
                 "ci_lo": s[1] / s[3],
@@ -866,6 +953,400 @@ def build_avg_auc_spec(rows, block_labels, curve_domain):
         # One legend for the whole tab, above the blocks and unabbreviated, as on
         # the environment tabs: at the side it is cut to the width of a column,
         # and these labels are whole configurations.
+        "resolve": {"scale": {"color": "shared"}},
+        "config": {
+            "view": {"stroke": "#888"},
+            "axis": {"grid": False},
+            "legend": {"orient": "top", "labelLimit": 0, "symbolOpacity": 1},
+        },
+    }
+
+
+RLIABLE_SCORES = {"score_final": "Final", "score_auc": "AUC"}
+PROFILE_TAUS = np.linspace(0.0, 1.0, 51)
+
+
+def rliable_records(runs):
+    """The rliable estimates of every (statistic, score) as three lists of
+    records: the aggregate metrics per configuration, the probability of
+    improvement per pair of configurations of one sweep entry, and the
+    performance profile per configuration.
+
+    Each environment's scores are min-max normalized over every run of that
+    environment and statistic, so the normalized scores span [0, 1]; an
+    environment where every run scored the same is left out, with a warning, and
+    the environments each estimate is over are carried as `n_envs`. A
+    configuration is (block, row, column, curve) and is counted only with runs in
+    every remaining environment; environments holding different numbers of its
+    runs are padded (see aggregate.stack_runs), not cut."""
+
+    frame = pd.DataFrame(runs)
+    keys = ["_block", "_row", "_col", "_curve"]
+    agg_rows, poi_rows, profile_rows = [], [], []
+    jobs = []
+
+    def name_of(key, label, with_block=True):
+        parts = [label] if with_block else []
+        parts += [p for p in key[1:] if p.strip()]
+        return " | ".join(parts) or label
+
+    for stat, by_stat in frame.groupby("statistic", sort=True):
+        for score, kind in RLIABLE_SCORES.items():
+            low = by_stat.groupby("_env")[score].min()
+            high = by_stat.groupby("_env")[score].max()
+            envs = [e for e in low.index if high[e] > low[e]]
+            flat = [e for e in low.index if e not in envs]
+            if flat:
+                print(
+                    f"WARNING: rliable tab, {stat} ({kind}): every run scored the "
+                    f"same in {flat}, which cannot be normalized and is left out."
+                )
+            if not envs:
+                continue
+
+            scores, labels, missing = {}, {}, 0
+            for key, config in by_stat.groupby(keys, sort=False):
+                per_env = [
+                    (config.loc[config["_env"] == e, score].to_numpy(dtype=float)
+                     - low[e]) / (high[e] - low[e])
+                    for e in envs
+                ]
+                if not all(len(p) for p in per_env):
+                    missing += 1
+                    continue
+                scores[key] = stack_runs(per_env)
+                block_label = config["_block_label"].iloc[0] or f"entry {key[0] + 1}"
+                labels[key] = block_label
+            if score == "score_final" and missing:
+                print(
+                    f"WARNING: rliable tab, {stat}: {missing} configuration(s) "
+                    f"without runs in every environment are left out."
+                )
+            if not scores:
+                continue
+            pairs = [
+                (a, b)
+                for a, b in itertools.combinations(scores, 2)
+                if a[0] == b[0]
+            ]
+            jobs.append((
+                {"statistic": stat, "type": kind, "n_envs": len(envs)},
+                scores,
+                labels,
+                pairs,
+            ))
+
+    # Gathered first and computed after, so the bar knows how many estimates
+    # there are: an aggregate and a profile per configuration, and one per pair.
+    progress = tqdm(
+        total=sum(2 * len(scores) + len(pairs) for _, scores, _, pairs in jobs),
+        desc="rliable",
+        unit="estimate",
+    )
+    for base, scores, labels, pairs in jobs:
+        for key, s in scores.items():
+            point, lo, hi = interval_estimates(
+                aggregate_metrics,
+                s,
+                reps=args.rliable_reps,
+            )
+            for k, metric in enumerate(METRICS):
+                agg_rows.append({
+                    **base,
+                    "_part": "aggregate",
+                    "metric": metric,
+                    "config": name_of(key, labels[key]),
+                    "_curve": key[3],
+                    "value": float(point[k]),
+                    "lo": float(lo[k]),
+                    "hi": float(hi[k]),
+                    "n_runs": int(np.isfinite(s).sum()),
+                })
+            progress.update()
+
+        for a, b in pairs:
+            value, lo, hi = interval_estimates(
+                probability_of_improvement,
+                scores[a],
+                scores[b],
+                reps=args.rliable_reps,
+            )
+            poi_rows.append({
+                **base,
+                "_part": "poi",
+                "block": labels[a],
+                "pair": f"{name_of(a, labels[a], False)} vs. "
+                        f"{name_of(b, labels[b], False)}",
+                "_curve": a[3],
+                "value": float(value),
+                "lo": float(lo),
+                "hi": float(hi),
+            })
+            progress.update()
+
+        for key, s in scores.items():
+            profile, lo, hi = interval_estimates(
+                lambda x: performance_profile(x, PROFILE_TAUS),
+                s,
+                reps=args.rliable_reps,
+            )
+            profile_rows += [
+                {
+                    **base,
+                    "_part": "profile",
+                    "config": name_of(key, labels[key]),
+                    "block": labels[key],
+                    "_block": int(key[0]),
+                    "_row": key[1],
+                    "_col": key[2],
+                    "_curve": key[3],
+                    "tau": float(tau),
+                    "frac": float(profile[t]),
+                    "lo": float(lo[t]),
+                    "hi": float(hi[t]),
+                }
+                for t, tau in enumerate(PROFILE_TAUS)
+            ]
+            progress.update()
+    progress.close()
+    return agg_rows, poi_rows, profile_rows
+
+
+def build_rliable_spec(runs, curve_domain):
+    """The rliable panel, or None when no configuration has runs in every
+    environment. A "Statistic" and a "Type" dropdown pick what every chart of it
+    shows: the aggregate metrics, one column per metric and a bar per
+    configuration spanning its interval with a tick at the estimate; the
+    probability of improvement, a row of pairs per sweep entry with a rule at
+    0.5; and the performance profiles. Colours follow `curve_domain`, as on the
+    other tabs."""
+
+    if not runs:
+        return None
+    agg_rows, poi_rows, profile_rows = rliable_records(runs)
+    if not agg_rows:
+        return None
+    statistics = sorted({r["statistic"] for r in agg_rows})
+    # The y axes are ordered by a number each record carries, the position of its
+    # configuration or pair in the order they were computed. Vega-Lite compiles a
+    # sort LIST into one nested condition per value, and a list of a thousand
+    # pairs is deep enough to overflow the browser's stack.
+    for rows, field in ((agg_rows, "config"), (poi_rows, "pair")):
+        order = {v: k for k, v in enumerate(dict.fromkeys(r[field] for r in rows))}
+        for r in rows:
+            r["_order"] = order[r[field]]
+    by_order = {"field": "_order", "op": "min"}
+    color = {
+        "field": "_curve",
+        "type": "nominal",
+        "title": None,
+        "scale": {"domain": curve_domain},
+    }
+
+    def interval_layers(y_field, y_sort, x_title):
+        return [
+            {
+                "mark": {"type": "bar", "opacity": 0.75},
+                "encoding": {
+                    "y": {
+                        "field": y_field,
+                        "type": "nominal",
+                        "title": None,
+                        "sort": y_sort,
+                        "axis": {"labelLimit": 0},
+                    },
+                    "x": {
+                        "field": "lo",
+                        "type": "quantitative",
+                        "title": x_title,
+                        "scale": {"zero": False},
+                    },
+                    "x2": {"field": "hi"},
+                    "color": color,
+                    "tooltip": [
+                        {"field": y_field, "type": "nominal"},
+                        {"field": "value", "type": "quantitative", "format": ".3f"},
+                        {"field": "lo", "type": "quantitative", "format": ".3f"},
+                        {"field": "hi", "type": "quantitative", "format": ".3f"},
+                        {
+                            "field": "n_envs",
+                            "type": "quantitative",
+                            "title": "environments",
+                        },
+                    ],
+                },
+            },
+            {
+                "mark": {
+                    "type": "tick",
+                    "color": "black",
+                    "thickness": 2,
+                    "orient": "vertical",
+                },
+                "encoding": {
+                    "y": {"field": y_field, "type": "nominal", "sort": y_sort},
+                    "x": {"field": "value", "type": "quantitative"},
+                },
+            },
+        ]
+
+    selected = "datum.statistic === p_stat && datum.type === p_type"
+    charts = [
+        {
+            "title": "Aggregate metrics (normalized score)",
+            "transform": [
+                {"filter": "datum._part === 'aggregate'"},
+                {"filter": selected},
+            ],
+            "facet": {
+                "column": {
+                    "field": "metric",
+                    "type": "nominal",
+                    "title": None,
+                    "sort": list(METRICS),
+                    "header": {"labelPadding": 2},
+                },
+            },
+            "spec": {
+                "width": CELL_WIDTH,
+                "height": {"step": 16},
+                "layer": interval_layers("config", by_order, None),
+            },
+            "resolve": {"scale": {"x": "independent"}},
+        },
+    ]
+    if poi_rows:
+        charts.append({
+            "title": "Probability of improvement P(X > Y)",
+            "transform": [
+                {"filter": "datum._part === 'poi'"},
+                {"filter": selected},
+            ],
+            "facet": {
+                "row": {
+                    "field": "block",
+                    "type": "nominal",
+                    "title": None,
+                    "header": {"labelAngle": 0, "labelAlign": "left"},
+                },
+            },
+            "spec": {
+                "width": 2 * CELL_WIDTH,
+                "height": {"step": 16},
+                "layer": [
+                    *interval_layers("pair", by_order, None),
+                    {
+                        "mark": {"type": "rule", "strokeDash": [4, 3]},
+                        "encoding": {"x": {"datum": 0.5}},
+                    },
+                ],
+            },
+            "resolve": {"scale": {"y": "independent"}},
+        })
+    # The grid of the environment tabs: a block per sweep entry, a subplot per
+    # cell and a profile per curve, in the curve's colour.
+    blocks = sorted({(r["_block"], r["block"]) for r in profile_rows})
+
+    def profile_block(index, label):
+        return {
+            "title": label,
+            "transform": [
+                {"filter": "datum._part === 'profile'"},
+                {"filter": selected},
+                {"filter": f"datum._block === {index}"},
+            ],
+            "facet": {
+                "row": {
+                    "field": "_row",
+                    "type": "nominal",
+                    "title": None,
+                    "header": {"labelAngle": 0, "labelAlign": "left"},
+                },
+                "column": {"field": "_col", "type": "nominal", "title": None},
+            },
+            "spec": {
+                "width": CELL_WIDTH,
+                "height": CELL_HEIGHT,
+                "layer": [
+                    {
+                        "mark": {"type": "area", "opacity": 0.2},
+                        "encoding": {
+                            "x": {"field": "tau", "type": "quantitative", "title": "τ"},
+                            "y": {"field": "lo", "type": "quantitative"},
+                            "y2": {"field": "hi"},
+                            "color": color,
+                        },
+                    },
+                    {
+                        "mark": {"type": "line", "strokeWidth": 1.5},
+                        "encoding": {
+                            "x": {"field": "tau", "type": "quantitative", "title": "τ"},
+                            "y": {
+                                "field": "frac",
+                                "type": "quantitative",
+                                "title": "Fraction of runs > τ",
+                                "scale": {"domain": [0, 1]},
+                            },
+                            "color": color,
+                            "tooltip": [
+                                {"field": "config", "type": "nominal"},
+                                {
+                                    "field": "tau",
+                                    "type": "quantitative",
+                                    "format": ".2f",
+                                },
+                                {
+                                    "field": "frac",
+                                    "type": "quantitative",
+                                    "format": ".3f",
+                                },
+                                {
+                                    "field": "n_envs",
+                                    "type": "quantitative",
+                                    "title": "environments",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            },
+        }
+
+    charts.append({
+        "title": "Performance profiles (normalized score)",
+        "vconcat": [profile_block(index, label) for index, label in blocks],
+    })
+
+    return {
+        "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+        "data": {
+            "values": [
+                {k: v for k, v in record.items() if v == v}
+                for record in agg_rows + poi_rows + profile_rows
+            ]
+        },
+        "params": [
+            {
+                "name": "p_stat",
+                "value": statistics[0],
+                "bind": {
+                    "input": "select",
+                    "options": statistics,
+                    "name": "Statistic: ",
+                },
+            },
+            {
+                "name": "p_type",
+                "value": RLIABLE_SCORES["score_final"],
+                "bind": {
+                    "input": "select",
+                    "options": list(RLIABLE_SCORES.values()),
+                    "name": "Type: ",
+                },
+            },
+        ],
+        "vconcat": charts,
+        "spacing": 40,
         "resolve": {"scale": {"color": "shared"}},
         "config": {
             "view": {"stroke": "#888"},
@@ -1319,28 +1800,38 @@ def build_spec(
     # The modes are alternatives, not overlays: a cell draws whichever the "Show"
     # dropdown is on, and every layer of the others filters to nothing.
     agg_filter = (
-        f"p_mode === '{MODES[0]}' && p_seed === 'All' && datum._kind === 'agg' "
+        f"p_mode === '{CURVES_MEAN}' && p_seed === 'All' && datum._kind === 'agg' "
         f"&& ({shared})"
     )
+    iqm_filter = (
+        f"p_mode === '{CURVES_IQM}' && p_seed === 'All' && datum._kind === 'iqm' "
+        f"&& ({shared})"
+    )
+    # Either curve mode draws a single seed's own curve when one is picked: a
+    # mean or an IQM over one run is that run.
+    curve_mode = f"(p_mode === '{CURVES_MEAN}' || p_mode === '{CURVES_IQM}')"
     seed_filter = (
-        f"p_mode === '{MODES[0]}' && p_seed !== 'All' && datum._kind === 'seed' "
+        f"{curve_mode} && p_seed !== 'All' && datum._kind === 'seed' "
         f"&& datum.seed === p_seed && ({shared})"
     )
     # The area is taken over every seed, so it is the same bar whichever seed the
     # dropdown is on -- it answers a question about the configuration, not a run.
     # Named by MODES, not spelled out again: a mode renamed there and not here
     # filters to nothing, and an empty cell is all it says about itself.
-    auc_filter = f"p_mode === '{MODES[1]}' && datum._kind === 'auc' && ({shared})"
+    auc_filter = f"p_mode === '{AUC_BARS}' && datum._kind === 'auc' && ({shared})"
     # The pooled column's own two: the same rows again, averaged over everything
     # the row holds -- every configuration of it and every global_sweep
     # combination under them. The average is taken before the dropdowns exist, so
     # it is over every curve of the row whichever of them is on screen.
+    # The IQM curves are pooled into the same fields (see pooled_rows), so one set
+    # of pooled layers draws the curve of whichever curve mode is on.
     agg_all_filter = (
-        f"p_mode === '{MODES[0]}' && datum._kind === 'agg_all'"
+        f"((p_mode === '{CURVES_MEAN}' && datum._kind === 'agg_all')"
+        f" || (p_mode === '{CURVES_IQM}' && datum._kind === 'iqm_all'))"
         f" && ({pooled_shared})"
     )
     auc_all_filter = (
-        f"p_mode === '{MODES[1]}' && datum._kind === 'auc_all'"
+        f"p_mode === '{AUC_BARS}' && datum._kind === 'auc_all'"
         f" && ({pooled_shared})"
     )
     # A run is timed once, whatever it recorded, so a timing row carries no
@@ -1350,12 +1841,12 @@ def build_spec(
         term for (field, _), term in zip(filter_fields, terms) if field != "statistic"
     ) or "true"
     time_filter = (
-        f"p_mode === '{MODES[2]}' && datum._kind === 'time'"
+        f"p_mode === '{TIME_BARS}' && datum._kind === 'time'"
         f" && ({curve_shared})"
     )
     # The pooled one is already averaged over every curve of the row, so there is
     # nothing left for a dropdown to select from.
-    time_all_filter = f"p_mode === '{MODES[2]}' && datum._kind === 'time_all'"
+    time_all_filter = f"p_mode === '{TIME_BARS}' && datum._kind === 'time_all'"
     # One point per run, seeds included, which is what the density is over -- so
     # the seed dropdown does not narrow it either.
     # `(p_mode || '')`, not `p_mode`: a select binding is momentarily null while
@@ -1376,9 +1867,9 @@ def build_spec(
     pick_score = [
         {
             "calculate": (
-                f"p_mode === '{MODES[3]}' ? datum.score_auc"
-                f" : p_mode === '{MODES[4]}' ? datum.score_max"
-                f" : p_mode === '{MODES[5]}' ? datum.score_final"
+                f"p_mode === '{VIOLIN_AUC}' ? datum.score_auc"
+                f" : p_mode === '{VIOLIN_MAX}' ? datum.score_max"
+                f" : p_mode === '{VIOLIN_FINAL}' ? datum.score_final"
                 f" : null"
             ),
             "as": "score",
@@ -1447,7 +1938,7 @@ def build_spec(
         # It is also the only title on the channel -- the y encodings carry none
         # of their own -- since a field definition's `title` and an axis's set
         # the same thing and only one of them is read.
-        "title": {"expr": f"p_mode === '{MODES[2]}' ? 'minutes' : ' '"},
+        "title": {"expr": f"p_mode === '{TIME_BARS}' ? 'minutes' : ' '"},
     }
     # "Same y-lim": one y scale for every cell of every block, so its domain runs
     # from the lowest configuration to the highest.
@@ -1480,7 +1971,7 @@ def build_spec(
                 "type": "quantitative",
                 "title": "Training steps",
                 "axis": {
-                    "labelExpr": f"p_mode === '{MODES[0]}' ? datum.label : ''",
+                    "labelExpr": f"{curve_mode} ? datum.label : ''",
                 },
             },
             "y": {
@@ -1576,6 +2067,25 @@ def build_spec(
                 window=span,
             ),
             line,
+            # The "Curves IQM" mode: the same band and line, of the IQM.
+            layer(
+                picked.format(iqm_filter),
+                {"type": "area", "opacity": 0.2, "clip": True},
+                "iqm_lo",
+                y2={"field": "iqm_hi"},
+                window=span,
+            ),
+            layer(
+                picked.format(iqm_filter),
+                {"type": "line", "clip": True},
+                "iqm",
+                tooltip(
+                    ("_curve", "nominal", {"title": "curve"}),
+                    ("x", "quantitative", {"title": "step"}),
+                    ("iqm", "quantitative", {"title": "IQM", "format": ".3f"}),
+                ),
+                window=span,
+            ),
             # detail: keep each seed's path separate instead of letting
             # Vega-Lite join runs that share a color.
             layer(
@@ -2373,6 +2883,9 @@ avg_auc_rows = []
 # {sweep entry index: its label}, so the averaged panel names a block by the
 # entry it came from rather than by where it landed in one environment's list.
 avg_block_labels = {}
+# One row per (run, statistic) with its two scores and the configuration it
+# belongs to, for the rliable tab.
+rliable_runs = []
 
 for env in envs_present:
     # An overridden run is labelled `<stem> (key=value)`, and the sweep names an
@@ -2533,6 +3046,20 @@ for env in envs_present:
                             "score_max": r["score_max"],
                             "score_final": r["score_final"],
                             **varied,
+                        }
+                        for r in decoded if r["_kind"] == "violin"
+                    ]
+                    rliable_runs += [
+                        {
+                            "_env": env_name,
+                            "statistic": stat,
+                            "_block": block.index,
+                            "_block_label": block.label,
+                            "_row": base["_row"],
+                            "_col": base["_col"],
+                            "_curve": base["_curve"],
+                            "score_final": r["score_final"],
+                            "score_auc": r["score_auc"],
                         }
                         for r in decoded if r["_kind"] == "violin"
                     ]
@@ -2740,6 +3267,18 @@ else:
         f"\navg. AUC: {len(avg_auc_rows)} bar(s) over "
         f"{len({r['_env'] for r in avg_auc_rows})} environment(s)"
     )
+
+# The runs of every environment aggregated with bootstrap intervals, beside the
+# averaged bars.
+if args.with_rliable:
+    rliable_spec = build_rliable_spec(rliable_runs, curve_domain)
+    if rliable_spec is None:
+        vprint(
+            "\nNo configuration has runs in every environment, so the rliable "
+            "tab was not written."
+        )
+    else:
+        panels.append({"title": "rliable", "spec": rliable_spec})
 
 # Last tab, after the environments: the same runs regrouped by one hyperparameter
 # at a time rather than by the sweep's layout.

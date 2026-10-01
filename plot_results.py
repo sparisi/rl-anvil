@@ -8,12 +8,41 @@ files it selects put under them, and a run is drawn only when its WHOLE
 configuration is the one that comes out. Entries in one group share a hue and
 differ in shade and line style.
 
-One figure per (environment group, statistic): a subplot per environment, a curve
-per entry, seeds averaged into the mean and its confidence band. The environment
-and statistic labels come from the plot config, not from here.
+Five flags choose the figures, each written once per (environment group,
+statistic) and named after both, as <stat>_<group>_<suffix>. With none of the
+flags given, all of them are written.
 
-A LaTeX table of each configuration's area under the curve is written beside the
-figures.
+  --curves_mean    a subplot per environment and a curve per entry, the mean over
+                   seeds and its confidence band (`curves`). --with_auc appends a
+                   subplot of each entry's area under the curve, averaged over
+                   the group.
+  --curves_iqm     a curve per entry: the IQM over every run of the group, at
+                   points along training, with its stratified-bootstrap band
+                   (`curves_iqm`).
+  --bars_peak      a subplot per environment and a bar per entry at the peak of
+                   its curve (`peak_bar`), with --steps_to_peak a second row of
+                   the steps taken to reach it; and a figure of each entry's area
+                   under the curve averaged over the group (`auc`).
+  --rliable_final  the rliable figures on the final value of every run.
+  --rliable_auc    the rliable figures on the area under the curve of every run.
+
+The environment and statistic labels come from the plot config, not from here.
+`per_env_plot` in the plot config adds one figure per environment holding every
+statistic, for --curves_mean and --bars_peak.
+
+The rliable figures (Agarwal et al., NeurIPS 2021) reduce every run to one score
+and aggregate the runs of every environment of a group with stratified-bootstrap
+confidence intervals: the probability that one entry improves on another, for
+every pair (`rliable_<score>_poi`); the median, IQM, mean and optimality gap
+(`rliable_<score>_aggregate`); and the performance profiles
+(`rliable_<score>_profile`). Every aggregate except the probability of
+improvement pools scores across environments, so each environment's scores are
+normalized by its `ylim` for that statistic, and a group with an environment that
+has none is left out of them. The same holds for --curves_iqm.
+
+A LaTeX table of each entry's area under the curve is written beside the figures
+(table.tex), and with --rliable_final or --rliable_auc one of the IQM and the
+probability of improvement on that score (rliable_final.tex, rliable_auc.tex).
 
 --prepare_missing_runs writes a script relaunching the seeds an entry is short of,
 counted against `rng_seed` in the config.
@@ -22,10 +51,11 @@ Run with --help for the rest of the options.
 
 Example
 
-    python plot_results.py -f data_example -p example --with_auc --type=curves -v
+    python plot_results.py -f data_example -p example --with_auc --curves_mean -v
 """
 
 import argparse
+import itertools
 import json
 import os
 import sys
@@ -39,7 +69,17 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
+from tqdm import tqdm
 
+from src.utils.aggregate import (
+    METRICS,
+    aggregate_metrics,
+    interval_estimates,
+    iqm,
+    performance_profile,
+    probability_of_improvement,
+    stack_runs,
+)
 from src.utils.plot import (
     PLOT_CONFIG_DIR,
     SEED,
@@ -128,10 +168,53 @@ parser.add_argument(
     help="Points either side to average a curve over. 0 draws it as recorded.",
 )
 parser.add_argument(
-    "--type",
-    default="all",
-    choices=["curves", "bars", "all"],
-    help="Which figures to write: the curves, the bars, or both (default).",
+    "--curves_mean",
+    action="store_true",
+    help="Write the curves: a subplot per environment, the mean over seeds and "
+         "its confidence band.",
+)
+parser.add_argument(
+    "--curves_iqm",
+    action="store_true",
+    help="Write the IQM curve: normalized scores pooled over the runs of every "
+         "environment of a group, with a stratified-bootstrap band.",
+)
+parser.add_argument(
+    "--bars_peak",
+    action="store_true",
+    help="Write the bars: each configuration's peak per environment, and its area "
+         "under the curve averaged over the group.",
+)
+parser.add_argument(
+    "--rliable_final",
+    action="store_true",
+    help="Write the rliable figures and tables on each run's final value: the "
+         "mean of its last --rliable_last_k points.",
+)
+parser.add_argument(
+    "--rliable_auc",
+    action="store_true",
+    help="Write the rliable figures and tables on each run's area under the "
+         "curve.",
+)
+parser.add_argument(
+    "--rliable_last_k",
+    type=int,
+    default=1,
+    help="Points at the end of a curve averaged into its final value.",
+)
+parser.add_argument(
+    "--rliable_reps",
+    type=int,
+    default=50000,
+    help="Bootstrap replicates behind every rliable interval.",
+)
+parser.add_argument(
+    "--iqm_points",
+    type=int,
+    default=20,
+    help="Points along training, evenly spaced, at which --curves_iqm is "
+         "computed.",
 )
 parser.add_argument(
     "--with_auc",
@@ -177,6 +260,12 @@ parser.add_argument(
 )
 parser.add_argument("-v", "--verbose", action="store_true")
 args = parser.parse_args()
+
+# No figure flag at all writes every figure.
+FIGURES = ("curves_mean", "curves_iqm", "bars_peak", "rliable_final", "rliable_auc")
+if not any(getattr(args, f) for f in FIGURES):
+    for f in FIGURES:
+        setattr(args, f, True)
 
 
 def vprint(*a):
@@ -329,8 +418,8 @@ class Drawing:
     different things, so nothing one of them settled may still be standing when
     the next is drawn.
 
-    `summaries` and `time_table` are filled as the figures are drawn and read
-    back by the table and the recap; `drawn_envs` is which environments each
+    `summaries`, `rliable` and `time_table` are filled as the figures are drawn
+    and read back by the tables and the recap; `drawn_envs` is which environments each
     group actually had runs for; `rows` is the cache rows_of keeps."""
 
     name: str
@@ -351,6 +440,8 @@ class Drawing:
     expected_seeds: object
     output_dir: str
     summaries: dict = field(default_factory=dict)
+    # (score kind, group, statistic) -> the rliable estimates the tables print.
+    rliable: dict = field(default_factory=dict)
     time_table: dict = field(default_factory=dict)
     drawn_envs: dict = field(default_factory=dict)
     rows: dict = field(default_factory=dict)
@@ -365,6 +456,365 @@ def best_of(values, key=None):
     if not values:
         return None
     return max(values) if key is None else max(values, key=key)
+
+
+RLIABLE_SCORES = {"final": "Final", "auc": "AUC"}
+
+
+def run_scores(decoded, kind):
+    """One score per seed of a configuration: the mean of the last
+    --rliable_last_k finite points of its curve (`final`), or the mean of the
+    whole curve (`auc`, the area bar_values reports)."""
+
+    series = decoded[0]
+    scores = []
+    for column in series.columns:
+        run = series[column].to_numpy(dtype=float)
+        finite = run[np.isfinite(run)]
+        if not finite.size:
+            continue
+        kept = finite if kind == "auc" else finite[-args.rliable_last_k:]
+        scores.append(float(kept.mean()))
+    return scores
+
+
+def norm_bounds(drawing, envs, stat):
+    """The `ylim` of each environment for `stat`, as (low, high) arrays, or None
+    when an environment has none or an empty one."""
+
+    bounds = [drawing.stat_ylims.get((str(env), stat)) for env in envs]
+    if any(b is None or b[1] == b[0] for b in bounds):
+        return None
+    return (
+        np.array([b[0] for b in bounds], dtype=float),
+        np.array([b[1] for b in bounds], dtype=float),
+    )
+
+
+def complete_entries(drawing, present, stat, decoded_of, drawn):
+    """The entries holding runs in every environment of the group. An aggregate
+    over environments compares configurations on the same ones, so an entry
+    missing any of them is left out."""
+
+    kept = []
+    for i in drawn:
+        if all((env, i) in decoded_of for env in present):
+            kept.append(i)
+        else:
+            print(
+                f"WARNING: {drawing.entries[i]['label']} has no runs for {stat} "
+                f"in some environment of the group; it is left out of the rliable "
+                f"estimates."
+            )
+    return kept
+
+
+def draw_iqm_curve(drawing, name, present, stat, decoded_of, drawn):
+    """The IQM of the normalized scores of every run of the group at
+    --iqm_points points along training, with its stratified-bootstrap band.
+    Returns the number of figures written.
+
+    A point is placed by the fraction of training it sits at, so environments
+    recording a different number of points are read at the same fraction. The x
+    axis is in steps when every run trained for the same number of them, and in
+    the fraction of training otherwise. A seed with no value at one of the points
+    is dropped."""
+
+    bounds = norm_bounds(drawing, present, stat)
+    if bounds is None:
+        vprint(f"  No ylim for {stat} in every environment, no IQM curve.")
+        return 0
+    low, high = bounds
+    fractions = np.linspace(0.0, 1.0, args.iqm_points)
+
+    data, steps = {}, set()
+    for i in complete_entries(drawing, present, stat, decoded_of, drawn):
+        per_env = []
+        for env in present:
+            series, _stepsize, env_steps, _seeds = decoded_of[(env, i)]
+            values = series.to_numpy(dtype=float).T
+            index = np.round(fractions * (values.shape[1] - 1)).astype(int)
+            picked = values[:, index]
+            per_env.append(picked[np.all(np.isfinite(picked), axis=1)])
+            steps.add(env_steps)
+        if any(len(p) == 0 for p in per_env):
+            continue
+        # (points, runs, environments): the metrics reduce the last two axes.
+        stacked = stack_runs(per_env).transpose(1, 0, 2)
+        data[i] = (stacked - low) / (high - low)
+    if not data:
+        return 0
+
+    estimates = {
+        i: interval_estimates(iqm, s, reps=args.rliable_reps)
+        for i, s in tqdm(
+            data.items(),
+            desc=f"{name} IQM curve",
+            unit="estimate",
+            leave=False,
+        )
+    }
+
+    x = fractions * steps.pop() if len(steps) == 1 else fractions
+    ylabel = drawing.stat_labels.get(stat, stat)
+    fig, axs = plt.subplots(
+        1, 1,
+        figsize=(SUBPLOT_W * 1.5, SUBPLOT_H * 1.5),
+        squeeze=False,
+    )
+    ax = axs[0][0]
+    for i, (point, lo, hi) in estimates.items():
+        entry = drawing.entries[i]
+        ax.plot(
+            x,
+            point,
+            color=entry["color"],
+            linestyle=entry["linestyle"],
+            linewidth=2.0,
+        )
+        ax.fill_between(
+            x,
+            lo,
+            hi,
+            alpha=0.2,
+            linewidth=0.0,
+            color=entry["color"],
+        )
+    ax.tick_params(axis="x", labelsize=FONT_SIZE - 2, pad=-2)
+    ax.tick_params(axis="y", labelsize=FONT_SIZE - 2, pad=1)
+    if x[-1] > 1:
+        ax.ticklabel_format(style="sci", axis="x", scilimits=(3, 3))
+        ax.xaxis.offsetText.set_visible(False)
+    else:
+        ax.set_xlabel("Fraction of training", fontsize=FONT_SIZE)
+    ax.set_xlim(0, x[-1])
+    ax.set_xticks([0, x[-1] / 2, x[-1]])
+    label = f"IQM normalized {ylabel}"
+    ax.set_ylabel(label, fontsize=FONT_SIZE, **tex_kwargs(label))
+    set_3_ticks(ax, which="y")
+    legend_on(
+        drawing,
+        fig,
+        [
+            plt.Line2D(
+                [], [],
+                color=drawing.entries[i]["color"],
+                linestyle=drawing.entries[i]["linestyle"],
+                linewidth=2.0,
+                label=drawing.entries[i]["label"],
+            )
+            for i in data
+        ],
+        -0.15,
+    )
+    vprint(f"  Saved: {save_figure(fig, drawing.output_dir, f'{name}_curves_iqm')}")
+    plt.close(fig)
+    return 1
+
+
+def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, kind):
+    """The rliable figures of one (group, statistic) on one score per run, `kind`
+    being `final` or `auc` (see run_scores). Returns the number of figures
+    written.
+
+    The probability of improvement is drawn for every pair of configurations,
+    and needs no normalization: it compares runs within an environment and
+    averages over environments. The aggregate metrics and the performance
+    profile pool runs across environments, so they are drawn only when every
+    environment has a `ylim` for `stat`, which the scores are normalized by."""
+
+    scores = {}
+    for i in complete_entries(drawing, present, stat, decoded_of, drawn):
+        per_env = [run_scores(decoded_of[(env, i)], kind) for env in present]
+        if all(per_env):
+            scores[i] = stack_runs(per_env)
+    if not scores:
+        return 0
+
+    ylabel = drawing.stat_labels.get(stat, stat)
+    score_label = RLIABLE_SCORES[kind]
+    stem = f"{name}_rliable_{kind}"
+    record = drawing.rliable.setdefault((kind, group_name, stat), {})
+    written = 0
+
+    # --- Probability of improvement ------------------------------------------
+    pairs = list(itertools.combinations(scores, 2))
+    if pairs:
+        record["poi"] = {
+            (a, b): tuple(
+                float(v) for v in interval_estimates(
+                    probability_of_improvement,
+                    scores[a],
+                    scores[b],
+                    reps=args.rliable_reps,
+                )
+            )
+            for a, b in tqdm(
+                pairs,
+                desc=f"{stem} probability of improvement",
+                unit="estimate",
+                leave=False,
+            )
+        }
+        fig, axs = plt.subplots(
+            1, 1,
+            figsize=(SUBPLOT_W * 1.5, max(0.4 * len(pairs) + 0.6, SUBPLOT_H)),
+            squeeze=False,
+        )
+        ax = axs[0][0]
+        for row, (a, b) in enumerate(pairs):
+            p, lo, hi = record["poi"][(a, b)]
+            entry = drawing.entries[a]
+            ax.barh(
+                row,
+                hi - lo,
+                left=lo,
+                height=0.6,
+                color=entry["color"],
+                hatch=entry["hatch"],
+                edgecolor="black",
+                linewidth=0.6,
+            )
+            ax.vlines(p, row - 0.3, row + 0.3, color="black", linewidth=1.5)
+        ax.axvline(0.5, color="black", linestyle="--", linewidth=0.8)
+        ax.set_yticks(range(len(pairs)))
+        ax.set_yticklabels(
+            [
+                f"{drawing.entries[a]['label']} vs. {drawing.entries[b]['label']}"
+                for a, b in pairs
+            ]
+        )
+        for text in ax.get_yticklabels():
+            text.set(**tex_kwargs(text.get_text()))
+        ax.invert_yaxis()
+        ax.tick_params(axis="both", labelsize=FONT_SIZE - 2, pad=1)
+        xlabel = f"P(X > Y), {score_label} {ylabel}"
+        ax.set_xlabel(xlabel, fontsize=FONT_SIZE, **tex_kwargs(xlabel))
+        vprint(f"  Saved: {save_figure(fig, drawing.output_dir, f'{stem}_poi')}")
+        plt.close(fig)
+        written += 1
+
+    # --- Aggregate metrics and performance profile -----------------------------
+    bounds = norm_bounds(drawing, present, stat)
+    if bounds is None:
+        vprint(
+            f"  No ylim for {stat} in every environment, no rliable aggregates "
+            f"or profile."
+        )
+        return written
+    low, high = bounds
+    normalized = {i: (s - low) / (high - low) for i, s in scores.items()}
+    order = list(normalized)
+
+    record["aggregate"] = {}
+    for i in tqdm(order, desc=f"{stem} aggregates", unit="estimate", leave=False):
+        point, lo, hi = interval_estimates(
+            aggregate_metrics,
+            normalized[i],
+            reps=args.rliable_reps,
+        )
+        record["aggregate"][i] = (point, np.stack([lo, hi]))
+
+    fig, axs = plt.subplots(
+        1, len(METRICS),
+        figsize=(
+            SUBPLOT_W * len(METRICS),
+            max(0.4 * len(order) + 0.6, SUBPLOT_H),
+        ),
+        squeeze=False,
+    )
+    fig.subplots_adjust(wspace=0.15)
+    for k, metric in enumerate(METRICS):
+        ax = axs[0][k]
+        for row, i in enumerate(order):
+            entry = drawing.entries[i]
+            values, bands = record["aggregate"][i]
+            ax.barh(
+                row,
+                bands[1, k] - bands[0, k],
+                left=bands[0, k],
+                height=0.6,
+                color=entry["color"],
+                hatch=entry["hatch"],
+                edgecolor="black",
+                linewidth=0.6,
+            )
+            ax.vlines(values[k], row - 0.3, row + 0.3, color="black", linewidth=1.5)
+        ax.set_yticks(range(len(order)))
+        ax.set_yticklabels(
+            [drawing.entries[i]["label"] for i in order] if k == 0 else []
+        )
+        for text in ax.get_yticklabels():
+            text.set(**tex_kwargs(text.get_text()))
+        ax.invert_yaxis()
+        ax.set_title(metric, fontsize=FONT_SIZE)
+        ax.tick_params(axis="both", labelsize=FONT_SIZE - 2, pad=1)
+        set_3_ticks(ax, which="x")
+    xlabel = f"Normalized {score_label} {ylabel}"
+    fig.supxlabel(xlabel, fontsize=FONT_SIZE, y=-0.08, **tex_kwargs(xlabel))
+    vprint(f"  Saved: {save_figure(fig, drawing.output_dir, f'{stem}_aggregate')}")
+    plt.close(fig)
+    written += 1
+
+    every = np.concatenate([s.ravel() for s in normalized.values()])
+    taus = np.linspace(np.nanmin(every), np.nanmax(every), 101)
+    profiles = {
+        i: interval_estimates(
+            lambda s: performance_profile(s, taus),
+            normalized[i],
+            reps=args.rliable_reps,
+        )
+        for i in tqdm(order, desc=f"{stem} profiles", unit="estimate", leave=False)
+    }
+    fig, axs = plt.subplots(
+        1, 1,
+        figsize=(SUBPLOT_W * 1.5, SUBPLOT_H * 1.5),
+        squeeze=False,
+    )
+    ax = axs[0][0]
+    for i in order:
+        entry = drawing.entries[i]
+        profile, lo, hi = profiles[i]
+        ax.plot(
+            taus,
+            profile,
+            color=entry["color"],
+            linestyle=entry["linestyle"],
+            linewidth=2.0,
+        )
+        ax.fill_between(
+            taus,
+            lo,
+            hi,
+            alpha=0.2,
+            linewidth=0.0,
+            color=entry["color"],
+        )
+    ax.tick_params(axis="both", labelsize=FONT_SIZE - 2, pad=1)
+    xlabel = f"Normalized {score_label} {ylabel} (τ)"
+    ax.set_xlabel(xlabel, fontsize=FONT_SIZE, **tex_kwargs(xlabel))
+    ax.set_ylabel("Fraction of runs > τ", fontsize=FONT_SIZE)
+    ax.set_ylim(0, 1)
+    set_3_ticks(ax, which="both")
+    legend_on(
+        drawing,
+        fig,
+        [
+            plt.Line2D(
+                [], [],
+                color=drawing.entries[i]["color"],
+                linestyle=drawing.entries[i]["linestyle"],
+                linewidth=2.0,
+                label=drawing.entries[i]["label"],
+            )
+            for i in order
+        ],
+        -0.2,
+    )
+    vprint(f"  Saved: {save_figure(fig, drawing.output_dir, f'{stem}_profile')}")
+    plt.close(fig)
+    written += 1
+    return written
 
 
 def draw_config(config_name, cfg):
@@ -499,7 +949,7 @@ def draw_config(config_name, cfg):
             name = f"{stat}_{group_name}" if group_name else stat
 
             # --- The curves, and the areas under them ----------------------
-            if args.type in ("curves", "all"):
+            if args.curves_mean:
                 # The AUC bars take the cell after the last environment, so the
                 # arrangement is asked for one more subplot than there are.
                 n_cells = len(present) + (1 if args.with_auc else 0)
@@ -603,7 +1053,7 @@ def draw_config(config_name, cfg):
                 written += 1
 
             # --- The peak of each curve, and what it cost to get there ------
-            if args.type in ("bars", "all"):
+            if args.bars_peak:
                 n_rows, n_cols = fitted_rows_cols(
                     drawing.name,
                     "plots_rows_cols",
@@ -685,13 +1135,13 @@ def draw_config(config_name, cfg):
                 )
                 vprint(
                     f"  Saved: "
-                    f"{save_figure(fig, drawing.output_dir, f'{name}_bars')}"
+                    f"{save_figure(fig, drawing.output_dir, f'{name}_peak_bar')}"
                 )
                 plt.close(fig)
                 written += 1
 
             # --- One bar per configuration, over the whole group ------------
-            # A bar figure, so --type curves leaves it out.
+            # A bar figure, so it is written with the other bars.
             items = [
                 (
                     drawing.entries[i],
@@ -699,7 +1149,7 @@ def draw_config(config_name, cfg):
                 )
                 for i in drawn
             ]
-            if args.type in ("bars", "all") and any(v is not None for _, v in items):
+            if args.bars_peak and any(v is not None for _, v in items):
                 fig, axs = plt.subplots(
                     1, 1,
                     figsize=(max(len(items) * 0.9, 3.0) * args.auc_width_scale, 1.8),
@@ -736,6 +1186,18 @@ def draw_config(config_name, cfg):
                 plt.close(fig)
                 written += 1
 
+            # --- Aggregates over the runs of every environment (rliable) ----
+            if args.curves_iqm:
+                written += draw_iqm_curve(
+                    drawing, name, present, stat, decoded_of, drawn
+                )
+            for kind in ("final", "auc"):
+                if getattr(args, f"rliable_{kind}"):
+                    written += draw_rliable(
+                        drawing, name, group_name, present, stat, decoded_of,
+                        drawn, kind,
+                    )
+
         # --- One figure per environment, holding every statistic -----------
         # The figures above cut the data one statistic at a time, across the
         # environments; this cuts it the other way, and is opt-in since it draws
@@ -763,7 +1225,7 @@ def draw_config(config_name, cfg):
                 )
                 env_name = str(env).replace("/", "_")
 
-                if args.type in ("curves", "all"):
+                if args.curves_mean:
                     fig, axs = plt.subplots(
                         n_rows, n_cols,
                         figsize=(SUBPLOT_W * n_cols, SUBPLOT_H * n_rows),
@@ -828,7 +1290,7 @@ def draw_config(config_name, cfg):
                     plt.close(fig)
                     written += 1
 
-                if args.type in ("bars", "all"):
+                if args.bars_peak:
                     stack = 2 if args.steps_to_peak else 1
                     fig, axs = plt.subplots(
                         n_rows * stack, n_cols,
@@ -899,7 +1361,7 @@ def draw_config(config_name, cfg):
                     )
                     vprint(
                         f"  Saved: "
-                        f"{save_figure(fig, drawing.output_dir, f'{env_name}_bars')}"
+                        f"{save_figure(fig, drawing.output_dir, f'{env_name}_peak_bar')}"
                     )
                     plt.close(fig)
                     written += 1
@@ -936,6 +1398,7 @@ def draw_config(config_name, cfg):
                 )
 
     write_table(drawing)
+    write_rliable_tables(drawing)
     recap(drawing)
     write_legend(drawing)
     print(
@@ -1035,6 +1498,105 @@ def write_table(drawing):
     with open(tex_path, "w", encoding="utf-8") as f:
         f.write("\n".join(rows) + "\n")
     vprint(f"  LaTeX table: {tex_path}")
+
+
+def write_rliable_tables(drawing):
+    """The rliable estimates of one config as LaTeX, one file per score kind
+    beside its figures: the IQM of every configuration with its interval, then
+    the probability of improvement of every pair, a column per statistic and a
+    block per environment group. A cell with no estimate is `---`."""
+
+    def cell(value, lo, hi):
+        return f"{value:.2f} [{lo:.2f}, {hi:.2f}]"
+
+    for kind, score_label in RLIABLE_SCORES.items():
+        records = {
+            (g, s): r for (k, g, s), r in drawing.rliable.items() if k == kind
+        }
+        if not records:
+            continue
+        stats = [s for s in drawing.stats if any(k[1] == s for k in records)]
+        groups = list(dict.fromkeys(g for g, _ in records))
+        header = (
+            " & ".join(
+                [""] + [
+                    r"\textbf{" + tex_escape(drawing.stat_labels.get(s, s)) + "}"
+                    for s in stats
+                ]
+            )
+            + r" \\"
+        )
+        rows = []
+
+        def block(title, keys_of, name_of, value_of):
+            body = []
+            for group_name in groups:
+                keys = keys_of(group_name)
+                if not keys:
+                    continue
+                if body:
+                    body.append(r"\midrule")
+                if group_name:
+                    body.append(
+                        r"\multicolumn{" + str(len(stats) + 1) + r"}{l}{\textit{"
+                        + tex_escape(group_name) + r"}} \\"
+                    )
+                for key in keys:
+                    cells = [name_of(key)]
+                    for stat in stats:
+                        value = value_of(records.get((group_name, stat), {}), key)
+                        cells.append("---" if value is None else cell(*value))
+                    body.append(" & ".join(cells) + r" \\")
+            if not body:
+                return
+            rows.extend([
+                f"% {title}",
+                r"\begin{tabular}{l" + "c" * len(stats) + "}",
+                r"\toprule",
+                header,
+                r"\midrule",
+                *body,
+                r"\bottomrule",
+                r"\end{tabular}",
+                "",
+            ])
+
+        iqm_k = METRICS.index("IQM")
+
+        def iqm_of(record, i):
+            if i not in record.get("aggregate", {}):
+                return None
+            values, bands = record["aggregate"][i]
+            return values[iqm_k], bands[0, iqm_k], bands[1, iqm_k]
+
+        block(
+            f"IQM of the normalized {score_label} score, 95% stratified-bootstrap CI",
+            lambda grp: list(dict.fromkeys(
+                i for (g, _), r in records.items() if g == grp
+                for i in r.get("aggregate", {})
+            )),
+            lambda i: tex_escape(drawing.entries[i]["label"]),
+            iqm_of,
+        )
+        block(
+            f"Probability of improvement P(X > Y) on the {score_label} score, "
+            f"95% stratified-bootstrap CI",
+            lambda grp: list(dict.fromkeys(
+                pair for (g, _), r in records.items() if g == grp
+                for pair in r.get("poi", {})
+            )),
+            lambda pair: (
+                tex_escape(drawing.entries[pair[0]]["label"]) + " vs. "
+                + tex_escape(drawing.entries[pair[1]]["label"])
+            ),
+            lambda record, pair: record.get("poi", {}).get(pair),
+        )
+        if not rows:
+            continue
+        tex_path = os.path.join(drawing.output_dir, f"rliable_{kind}.tex")
+        with open(tex_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(rows))
+        vprint(f"  LaTeX table: {tex_path}")
 
 
 def recap(drawing):

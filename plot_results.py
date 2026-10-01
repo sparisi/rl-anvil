@@ -447,17 +447,6 @@ class Drawing:
     rows: dict = field(default_factory=dict)
 
 
-def best_of(values, key=None):
-    """Return the best of `values`, or None when there are none.
-
-    Every statistic is taken as better high, the bars and the curves included."""
-
-    values = list(values)
-    if not values:
-        return None
-    return max(values) if key is None else max(values, key=key)
-
-
 RLIABLE_SCORES = {"final": "Final", "auc": "AUC"}
 
 
@@ -586,10 +575,10 @@ def draw_iqm_curve(drawing, name, present, stat, decoded_of, drawn):
         ax.ticklabel_format(style="sci", axis="x", scilimits=(3, 3))
         ax.xaxis.offsetText.set_visible(False)
     else:
-        ax.set_xlabel("Fraction of training", fontsize=FONT_SIZE)
+        ax.set_xlabel("Fraction Of Training", fontsize=FONT_SIZE)
     ax.set_xlim(0, x[-1])
     ax.set_xticks([0, x[-1] / 2, x[-1]])
-    label = f"IQM normalized {ylabel}"
+    label = f"IQM Normalized {ylabel}"
     ax.set_ylabel(label, fontsize=FONT_SIZE, **tex_kwargs(label))
     set_3_ticks(ax, which="y")
     legend_on(
@@ -793,7 +782,7 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
     ax.tick_params(axis="both", labelsize=FONT_SIZE - 2, pad=1)
     xlabel = f"Normalized {score_label} {ylabel} (τ)"
     ax.set_xlabel(xlabel, fontsize=FONT_SIZE, **tex_kwargs(xlabel))
-    ax.set_ylabel("Fraction of runs > τ", fontsize=FONT_SIZE)
+    ax.set_ylabel("Fraction Of Runs > τ", fontsize=FONT_SIZE)
     ax.set_ylim(0, 1)
     set_3_ticks(ax, which="both")
     legend_on(
@@ -1102,7 +1091,7 @@ def draw_config(config_name, cfg):
                                 )
                                 for i in drawn
                             ],
-                            ylabel="Steps to peak" if col == 0 else "",
+                            ylabel="Steps To Peak" if col == 0 else "",
                             bar_width=args.bar_width,
                             font_size=FONT_SIZE,
                             # The axis counts downward, so a bar reaching further
@@ -1332,7 +1321,7 @@ def draw_config(config_name, cfg):
                                     )
                                     for i in drawn
                                 ],
-                                ylabel="Steps to peak" if col == 0 else "",
+                                ylabel="Steps To Peak" if col == 0 else "",
                                 bar_width=args.bar_width,
                                 font_size=FONT_SIZE,
                                 invert_y=True,
@@ -1600,38 +1589,10 @@ def write_rliable_tables(drawing):
 
 
 def recap(drawing):
-    """Which configuration came out ahead, and what the runs cost."""
+    """What the runs cost: the average wall-clock minutes per configuration and
+    environment."""
 
     entries = drawing.entries
-    for stat in drawing.stats:
-        group_envs = [e for envs in drawing.drawn_envs.values() for e in envs]
-        averaged = {
-            i: pooled(drawing.summaries, group_envs, stat, "auc", i)
-            for i in range(len(entries))
-        }
-        averaged = {i: v[0] for i, v in averaged.items() if v is not None}
-        if not averaged:
-            continue
-        best = best_of(averaged, key=averaged.get)
-        prec = detect_precision(list(averaged.values()), min_prec=3, max_prec=6)
-        # How far ahead the best one is, as a fraction of each other one. Read
-        # off the magnitudes: against a negative baseline the signed difference
-        # changes sign with it, and "20% better" would be printed for a
-        # configuration that is worse.
-        others = ", ".join(
-            (
-                f"{abs(averaged[best] - v) / abs(v) * 100:.1f}% from "
-                f"{entries[i]['label']}"
-                if v else f"inf% from {entries[i]['label']}"
-            )
-            for i, v in averaged.items() if i != best
-        )
-        vprint(
-            f"  [{drawing.stat_labels.get(stat, stat)}] Best: "
-            f"{entries[best]['label']} ({averaged[best]:.{prec}f})"
-            + (f"  --  {others}" if others else "")
-        )
-
     if not drawing.time_table:
         return
     shown = [

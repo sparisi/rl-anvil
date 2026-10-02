@@ -1506,14 +1506,33 @@ def write_table(drawing):
     vprint(f"  LaTeX table: {tex_path}")
 
 
+def column_digits(rows):
+    """Decimals per column of a table of (estimate, low, high) cells: the fewest
+    at which, in every cell of the column, the estimate and both ends of its
+    interval print as distinct numbers, between 2 and 4. `rows` is a list of
+    rows, each a list of cells or None for an empty one."""
+
+    columns = zip(*rows) if rows else []
+    return [
+        max(
+            (
+                detect_precision(cell, min_prec=2, max_prec=4, sig_figs=1)
+                for cell in column if cell is not None
+            ),
+            default=2,
+        )
+        for column in columns
+    ]
+
+
 def write_rliable_tables(drawing):
     """The rliable estimates of one config as LaTeX, one file per score kind
     beside its figures: the IQM of every configuration with its interval, then
     the probability of improvement of every pair, a column per statistic and a
     block per environment group. A cell with no estimate is `---`."""
 
-    def cell(value, lo, hi):
-        return f"{value:.2f} [{lo:.2f}, {hi:.2f}]"
+    def cell(value, lo, hi, digits):
+        return f"{value:.{digits}f} [{lo:.{digits}f}, {hi:.{digits}f}]"
 
     for kind, score_label in RLIABLE_SCORES.items():
         records = {
@@ -1535,9 +1554,24 @@ def write_rliable_tables(drawing):
         rows = []
 
         def block(title, keys_of, name_of, value_of):
+            # Every cell as (estimate, low, high) or None, gathered before any
+            # is written: a column's decimals depend on every cell in it.
+            planned = [
+                (
+                    group_name,
+                    key,
+                    [
+                        value_of(records.get((group_name, stat), {}), key)
+                        for stat in stats
+                    ],
+                )
+                for group_name in groups
+                for key in keys_of(group_name)
+            ]
+            digits = column_digits([values for _, _, values in planned])
             body = []
             for group_name in groups:
-                keys = keys_of(group_name)
+                keys = [p for p in planned if p[0] == group_name]
                 if not keys:
                     continue
                 if body:
@@ -1547,11 +1581,11 @@ def write_rliable_tables(drawing):
                         r"\multicolumn{" + str(len(stats) + 1) + r"}{l}{\textit{"
                         + tex_escape(group_name) + r"}} \\"
                     )
-                for key in keys:
-                    cells = [name_of(key)]
-                    for stat in stats:
-                        value = value_of(records.get((group_name, stat), {}), key)
-                        cells.append("---" if value is None else cell(*value))
+                for _, key, values in keys:
+                    cells = [name_of(key)] + [
+                        "---" if value is None else cell(*value, digits[c])
+                        for c, value in enumerate(values)
+                    ]
                     body.append(" & ".join(cells) + r" \\")
             if not body:
                 return

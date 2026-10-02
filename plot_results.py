@@ -740,13 +740,29 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
         ax.tick_params(axis="both", labelsize=FONT_SIZE - 2, pad=1)
         set_3_ticks(ax, which="x")
     xlabel = f"Normalized {score_label} {ylabel}"
-    fig.supxlabel(xlabel, fontsize=FONT_SIZE, y=-0.08, **tex_kwargs(xlabel))
+    # Hung from the bottom of the tick labels rather than from a fixed height,
+    # which is a different distance from them at every figure height.
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    ticks_bottom = min(
+        fig.transFigure.inverted().transform(
+            (0, ax.get_tightbbox(renderer).y0)
+        )[1]
+        for ax in axs[0]
+    )
+    fig.supxlabel(
+        xlabel,
+        fontsize=FONT_SIZE,
+        y=ticks_bottom - 0.02,
+        va="top",
+        **tex_kwargs(xlabel),
+    )
     vprint(f"  Saved: {save_figure(fig, drawing.output_dir, f'{stem}_aggregate')}")
     plt.close(fig)
     written += 1
 
-    every = np.concatenate([s.ravel() for s in normalized.values()])
-    taus = np.linspace(np.nanmin(every), np.nanmax(every), 101)
+    # Over the normalized range the `ylim` bounds map to.
+    taus = np.linspace(0.0, 1.0, 101)
     profiles = {
         i: interval_estimates(
             lambda s: performance_profile(s, taus),
@@ -783,6 +799,7 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
     xlabel = f"Normalized {score_label} {ylabel} (τ)"
     ax.set_xlabel(xlabel, fontsize=FONT_SIZE, **tex_kwargs(xlabel))
     ax.set_ylabel("Fraction Of Runs > τ", fontsize=FONT_SIZE)
+    ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     set_3_ticks(ax, which="both")
     legend_on(

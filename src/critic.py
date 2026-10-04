@@ -420,7 +420,7 @@ class QEnsemble(Critic):
 
         if self.aggregation == "random":
             i = rng_generator.integers(self.n_critics)
-            return self.critics[i](*args, *kwargs)
+            return self.critics[i](*args, **kwargs)
 
         values = np.stack([c(*args, **kwargs) for c in self.critics], axis=0)
         if self.aggregation == "min":

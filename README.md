@@ -230,7 +230,8 @@ python main.py agent.critic.approximator.hidden_size=128 agent.critic.approximat
 ```
 and anything you can override, you can sweep. See [`encoders.yaml`](configs/sweeps/encoders.yaml),
 which sweeps a no-encoder baseline and three encoder families, crossed with their kernels,
-aggregation statistics, dropout rates, and three environments, from a single file.
+aggregation statistics, dropout rates, observation normalization, and three environments,
+from a single file.
 
 
 ## Launching Sweeps

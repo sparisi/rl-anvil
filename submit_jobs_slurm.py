@@ -46,9 +46,9 @@ Example:
     python submit_jobs_slurm.py --sweep=encoders --data_dir=data_encoders --seeds 0-9 --seeds_per_chunk=5
 
     <SWEEP_DIR>/encoders.yaml defines a sweep over network encoders and some
-    hyperparameters, for a total of 36 configurations.
+    hyperparameters, for a total of 234 configurations.
     Each of them is tested against 10 seeds split into 2 chunks of 5 seeds, for
-    a total of 72 jobs (each with 5 tasks, one per seed).
+    a total of 468 jobs (each with 5 tasks, one per seed).
 
 Logging:
 

@@ -35,8 +35,9 @@
 # (only GridAggregationEncoder sweeps over `aggregation_stats`).
 # Total sub-configurations: 1 + 2 + 2 + 8 = 13.
 #
-# All the above configurations sweep over `dropout_p` and `environment`.
-# Total configurations: 13 x 3 x 3 = 117.
+# All the above configurations sweep over `dropout_p`, `environment`, and
+# `normalize_observation`.
+# Total configurations: 13 x 3 x 3 x 2 = 234.
 
 global_sweep:
   environment:
@@ -50,6 +51,9 @@ global_sweep:
     - 0.0
     - 0.05
     - 0.1
+  agent.critic.normalize_observation:
+    - True
+    - False
   agent.critic.approximator.nonlinearity:
     - SiLU
     # - LeakyReLU

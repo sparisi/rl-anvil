@@ -187,6 +187,15 @@ class ReplayMemory(object):
     def post_sampling(self, *args, **kwargs):
         pass
 
+    def set_values(self, idx, **kwargs):
+        """
+        Overwrite the stored values of the given keys at the indices returned in a
+        batch by `get`.
+        """
+
+        for k, v in kwargs.items():
+            getattr(self, k)[idx] = v
+
     def post_update_round(self, *args, **kwargs):
         pass
 
@@ -483,6 +492,14 @@ class PrioritizedReplayMemory(ReplayMemory):
         batch = super().get_sorted(*args, **kwargs)
         batch["idx"] += self._max_size - 1
         return batch
+
+    def set_values(self, idx, **kwargs):
+        """
+        Overwrite the stored values of the given keys at the indices returned in a
+        batch by `get`, which are tree indices.
+        """
+
+        super().set_values(idx - (self._max_size - 1), **kwargs)
 
     def update_priorities(self, tree_idxs, new_priorities, priority_key):
         if priority_key not in self.trees:

@@ -224,7 +224,8 @@ class QNetwork(QCritic):
         self.q_target = getattr(src.approximator, approximator.id)(
             obs_space.shape, act_space.n, **approximator, seed=seed,
         )
-        self.q_target.eval()
+        # The target network runs in the same mode of the main network.
+        # This lets dropout (if any) be active, as in DroQ (Hiraoka et al., 2021).
         self.target_copy_frequency = target_copy_frequency
         self.target_copy_counter = 0
         self.tau = tau
@@ -337,11 +338,11 @@ class QNetwork(QCritic):
 
     def train(self):
         self.q.train()
-        # self.q_target.train()
+        self.q_target.train()
 
     def eval(self):
         self.q.eval()
-        # self.q_target.eval()
+        self.q_target.eval()
 
     def copy_from(self, source):
         QCritic.copy_from(self, source)

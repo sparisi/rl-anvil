@@ -3,7 +3,7 @@
 
 global_sweep:
   environment:
-    - lunar_lander
+    - gymnasium/lunar_lander
   algorithm:
     - eps_greedy
   agent.critic.approximator.dropout_p:

@@ -132,10 +132,10 @@ def compose_cfg(overrides) -> DictConfig:
     """The config main.py would build from `overrides`, without running main.py.
 
     For example
-        compose_cfg(("environment=lunar_lander", "++agent.critic.lr=0.001"))
+        compose_cfg(("environment=gymnasium/lunar_lander", "++agent.critic.lr=0.001"))
 
     returns the DictConfig resulting from running
-        python main.py environment=lunar_lander ++agent.critic.lr=0.001
+        python main.py environment=gymnasium/lunar_lander ++agent.critic.lr=0.001
     """
     with initialize_config_dir(version_base=None, config_dir=CONFIG_DIR):
         return compose(config_name="default", overrides=list(overrides))

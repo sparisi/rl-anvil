@@ -41,9 +41,9 @@
 
 global_sweep:
   environment:
-    - lunar_lander
-    - cart_pole
-    - pendulum_discrete
+    - gymnasium/lunar_lander
+    - gymnasium/cart_pole
+    - gymnasium/pendulum_discrete
   algorithm:
     - eps_greedy
   agent.critic.approximator.encoder.passthrough: null

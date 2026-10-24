@@ -151,8 +151,8 @@ Note:
     tuples, one per run. `hp_overrides` holds every Hydra override of the run,
     `environment` and `algorithm` included. For example:
         [
-            ({'environment': 'lunar_lander', 'algorithm': 'eps_greedy', 'agent.critic.approximator.encoder.grid_id': 'FuzzyTileActivation'}, [0, 1, 2]),
-            ({'environment': 'lunar_lander', 'algorithm': 'eps_greedy', 'agent.critic.approximator.encoder.grid_id': 'GaussianActivation'}, [0, 1, 2]),
+            ({'environment': 'gymnasium/lunar_lander', 'algorithm': 'eps_greedy', 'agent.critic.approximator.encoder.grid_id': 'FuzzyTileActivation'}, [0, 1, 2]),
+            ({'environment': 'gymnasium/lunar_lander', 'algorithm': 'eps_greedy', 'agent.critic.approximator.encoder.grid_id': 'GaussianActivation'}, [0, 1, 2]),
         ]
 
     This function is used as public entry point for other tools (e.g.,
@@ -241,14 +241,14 @@ MAX_ELEMENTS_PER_ARRAY = 200
 # this budget, not the sum over its seeds, because the seeds run concurrently as
 # tasks.
 TIMEOUTS_ENV = {
-    "lunar_lander": 280,
-    "cart_pole": 200,
-    "pendulum_discrete": 120,
-    "acrobot": 200,
-    "mountain_car": 200,
-    "four_rooms": 60,
-    "large": 30,
-    "travel_field_small": 90,
+    "gymnasium/lunar_lander": 280,
+    "gymnasium/cart_pole": 200,
+    "gymnasium/pendulum_discrete": 120,
+    "gymnasium/acrobot": 200,
+    "gymnasium/mountain_car": 200,
+    "gym_gridworlds/four_rooms": 60,
+    "gym_gridworlds/large": 30,
+    "gym_gridworlds/travel_field_small": 90,
 }
 
 # Use this to customize timeouts: {algorithm: factor} applied to TIMEOUTS_ENV.
@@ -274,16 +274,16 @@ TIMEOUTS_ADJUST_ALGO = {
 # See the docstring for instructions to estimate requested memory.
 BASE_MEM_MB = 1250
 PER_SEED_MEM_MB = {
-    "three_rooms_wall_mini_nonuniform": 500,
-    "four_rooms_stuck_hard": 600,
-    "travel_field_small": 900,
+    "gym_gridworlds/three_rooms_wall_mini_nonuniform": 500,
+    "gym_gridworlds/four_rooms_stuck_hard": 600,
+    "gym_gridworlds/travel_field_small": 900,
     #
-    "lunar_lander": 850,
-    "lunar_lander_full": 1400,
-    "cart_pole": 650,
-    "pendulum_discrete": 650,
-    "acrobot": 650,
-    "mountain_car": 550,
+    "gymnasium/lunar_lander": 850,
+    "gymnasium/lunar_lander_full": 1400,
+    "gymnasium/cart_pole": 650,
+    "gymnasium/pendulum_discrete": 650,
+    "gymnasium/acrobot": 650,
+    "gymnasium/mountain_car": 550,
 }
 
 

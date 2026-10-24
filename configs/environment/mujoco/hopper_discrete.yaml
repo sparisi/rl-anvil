@@ -1,0 +1,11 @@
+# @package _global_
+
+environment:
+  id: Hopper-v5
+  action_bins: 4
+
+experiment:
+  warm_up: 10_000
+  cool_down: 10_000
+  training_steps: 300_000
+  testing_episodes: 50

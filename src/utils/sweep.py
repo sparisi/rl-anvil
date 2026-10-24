@@ -82,7 +82,7 @@ _UNQUOTED_CHARS = frozenset(string.ascii_letters + string.digits + "_-./+@:")
 def format_override(key, value):
     """Render one Hydra override as a single argv token.
 
-    Keys in CONFIG_GROUPS are rendered bare (`environment=lunar_lander`),
+    Keys in CONFIG_GROUPS are rendered bare (`environment=gymnasium/lunar_lander`),
     everything else as a forced override (`++agent.critic.lr=0.1`).
 
     Hydra's override grammar reads a bare `None` as the string "None", not

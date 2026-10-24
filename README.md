@@ -251,8 +251,11 @@ script below for SLURM jobs.
 
 **<ins>SLURM.</ins>** Launch parallel jobs over cluster compute nodes.
 ```
-python submit_jobs_slurm.py --sweep=example --data_dir=data_example --seeds=0-9 --seeds_per_chunk=5
+python submit_jobs_slurm.py --sweep=example --data_dir=data_example --cluster=roihu --seeds=0-9 --seeds_per_chunk=5
 ```
+
+> `--cluster` selects a settings file in `configs/slurm` (directories, modules, account, ---).
+
 Each configuration's seeds are split into chunks, and each chunk runs on a
 separate process within the same job via SLURM tasks. This script assigns unique
 names to jobs and checks for existing queued/running configurations.  
@@ -329,11 +332,12 @@ wandb sync --sync-all
 > The latest version of W&B introduced parallel sync via `wandb beta sync -n`.
 
 ## Roadmap
+- PPO, SAC, DDPG.
 - Easier network customization via YAML.
 - Save intermediate models, then checkpoint and resume.
-- Branch for JAX and Gymnax.
 - Resubmit a job automatically with more memory if it fails due to OOM, and resubmit
   it if it times out (requires checkpoint and resume above).
+- Branch for JAX and Gymnax.
 
 ## License
 

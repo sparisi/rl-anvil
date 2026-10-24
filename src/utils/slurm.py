@@ -3,9 +3,14 @@ import getpass
 import os
 import subprocess
 import sys
+from omegaconf import OmegaConf
 
-from src.utils.id import CONFIG_ID_LEN, make_id
+from src.utils.id import CONFIG_ID_LEN, compose_cfg, make_id
+from src.utils.paths import CONFIG_DIR
 from src.utils.sweep import format_override
+
+
+SLURM_CONFIG_DIR = os.path.join(CONFIG_DIR, "slurm")
 
 
 # ------------------------------------------------------------------------------
@@ -71,7 +76,7 @@ def malloc_trim() -> int:
     large mmapped allocation can raise this threshold, causing subsequent
     allocations in that size range to be served from the heap rather than via mmap().
     Those allocations may therefore remain resident after free(). The SLURM jobs do
-    not normally behave that way: submit_jobs.py exports MALLOC_MMAP_THRESHOLD_,
+    not normally behave that way: submit_jobs_slurm.py exports MALLOC_MMAP_THRESHOLD_,
     which fixes the mmap threshold and disables its dynamic adjustment, and
     MALLOC_TRIM_THRESHOLD_, which controls when glibc automatically attempts to
     trim the heap. Consequently, malloc_trim() may find less reclaimable memory in
@@ -243,19 +248,23 @@ def cgroup_memory():
 # ------------------------------------ JOBS ------------------------------------
 # ------------------------------------------------------------------------------
 
-def job_config_id(hp_overrides):
+def job_config_id(hp_overrides, extra=(), defaults=()):
     """The config_id of the configuration a job will run, before submitting it.
 
     `hp_overrides` must hold every override that reaches the config: the swept
     keys, `environment` and `algorithm` included, and anything the submission
-    script pins on top, such as the approximator device. Leaving one out would
-    name a different configuration than the one main.py writes to disk.
+    script pins on top, such as the approximator device. `defaults` holds raw
+    override strings placed before them and `extra` raw override strings
+    appended after them, in the same order as on the command line, so
+    `hp_overrides` take precedence over `defaults` and `extra` over both.
+    Leaving one out would name a different configuration than the one main.py
+    writes to disk.
     """
     overrides = [
         format_override(k, v)
         for k, v in (hp_overrides or {}).items()
     ]
-    return make_id(overrides=overrides)
+    return make_id(overrides=[*defaults, *overrides, *extra])
 
 
 def job_name(config_id, seeds):
@@ -277,21 +286,45 @@ def job_name(config_id, seeds):
 
 
 def queued_job_names():
-    """Names of this user's pending and running jobs.
+    """Names of this user's jobs in the queue, in any state.
 
-    Returns an empty set if squeue cannot be reached: failing to ask must not
-    stop the submission, it only means duplicates go undetected.
+    No state filter is applied, so configuring, suspended and completing jobs
+    are included along with pending and running ones.
+
+    Returns None if squeue cannot be reached, so that a failed query is not
+    mistaken for an empty queue.
     """
     user = os.environ.get("USER") or getpass.getuser()
     try:
         out = subprocess.run(
-            ["squeue", "-h", "-u", user, "-t", "PD,R", "-o", "%j"],
+            ["squeue", "-h", "-u", user, "-o", "%j"],
             capture_output=True, text=True, check=True, timeout=60,
         ).stdout
     except (OSError, subprocess.SubprocessError) as exc:
-        print(f"WARNING: could not query squeue ({exc}); cannot check running/pending jobs")
-        return set()
+        print(f"WARNING: could not query squeue ({exc}); cannot check queued jobs")
+        return None
     return {name.strip() for name in out.splitlines() if name.strip()}
+
+
+def queued_job_count():
+    """Number of jobs this user has in the queue, counting every array element.
+
+    `-r` expands pending arrays into one line per element, which is how
+    MaxSubmitJobs counts them, and no state filter is applied, so every job
+    still holding a submit slot is included.
+
+    Returns 0 if squeue cannot be reached, with a warning.
+    """
+    user = os.environ.get("USER") or getpass.getuser()
+    try:
+        out = subprocess.run(
+            ["squeue", "-h", "-r", "-u", user, "-o", "%i"],
+            capture_output=True, text=True, check=True, timeout=60,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"WARNING: could not query squeue ({exc}); cannot count queued jobs")
+        return 0
+    return sum(1 for line in out.splitlines() if line.strip())
 
 
 def parse_seeds(tokens):
@@ -302,7 +335,8 @@ def parse_seeds(tokens):
         ["0-4", "7"]  -> [0, 1, 2, 3, 4, 7]
 
     The result is sorted and deduplicated, so the same set of seeds always
-    produces the same `job_name`.
+    produces the same `job_name`. A range whose end is below its start stops
+    with an error rather than producing no seeds.
     """
     seeds = set()
     for token in tokens:
@@ -310,7 +344,12 @@ def parse_seeds(tokens):
         try:
             if "-" in token:
                 first, _, last = token.partition("-")
-                seeds.update(range(int(first), int(last) + 1))
+                first, last = int(first), int(last)
+                if last < first:
+                    raise SystemExit(
+                        f"Cannot read '{token}' as seeds: the range ends before it starts."
+                    )
+                seeds.update(range(first, last + 1))
             else:
                 seeds.add(int(token))
         except ValueError:
@@ -349,18 +388,58 @@ def parse_job_name(name):
 
 
 def queued_runs():
-    """(config_id, seed) pairs this user already has pending or running.
+    """(config_id, seed) pairs this user already has in the queue.
 
     `job_name` encodes exactly that in the SLURM job name, so the queue itself is
     the record of what not to resubmit -- there is no state file to keep in sync.
     Matching per seed rather than per name means two submissions that overlap
     only partly (0-9 while 0-4 runs) never train the same seed twice.
+
+    Returns None if squeue cannot be reached.
     """
+    names = queued_job_names()
+    if names is None:
+        return None
     runs = set()
-    for name in queued_job_names():
+    for name in names:
         parsed = parse_job_name(name)
         if parsed is None:
             continue
         config_id, seeds = parsed
         runs.update((config_id, seed) for seed in seeds)
     return runs
+
+
+def load_cluster(name):
+    """Reads SLURM_CONFIG_DIR/<name>.yaml. Stops if the modules, the scratch directory,
+    the virtual environment directory, or one of the output directory is missing."""
+    path = os.path.join(SLURM_CONFIG_DIR, f"{name}.yaml")
+    if not os.path.isfile(path):
+        raise SystemExit(f"SLURM config not found: {path}")
+    cfg = compose_cfg([f"+slurm={name}"])
+    settings = OmegaConf.to_container(cfg.get("slurm") or {})
+    missing = [
+        key for key in (
+            "scratch_dir",
+            "venv_dir",
+            "modules",
+            "slurm_out_dir",
+            "hydra_out_dir",
+            "wandb_out_dir",
+        )
+        if settings.get(key) is None
+    ]
+    if missing:
+        raise SystemExit(f"No value for {missing} in {path}")
+    return settings
+
+
+def slurm_setup(settings):
+    """Shell lines run on the compute node before the job: the cluster's
+    modules, SCRATCH directory, and virtual environment directory."""
+    setup = [
+        f"module load {' '.join(settings['modules'])}",
+        f"export SCRATCH={settings['scratch_dir']}",
+        f"source {settings['venv_dir']}/bin/activate",
+    ]
+    return setup

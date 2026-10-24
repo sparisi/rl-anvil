@@ -58,6 +58,12 @@ def load_sweep(name):
         {k: v if isinstance(v, list) else [v] for k, v in (entry or {}).items()}
         for entry in config_sweep
     ]
+    # An empty list would make the product of the sweep empty, dropping every
+    # other key of its block.
+    empty = [k for k, v in global_sweep.items() if not v]
+    empty += [k for entry in config_sweep for k, v in entry.items() if not v]
+    if empty:
+        raise SystemExit(f"Empty sweep values in {path} for: {empty}")
     return global_sweep, config_sweep
 
 

@@ -1,0 +1,16 @@
+# @package _global_
+
+slurm:
+  scratch_dir: "/scratch/project_2019621"
+  venv_dir: "/projappl/project_2019621/rl_anvil"
+  modules: ["python-data", "gcc/14.3.0"]
+  account: "project_2019621"  # if null, default account will be used
+  slurm_out_dir: "slurm_out"
+  hydra_out_dir: "hydra_out"
+  wandb_out_dir: "wandb_out"
+  max_timeout: 4320  # in minutes (this is 3 days)
+  max_submit_jobs: 200  # sacctmgr show assoc user=$USER format=account%30,partition%20,maxjobs,maxsubmit -> MaxSubmit
+  max_running_per_array: 100  # sacctmgr show assoc user=$USER format=account%30,partition%20,maxjobs,maxsubmit -> MaxJobs
+  max_elements_per_array: 1001  # scontrol show config | grep -i MaxArraySize
+  partition: null  # if null, default partition will be used
+  gres: null

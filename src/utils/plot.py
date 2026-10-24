@@ -197,8 +197,12 @@ def flatten_cfg(nested: dict, drop_interpolations=True) -> dict:
 
 def load_config_group(config_dir: str) -> dict:
     """Every YAML in a Hydra config group directory -- configs/environment,
-    configs/algorithm -- with `defaults:` resolved, as {stem: {flat_key: value}}.
+    configs/algorithm -- with `defaults:` resolved, as {name: {flat_key: value}}.
     Both groups are matched against a run identically; only the directory differs.
+
+    Subdirectories are searched too. A YAML's name is its path relative to
+    `config_dir` without the suffix (e.g., gymnasium/lunar_lander), which is the
+    name Hydra selects it by.
 
     Does NOT compose with agent/default, whose keys are CLI-swept per experiment
     and are not part of a config's identity.
@@ -213,7 +217,10 @@ def load_config_group(config_dir: str) -> dict:
     def defining(flat):
         return compared_keys(flat, DROPPED_CFG_KEYS)
 
-    yaml_files = {p.stem: p for p in Path(config_dir).glob("*.yaml")}
+    yaml_files = {
+        p.relative_to(config_dir).with_suffix("").as_posix(): p
+        for p in Path(config_dir).rglob("*.yaml")
+    }
     return {
         name: defining(flatten_cfg(resolve_yaml(yaml_files, name)))
         for name in yaml_files
@@ -370,8 +377,8 @@ def assign_configs(
 
 def split_config_label(label: str):
     """The inverse of the label `assign_configs` writes:
-    `lunar_lander (environment.train_from_pixels=True)` ->
-    ("lunar_lander", {"environment.train_from_pixels": True}).
+    `gymnasium/lunar_lander (environment.train_from_pixels=True)` ->
+    ("gymnasium/lunar_lander", {"environment.train_from_pixels": True}).
 
     Splits on a space that starts a `key=`, not on every space, since a value can
     hold one ("[mean, max]"). Values come back through literal_eval where they

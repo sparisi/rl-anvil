@@ -46,21 +46,21 @@ configs:
 # You can customize the y-lim of statistics for better visualization.
 environments:
   gridworlds:
-    large:
+    gym_gridworlds/large:
       label: "Large"
       ylim:
         train: [0, 1.05]
         "train (γ)": [0, 1.05]
         test: [0, 1.05]
         "test (γ)": [0, 1.05]
-    four_rooms:
+    gym_gridworlds/four_rooms:
       label: "FourRoom"
       ylim:
         train: [0, 1.05]
         "train (γ)": [0, 1.05]
         test: [0, 1.05]
         "test (γ)": [0, 1.05]
-    travel_field_small:
+    gym_gridworlds/travel_field_small:
       label: "TravelFieldSmall"
       ylim:
         train: [-20, 15]

@@ -1,7 +1,7 @@
 defaults:
   - agent: default
   - algorithm: random
-  - environment: mini
+  - environment: gym_gridworlds/mini
   - wandb: default
   - hydra: default
   - _self_

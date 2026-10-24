@@ -1,5 +1,5 @@
 global_sweep:
-  environment: [large, four_rooms, travel_field_small]
+  environment: [gym_gridworlds/large, gym_gridworlds/four_rooms, gym_gridworlds/travel_field_small]
   results.save_memory: True
 
 config_sweep:

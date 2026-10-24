@@ -59,7 +59,7 @@ pip install git+https://github.com/sparisi/gym_gridworlds.git
 
 ## Quick Demo
 ```
-python main.py environment=pendulum_discrete algorithm=eps_greedy results.data_dir=data_demo results.save_videos=True results.save_heatmaps=True results.save_memory=True experiment.training_steps=25000 experiment.testing_points=25
+python main.py environment=gymnasium/pendulum_discrete algorithm=eps_greedy results.data_dir=data_demo results.save_videos=True results.save_heatmaps=True results.save_memory=True experiment.training_steps=25000 experiment.testing_points=25
 python merge_media.py -f data_demo/aba2e7f3 -n 3 --resize_videos=0.5 --gif --frameskip_videos=1
 ```
 

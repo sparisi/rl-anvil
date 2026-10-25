@@ -15,21 +15,19 @@ def process_data_folders(
     verbose: bool = False,
     log_configs: bool = False,
 ) -> pd.DataFrame:
-    """
-    Loops over a specified folder structure (<data_dir>/<config_id>/<rng_seed>/),
-    loads the 'data.npz' file from each seed subdirectory, extracts its NumPy
-    array values, and consolidates them into a pandas DataFrame.
-    It also reads the 'cfg.yaml' file in each '<config_id>' directory and
-    includes its key-value pairs in the DataFrame.
-    Additionally, it takes the 'rng_seed' from the name of the seed
-    subdirectory (e.g., 33 from <config_id>/33/) and adds it as a column.
-    Time-series entries (np.array from .npz files) are converted to strings for
-    compatibility.
+    """Return a DataFrame with one row per seed directory under `data_dir`
+    (<data_dir>/<config_id>/<rng_seed>/) that holds a readable 'data.npz' file.
 
-    Additionally, DataFrame columns are MultiIndexed and grouped according to
-    'hyperparameter', 'statistic', and 'seed'.
+    The function loops over the folder structure, loads the 'data.npz' file
+    from each seed subdirectory, extracts its NumPy array values, and
+    consolidates them into a pandas DataFrame.
 
-    Columns with constant values across all rows are then dropped.
+    Each row holds the key-value pairs of the 'cfg.yaml' file in its
+    '<config_id>' directory, without the keys in DROPPED_CFG_KEYS; every entry
+    of its 'data.npz' file as a JSON string; the seed taken from the name of
+    the seed directory (e.g., 33 from <config_id>/33/); and the config ID taken
+    from the name of the '<config_id>' directory. The columns are MultiIndexed
+    and grouped into 'hyperparameter', 'statistic', 'seed', and 'config'.
 
     The function expects the following folder structure:
 
@@ -53,15 +51,12 @@ def process_data_folders(
     Args:
         data_dir (str): The path to the data directory, which contains
                         one or more '<config_id>' subdirectories.
-        verbose (bool): If True, print the recap header and summary
-                        (without the per-configuration details).
+        verbose (bool): If True, list the skipped folders and print the recap
+                        header and summary (without the per-configuration
+                        details).
         log_configs (bool): If True, write the full recap (including every
                         configuration's hyperparameters) to a
                         'configs_log.txt' file inside data_dir.
-
-    Returns:
-        pandas.DataFrame: A DataFrame containing the combined data from all .npz files,
-                          with configuration keys, and with constant columns dropped.
     """
 
     all_df_rows = []
@@ -99,12 +94,13 @@ def process_data_folders(
             continue
         df_cfg = pd.json_normalize(cfg_dict, sep=".")
 
-        # Make a flat dict, dropping keys that are irrelevant for analysis
+        # Make a flat dict, dropping keys that are irrelevant for analysis. A
+        # dropped key removes its whole subtree, as in src.utils.id.drop_keys.
         dict_cfg_flat = df_cfg.to_dict(orient="records")[0]
         dict_cfg_flat = {
             ("hyperparameter", k): v
             for k, v in dict_cfg_flat.items()
-            if k not in DROPPED_CFG_KEYS and not k.startswith("wandb")
+            if not any(k == d or k.startswith(f"{d}.") for d in DROPPED_CFG_KEYS)
         }
         dict_cfg_flat[("_meta", "cfg_dir")] = os.path.relpath(dirpath, data_dir)
 
@@ -127,11 +123,10 @@ def process_data_folders(
                 continue
 
             row_dict = dict(dict_cfg_flat)
-            # The seed always comes from the directory name, never from cfg.yaml's own
-            # experiment.rng_seed field -- cfg.yaml is shared by every seed directory
-            # under this config, so trusting its single recorded value would mislabel
-            # every run with whichever seed happened to be in the yaml.
+            # The seed is the name of the seed directory, since cfg.yaml is shared
+            # by all seeds of a config.
             row_dict[("seed", "experiment.rng_seed")] = int(seed)
+            row_dict[("config", "config_id")] = os.path.basename(dirpath)
 
             try:
                 with np.load(npz_file_path) as data:
@@ -141,7 +136,12 @@ def process_data_folders(
                     all_df_rows.append(row_dict | dict_data)
                     found_any_npz = True
             except Exception as e:
-                print(f"    Error loading {npz_file_path}: {e}")
+                skipped_folders.append(
+                    (
+                        os.path.join(dirpath, seed),
+                        f"'data.npz' could not be loaded ({e}).",
+                    )
+                )
                 continue
 
     n_skipped = len(skipped_folders) + sum(len(seeds) for seeds in missing_npz.values())
@@ -152,6 +152,8 @@ def process_data_folders(
         for path, seeds in missing_npz.items():
             seed_str = ", ".join(str(s) for s in sorted(seeds))
             print(f"  {path}{os.sep} {{{seed_str}}}: 'data.npz' is missing.")
+    elif n_skipped:
+        print(f"Skipped {n_skipped} folders. Run with -v to list them.")
 
     if not found_any_npz:
         raise FileNotFoundError(
@@ -260,12 +262,6 @@ if __name__ == "__main__":
 
     df = process_data_folders(args.folder, verbose=args.verbose, log_configs=args.log_configs)
 
-    # print(f"header: {df.columns.values}")
-    # print(df)
-
-    gzip_dir = os.path.join(args.folder, "results.gzip")
-    try:
-        df.to_parquet(gzip_dir, index=False)
-        print(f"\nDataFrame successfully saved to {gzip_dir}")
-    except Exception as e:
-        print(f"\nError saving DataFrame to {gzip_dir}: {e}")
+    gzip_path = os.path.join(args.folder, "results.gzip")
+    df.to_parquet(gzip_path, index=False)
+    print(f"\nDataFrame successfully saved to {gzip_path}")

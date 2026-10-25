@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import os
 import tempfile
@@ -29,8 +30,8 @@ CONFIG_ID_LEN = 8
 
 
 def strip_config(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> dict:
-    """`cfg` as a plain resolved dict, without the keys that do not define a
-    configuration."""
+    """Return `cfg` as a plain resolved dict, without the keys in `dropped`."""
+
     container = OmegaConf.to_container(
         cfg,
         resolve=True,
@@ -40,6 +41,9 @@ def strip_config(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> dict:
 
 
 def drop_keys(d: dict, drop: tuple) -> dict:
+    """Remove each dotted key in `drop`, with its whole subtree, from the nested
+    dict `d` in place, and return `d`. Keys absent from `d` are ignored."""
+
     for dotted in drop:
         *parents, leaf = dotted.split(".")
         node = d
@@ -51,12 +55,10 @@ def drop_keys(d: dict, drop: tuple) -> dict:
 
 
 def numbers_to_float(x):
-    """Ints to float, so that `lrate=1` and `lrate=1.0` -- same run, two
-    YAML spellings -- do not hash to two different config IDs.
+    """Return `x` with every int converted to float, recursively through dicts
+    and lists, so that `lrate=1` and `lrate=1.0` (same run, two YAML spellings)
+    do not hash to two different config IDs. Bools are kept."""
 
-    Only ever fed to make the ID. The config written to disk and the config the
-    run is built from keep their original types, so ints stay ints.
-    """
     if isinstance(x, dict):
         return {k: numbers_to_float(v) for k, v in x.items()}
     if isinstance(x, list):
@@ -69,8 +71,9 @@ def numbers_to_float(x):
 
 
 def config_for_save(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> str:
-    """The YAML written to cfg.yaml: resolved, sorted, stripped of the keys
-    that do not define the configuration, types untouched."""
+    """Return the YAML written to cfg.yaml: `cfg` resolved, with sorted keys,
+    without the keys in `dropped`, and with its original types."""
+
     return OmegaConf.to_yaml(
         OmegaConf.create(strip_config(cfg, dropped)),
         sort_keys=True,
@@ -78,7 +81,12 @@ def config_for_save(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> str:
 
 
 def config_identity(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> str:
-    """What make_id() hashes: config_for_save() with ints as floats."""
+    """Return the YAML that the config ID hashes: the same YAML as
+    config_for_save(), with every int converted to float."""
+
+    # With ints as floats, `lrate=1` and `lrate=1.0` hash to the same config ID.
+    # The conversion applies to the hashed YAML only: the config written to disk
+    # and the config the run is built from keep their original types.
     return OmegaConf.to_yaml(
         OmegaConf.create(numbers_to_float(strip_config(cfg, dropped))),
         sort_keys=True,
@@ -86,15 +94,15 @@ def config_identity(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> str:
 
 
 def make_id(
-    cfg: DictConfig = None,
+    cfg: DictConfig | None = None,
     overrides=None,
     n_chars: int = CONFIG_ID_LEN,
 ) -> str:
-    """The config ID of `cfg`, or of the config `overrides` would compose."""
+    """Return the config ID of `cfg`, or of the config that `overrides`
+    compose. Exactly one of the two must be given."""
 
-    assert (cfg is None) != (overrides is None), (
-        "must pass either cfg or overrides, and not both"
-    )
+    if (cfg is None) == (overrides is None):
+        raise ValueError("Pass either cfg or overrides, and not both.")
     if overrides is not None:
         cfg = compose_cfg(overrides)
     digest = hashlib.md5(
@@ -105,21 +113,10 @@ def make_id(
 
 
 @lru_cache(maxsize=None)
-def composed_config(overrides: tuple) -> dict:
-    """The flat config `overrides` compose, as {dotted_key: value}, without the
-    keys that do not define a configuration.
-
-    The same shape process_data records for a run, so the two compare key by key:
-    a sweep entry declares part of a configuration, and the rest comes from the
-    config files it selects and from configs/default.yaml under them.
-
-    Interpolations are kept, unlike `flatten_cfg`'s default: this config is
-    resolved, so a value still holding "${" is one the config really contains,
-    and process_data keeps it too. Dropping it here would leave a key on one
-    side of the comparison and not the other.
-
-    `overrides` is a tuple (rather than a list) so the composition is cached.
-    """
+def _composed_config(overrides: tuple) -> dict:
+    """Return the flat config that `overrides` compose, without the keys in
+    DROPPED_CFG_KEYS. The result is cached: every call with the same
+    `overrides` returns the same object."""
 
     # Imported here rather than at module level: src.utils.plot pulls in
     # matplotlib and seaborn, which the training path has no use for.
@@ -128,8 +125,26 @@ def composed_config(overrides: tuple) -> dict:
     return flatten_cfg(strip_config(compose_cfg(overrides)), drop_interpolations=False)
 
 
+def composed_config(overrides: tuple) -> dict:
+    """Return the flat config that `overrides` compose, as {dotted_key: value},
+    without the keys in DROPPED_CFG_KEYS.
+
+    The keys have the same shape as the 'hyperparameter' columns of a
+    process_data parquet, so the two compare key by key.
+
+    Interpolations are kept: the config is resolved, so a value still holding
+    "${" is one the config contains, and the parquet holds it too.
+
+    `overrides` is a tuple (rather than a list) so the composition is cached.
+    Each call returns its own deep copy of the cached result.
+    """
+
+    return copy.deepcopy(_composed_config(overrides))
+
+
 def compose_cfg(overrides) -> DictConfig:
-    """The config main.py would build from `overrides`, without running main.py.
+    """Return the DictConfig that main.py builds from the Hydra `overrides`,
+    without running main.py.
 
     For example
         compose_cfg(("environment=gymnasium/lunar_lander", "++agent.critic.lr=0.001"))
@@ -137,21 +152,20 @@ def compose_cfg(overrides) -> DictConfig:
     returns the DictConfig resulting from running
         python main.py environment=gymnasium/lunar_lander ++agent.critic.lr=0.001
     """
+
     with initialize_config_dir(version_base=None, config_dir=CONFIG_DIR):
         return compose(config_name="default", overrides=list(overrides))
 
 
 def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
-    """Check for existing data.npz for the same run. If so, and the user has not
-    forced this run, stop. The presence of videos, heatmaps, ... does not stop
-    the run.
+    """Return the config ID of `cfg`, or None if the run should be skipped.
 
-    Then, make the root directory to save data (if needed) and save the
-    cfg.yaml that identifies this run.
-    No other folder is created at this time. During an experiment, the code always
-    runs os.makedirs(..., exist_ok=True) to guard against deleted folders.
+    The run is skipped if a data.npz for the same run exists and
+    results.force_run is not set. The presence of videos, heatmaps, ... does
+    not skip the run.
 
-    Returns the config ID, or None if the run should be skipped. On return
+    Otherwise, make the seed directory (if data is saved) and save the cfg.yaml
+    that identifies this run. No other folder is created. On return
     results.data_dir points at the seed folder, so everything the run writes
     goes into <data_dir>/<config_id>/<rng_seed>/
     """
@@ -166,16 +180,17 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
     )
     if need_data_dir and cfg.results.data_dir is None:
         if verbose:
-            print(":warning:  The user requested to save data but "
-                  "[bold italic]results.data_dir[/bold italic] is not defined. "
-                  "Using default directory: [italic]data[/italic]")
+            print(
+                ":warning:  The user requested to save data but "
+                "[bold italic]results.data_dir[/bold italic] is not defined. "
+                "Using default directory: [italic]data[/italic]"
+            )
         cfg.results.data_dir = "data"
 
     # Nothing to save, the run can start
     if cfg.results.data_dir is None:
         return config_id
 
-    # Make data root folder
     config_dir = os.path.join(cfg.results.data_dir, config_id)
     run_dir = os.path.join(config_dir, str(cfg.experiment.rng_seed))
 
@@ -185,13 +200,17 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
             print(f":warning:  Data for this seed already exists: {data_path}.")
         if not cfg.results.force_run:
             if verbose:
-                print(":x: Stopping. If you want to force this run, "
-                      "pass [italic]results.force_run=True[/italic].")
+                print(
+                    ":x: Stopping. If you want to force this run, "
+                    "pass [italic]results.force_run=True[/italic]."
+                )
             return None
         elif verbose:
-            print(":white_check_mark: Overriding. To prevent it, interrupt "
-                  "before the end of the run. Next time, run with "
-                  "[italic]results.force_run=False[/italic].")
+            print(
+                ":white_check_mark: Overriding. To prevent it, interrupt "
+                "before the end of the run. Next time, run with "
+                "[italic]results.force_run=False[/italic]."
+            )
 
     os.makedirs(run_dir, exist_ok=True)
 

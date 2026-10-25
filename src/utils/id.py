@@ -24,7 +24,8 @@ DROPPED_CFG_KEYS = (
 CONFIG_ID_LEN = 8
 
 # A config ID is the first CONFIG_ID_LEN of the 32 hex characters of the MD5 of
-# `cfg` stripped of DROPPED_CFG_KEYS.
+# the config_identity() YAML: `cfg` stripped of DROPPED_CFG_KEYS, with sorted
+# keys and ints converted to floats.
 # This is much better than Hydra default directory naming that concatenates all
 # keys=value in the DictConfig.
 
@@ -84,7 +85,6 @@ def config_identity(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> str:
     """Return the YAML that the config ID hashes: the same YAML as
     config_for_save(), with every int converted to float."""
 
-    # With ints as floats, `lrate=1` and `lrate=1.0` hash to the same config ID.
     # The conversion applies to the hashed YAML only: the config written to disk
     # and the config the run is built from keep their original types.
     return OmegaConf.to_yaml(
@@ -129,11 +129,9 @@ def composed_config(overrides: tuple) -> dict:
     """Return the flat config that `overrides` compose, as {dotted_key: value},
     without the keys in DROPPED_CFG_KEYS.
 
-    The keys have the same shape as the 'hyperparameter' columns of a
-    process_data parquet, so the two compare key by key.
+    The keys are the dotted paths that flatten_cfg() produces.
 
-    Interpolations are kept: the config is resolved, so a value still holding
-    "${" is one the config contains, and the parquet holds it too.
+    Values holding "${" are kept (drop_interpolations=False).
 
     `overrides` is a tuple (rather than a list) so the composition is cached.
     Each call returns its own deep copy of the cached result.
@@ -143,8 +141,8 @@ def composed_config(overrides: tuple) -> dict:
 
 
 def compose_cfg(overrides) -> DictConfig:
-    """Return the DictConfig that main.py builds from the Hydra `overrides`,
-    without running main.py.
+    """Return the DictConfig that Hydra composes from configs/default.yaml and
+    the `overrides`.
 
     For example
         compose_cfg(("environment=gymnasium/lunar_lander", "++agent.critic.lr=0.001"))
@@ -168,6 +166,11 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
     that identifies this run. No other folder is created. On return
     results.data_dir points at the seed folder, so everything the run writes
     goes into <data_dir>/<config_id>/<rng_seed>/
+    Call it once per `cfg`: a second call appends the folders again.
+
+    With results.force_run, the files already in the seed folder are not
+    removed. Files the new run writes under the same names are overwritten,
+    and the others stay next to them.
     """
 
     cfg_identity = config_identity(cfg)
@@ -212,7 +215,7 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
                 "[italic]results.force_run=False[/italic]."
             )
 
-    os.makedirs(run_dir, exist_ok=True)
+    os.makedirs(config_dir, exist_ok=True)
 
     yaml_path = os.path.join(
         config_dir,
@@ -236,7 +239,9 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
         # Thus, more than one can find the file missing and write at the same time.
         # To prevent that, write to a temp file and rename: os.replace is atomic
         # on POSIX, so a reader never sees a half-written cfg.yaml. Every seed
-        # writes identical content, so which one lands last does not matter.
+        # writes the same configuration, so which one lands last does not change
+        # the config ID. The int or float types in cfg.yaml are those of the seed
+        # that lands last.
         fd, tmp_path = tempfile.mkstemp(
             dir=config_dir,
             prefix=".cfg-",
@@ -252,6 +257,9 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
             raise
+
+    # The seed folder is made only once cfg.yaml matches this configuration
+    os.makedirs(run_dir, exist_ok=True)
 
     # Update the directory (append /<config_id>/<rng_seed>)
     cfg.results.data_dir = run_dir

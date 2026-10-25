@@ -1,13 +1,47 @@
 import os
+import re
 import argparse
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import yaml
 import json
 from pathlib import Path
 from tqdm import tqdm
 
-from src.utils.id import DROPPED_CFG_KEYS
+from omegaconf import OmegaConf
+
+from src.utils.id import DROPPED_CFG_KEYS, make_id
+
+
+def check_column_types(flat_cfgs) -> None:
+    """Raise a TypeError naming every hyperparameter whose values pyarrow cannot
+    store in one parquet column, with the types of its values.
+
+    `flat_cfgs` are flat configs keyed by (group, key) tuples, and the error
+    names each column by its key. NaN values, which stand for keys absent from
+    a config, are left out of the listed types.
+    """
+
+    df = pd.DataFrame(list(flat_cfgs))
+    bad = []
+    for col in df.columns:
+        try:
+            pa.array(df[col], from_pandas=True)
+        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError):
+            types = sorted(
+                {
+                    type(v).__name__
+                    for v in df[col]
+                    if not (isinstance(v, float) and np.isnan(v))
+                }
+            )
+            bad.append(f"  {col[1]}: {', '.join(types)}")
+    if bad:
+        raise TypeError(
+            "These hyperparameters hold values of types that cannot share a "
+            "parquet column:\n" + "\n".join(bad)
+        )
 
 
 def process_data_folders(
@@ -28,6 +62,12 @@ def process_data_folders(
     the seed directory (e.g., 33 from <config_id>/33/); and the config ID taken
     from the name of the '<config_id>' directory. The columns are MultiIndexed
     and grouped into 'hyperparameter', 'statistic', 'seed', and 'config'.
+
+    A '<config_id>' directory whose name differs from the config ID of its
+    'cfg.yaml' (src.utils.id.make_id) is reported. Its rows are kept.
+
+    Every 'cfg.yaml' is read before any 'data.npz' is loaded. A hyperparameter
+    whose values cannot share a parquet column raises a TypeError that names it.
 
     The function expects the following folder structure:
 
@@ -51,7 +91,8 @@ def process_data_folders(
     Args:
         data_dir (str): The path to the data directory, which contains
                         one or more '<config_id>' subdirectories.
-        verbose (bool): If True, list the skipped folders and print the recap
+        verbose (bool): If True, list the skipped folders and the folders whose
+                        name differs from their config ID, and print the recap
                         header and summary (without the per-configuration
                         details).
         log_configs (bool): If True, write the full recap (including every
@@ -63,7 +104,9 @@ def process_data_folders(
     found_any_npz = False  # Flag to track if any NPZ files were processed
     skipped_folders: list[tuple[str, str]] = []  # (dirpath, reason)
     missing_npz: dict[str, list[int]] = {}  # cfg dirpath -> seeds lacking 'data.npz'
+    id_mismatches: list[tuple[str, str]] = []  # (dirpath, config ID of its cfg.yaml)
 
+    data_dir = os.path.normpath(data_dir)
     if not os.path.isdir(data_dir):
         raise ValueError(
             f"Error: The provided data_dir '{data_dir}' is not a valid directory or does not exist."
@@ -80,10 +123,16 @@ def process_data_folders(
             dirnames[:] = []
             cfg_dirs.append(dirpath)
 
-    for dirpath in tqdm(cfg_dirs):
-        # Make DataFrame from cfg.yaml
+    # Every cfg.yaml is read, and its hyperparameter columns are checked, before
+    # any data.npz is loaded
+    cfg_flats = {}  # cfg dirpath -> flat dict of its cfg.yaml
+    for dirpath in tqdm(cfg_dirs, desc="Reading cfg.yaml"):
         cfg_file_path = os.path.join(dirpath, "cfg.yaml")
-        cfg_dict = yaml.safe_load(Path(cfg_file_path).read_text())
+        try:
+            cfg_dict = yaml.safe_load(Path(cfg_file_path).read_text())
+        except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
+            skipped_folders.append((dirpath, f"'cfg.yaml' could not be read ({e})."))
+            continue
         if not isinstance(cfg_dict, dict):
             skipped_folders.append(
                 (
@@ -92,6 +141,16 @@ def process_data_folders(
                 )
             )
             continue
+
+        # Check the folder name against the config ID that cfg.yaml hashes to
+        try:
+            expected_id = make_id(OmegaConf.load(cfg_file_path))
+        except Exception as e:
+            expected_id = f"<config ID could not be computed: {e}>"
+        if os.path.basename(os.path.abspath(dirpath)) != expected_id:
+            id_mismatches.append((dirpath, expected_id))
+
+        # Make DataFrame from cfg.yaml
         df_cfg = pd.json_normalize(cfg_dict, sep=".")
 
         # Make a flat dict, dropping keys that are irrelevant for analysis. A
@@ -103,12 +162,17 @@ def process_data_folders(
             if not any(k == d or k.startswith(f"{d}.") for d in DROPPED_CFG_KEYS)
         }
         dict_cfg_flat[("_meta", "cfg_dir")] = os.path.relpath(dirpath, data_dir)
+        cfg_flats[dirpath] = dict_cfg_flat
 
+    check_column_types(cfg_flats.values())
+
+    for dirpath, dict_cfg_flat in tqdm(cfg_flats.items(), desc="Loading data.npz"):
         seed_dirs = sorted(
             (
                 entry
                 for entry in os.listdir(dirpath)
-                if entry.isdigit() and os.path.isdir(os.path.join(dirpath, entry))
+                if re.fullmatch(r"-?\d+", entry)
+                and os.path.isdir(os.path.join(dirpath, entry))
             ),
             key=int,
         )
@@ -126,7 +190,7 @@ def process_data_folders(
             # The seed is the name of the seed directory, since cfg.yaml is shared
             # by all seeds of a config.
             row_dict[("seed", "experiment.rng_seed")] = int(seed)
-            row_dict[("config", "config_id")] = os.path.basename(dirpath)
+            row_dict[("config", "config_id")] = os.path.basename(os.path.abspath(dirpath))
 
             try:
                 with np.load(npz_file_path) as data:
@@ -154,6 +218,19 @@ def process_data_folders(
             print(f"  {path}{os.sep} {{{seed_str}}}: 'data.npz' is missing.")
     elif n_skipped:
         print(f"Skipped {n_skipped} folders. Run with -v to list them.")
+
+    if verbose and id_mismatches:
+        print(
+            f"{len(id_mismatches)} config folder(s) not named after the config ID "
+            f"of their cfg.yaml (rows kept):"
+        )
+        for path, expected_id in id_mismatches:
+            print(f"  {path}: expected {expected_id}")
+    elif id_mismatches:
+        print(
+            f"{len(id_mismatches)} config folder(s) not named after the config ID "
+            f"of their cfg.yaml (rows kept). Run with -v to list them."
+        )
 
     if not found_any_npz:
         raise FileNotFoundError(
@@ -263,5 +340,5 @@ if __name__ == "__main__":
     df = process_data_folders(args.folder, verbose=args.verbose, log_configs=args.log_configs)
 
     gzip_path = os.path.join(args.folder, "results.gzip")
-    df.to_parquet(gzip_path, index=False)
+    df.to_parquet(gzip_path, index=False, compression="gzip")
     print(f"\nDataFrame successfully saved to {gzip_path}")

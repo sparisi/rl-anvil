@@ -10,18 +10,21 @@ Each row of the parquet (one seed of one configuration) becomes one W&B run:
 - The run is named '<config_id>_<seed>', as in main.py, and grouped by
   '<config_id>'. The config ID is the name of the run's config folder, which
   process_data stores in the ('config', 'config_id') column.
-- Every 'statistic' column holding a list of numbers as long as 'steps' is
-  logged as a time series, one wandb.log() call per checkpoint at
-  step=steps[i]. Non-finite entries are not logged. Any other statistic goes
-  to the run summary. A row whose 'steps' are not strictly increasing integers
-  fails.
+- Every 'statistic' column holding a list is logged as a time series, one
+  wandb.log() call per checkpoint at step=steps[i]. Non-finite entries are not
+  logged. Every statistic that is not a list goes to the run summary. A row
+  fails if its 'steps' are not strictly increasing integers, or if one of its
+  lists is not a list of numbers as long as 'steps'.
 
 Finished runs already in the W&B project are skipped, matched by run name, so
 re-running the script only uploads the rows added to the parquet since. A run
 that exists but did not finish (e.g., an interrupted upload) is resumed: the
 checkpoints after the last step it holds are logged, and the summary is set.
+A run still in the 'running' state is skipped and reported.
 A row whose run name was already skipped or submitted for an earlier row is
-skipped and reported.
+skipped and reported. Run names are matched across the whole project, so two
+configurations from different data directories that share a config ID and a
+seed count as the same run.
 
 A finished run is skipped even if its data changed after the upload, as it
 does when a seed is trained again with results.force_run=True: the config ID
@@ -53,6 +56,7 @@ from concurrent.futures import (
     ProcessPoolExecutor,
     wait,
 )
+from concurrent.futures.process import BrokenProcessPool
 
 import numpy as np
 import pandas as pd
@@ -65,12 +69,14 @@ CONFIG_ID = ("config", "config_id")
 
 def to_python(x):
     """Return `x` with numpy arrays converted to lists and numpy scalars to
-    Python scalars, recursively."""
+    Python scalars, recursively through lists and dicts."""
 
     if isinstance(x, np.ndarray):
         return [to_python(v) for v in x.tolist()]
     if isinstance(x, list):
         return [to_python(v) for v in x]
+    if isinstance(x, dict):
+        return {k: to_python(v) for k, v in x.items()}
     if isinstance(x, np.generic):
         return x.item()
     return x
@@ -138,7 +144,8 @@ def run_stats(row: pd.Series, stat_cols: list) -> tuple[list, dict, dict]:
     """Return the steps, time series and summary statistics of a parquet row.
 
     Raise an error if 'steps' is missing, or is not a non-empty list of strictly
-    increasing integers.
+    increasing integers, or if another statistic is a list that is not a list
+    of numbers as long as 'steps'.
     """
 
     stats = {c[1]: decode(row[c]) for c in stat_cols if not is_missing(row[c])}
@@ -150,13 +157,13 @@ def run_stats(row: pd.Series, stat_cols: list) -> tuple[list, dict, dict]:
     steps = [int(s) for s in steps]
     if any(b <= a for a, b in zip(steps, steps[1:])):
         raise ValueError("'steps' is not strictly increasing.")
-    series = {
-        k: v
-        for k, v in stats.items()
-        if isinstance(v, list)
-        and len(v) == len(steps)
-        and all(is_number(x) for x in v)
-    }
+    series = {k: v for k, v in stats.items() if isinstance(v, list)}
+    for k, v in series.items():
+        if len(v) != len(steps) or not all(is_number(x) for x in v):
+            raise ValueError(
+                f"Statistic '{k}' is a list but not a list of numbers as long as "
+                f"'steps'."
+            )
     summary = {k: v for k, v in stats.items() if k not in series}
     return steps, series, summary
 
@@ -312,7 +319,10 @@ def main():
 
     skipped = 0
     seen = set()
-    duplicates, resumed, uploaded, failed = [], {}, set(), []
+    duplicates, running, resumed, uploaded, failed = [], [], {}, set(), []
+    # Once a worker dies, every later upload fails with this error, and the
+    # remaining rows are marked failed without their statistics being decoded
+    broken = None
 
     # Tracks every row: skipped and unreadable rows count at once, uploads
     # when they end
@@ -329,12 +339,16 @@ def main():
         def collect(return_when):
             """Record the outcome of the pending uploads that are done."""
 
+            nonlocal broken
             done, _ = wait(pending, return_when=return_when)
             for future in done:
                 name = pending.pop(future)
                 try:
                     future.result()
                     uploaded.add(name)
+                except BrokenProcessPool as e:
+                    broken = e
+                    failed.append((name, e))
                 except Exception as e:
                     failed.append((name, e))
                 pbar.update()
@@ -363,9 +377,19 @@ def main():
                     skipped += 1
                     pbar.update()
                     continue
+                if run.state == "running":
+                    seen.add(name)
+                    running.append(name)
+                    pbar.update()
+                    continue
                 run_id = run.id
                 if run.lastHistoryStep is not None:
                     last_step = run.lastHistoryStep
+
+            if broken is not None:
+                failed.append((name, broken))
+                pbar.update()
+                continue
 
             try:
                 steps, series, summary = run_stats(row, stat_cols)
@@ -404,7 +428,12 @@ def main():
                     run_id,
                     last_step,
                 )
-            except Exception as e:  # BrokenProcessPool once a worker has died
+            except BrokenProcessPool as e:
+                broken = e
+                failed.append((name, e))
+                pbar.update()
+                continue
+            except Exception as e:
                 failed.append((name, e))
                 pbar.update()
                 continue
@@ -424,6 +453,10 @@ def main():
         print("Resumed unfinished run(s):")
         for name, (state, last_step) in resumed_ok.items():
             print(f"  {name}: was {state}, last step {last_step}")
+    if running:
+        print(f"{len(running)} row(s) skipped, their run is still running in W&B:")
+        for name in running:
+            print(f"  {name}")
     if duplicates:
         print(f"{len(duplicates)} row(s) skipped, their run name appears in an earlier row:")
         for name in duplicates:

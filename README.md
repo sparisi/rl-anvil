@@ -107,7 +107,7 @@ steps | train (γ) |     train  |  test (γ) |      test  |   sa_% |   sa_h |   
 - The next four are coverage and entropy of the state-action and state-only spaces.
 - The next is the ε-value of the policy (linearly decaying in this example).
 - Then there are algorithm-specific statistics, averaged over all updates since
-  the last checkpoint: the squared TD error, the norm of the gradient, the average
+  the last checkpoint: the critic loss, the norm of the gradient, the average
   Q-value (useful to detect overestimation), and the percentage of cuts within
   eligibility traces.
 

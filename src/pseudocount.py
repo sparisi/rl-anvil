@@ -348,7 +348,7 @@ def tabular_count(env, n_bins: int = 40):
 
     low = env.observation_space.low
     high = env.observation_space.high
-    if "Pendulum" in env_id:
+    if env_id == "Pendulum-v1":
         return BinnedCountPendulum(low, high, n_bins, n_actions)
     if "Acrobot" in env_id:
         return BinnedCountAcrobot(low, high, n_bins, n_actions)

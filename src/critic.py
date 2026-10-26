@@ -58,16 +58,20 @@ def td_target(
     lmbda: float,
 ):
     """
-    TD(λ) n-step target. Vectorized.
+    Compute the TD(λ) n-step target of every step of a batch of sequences and
+    return it, with shape (batch size, sequence length). Vectorized.
 
     Args:
-        act (np.array): a_t,
         rwd (np.array): r_t,
-        term (np.array): True if s_t is terminal, False otherwise,
-        trunc (np.array): True if the sequence was truncated at s_t, False otherwise,
+        term (np.array): True if s_{t+1} is terminal (no bootstrap from it),
+            False otherwise,
+        trunc (np.array): True if the trace must not continue from step t to
+            step t+1, because the episode was truncated after step t or because
+            the sequence does not continue there. The one-step bootstrap from
+            next_value still applies at t,
         is_next_act_greedy (np.array): True if a_{t+1} is greedy, False otherwise,
         next_value (np.array): value of the next state, i.e., max_a Q(s_{t+1}, a),
-        gammma (float): discount factor,
+        gamma (float): discount factor,
         lmbda (float): eligibility trace factor,
     """
 

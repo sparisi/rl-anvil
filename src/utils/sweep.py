@@ -98,9 +98,9 @@ def format_override(key, value):
 
     A null renders as `null` and reaches cfg.yaml as None. By the time the
     analysis side reads that back it is indistinguishable from a key the run
-    never recorded, which is why src.utils.config.is_null treats the two as one
-    value -- see its module docstring. Anything comparing a sweep-declared value
-    against recorded data must go through config.match_declared.
+    never recorded, which is why src.utils.plot.is_null treats the two as one
+    value -- see that module's docstring. Anything comparing a sweep-declared
+    value against recorded data must go through plot.select_rows.
 
     What this renders feeds compose_cfg, whose output is hashed into the
     config_id. Rendering only has to preserve the VALUE Hydra parses: quoting

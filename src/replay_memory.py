@@ -187,6 +187,13 @@ class ReplayMemory(object):
         idx = top_idx[:, None] + np.arange(-sequence_length + 1, 1)
         idx = np.remainder(idx, self.size)
         batch = {k: getattr(self, k)[idx] for k in keys}
+
+        # A sequence holding the newest sample before its last position continues
+        # with the oldest sample, which is not its successor: mark truncation here.
+        if "trunc" in batch:
+            is_newest = idx == (self._idx - 1) % self.size
+            batch["trunc"] = np.logical_or(batch["trunc"], is_newest)
+
         batch["idx"] = idx
         batch["priority_key"] = None
         return batch

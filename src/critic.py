@@ -542,7 +542,7 @@ class QVisitNetwork(QNetwork):
             self.lmbda_visit,
         )
 
-        error_visit, gradient_norm_visit, q_visit = self.q_visit.update(
+        loss_visit, gradient_norm_visit, q_visit = self.q_visit.update(
             obs,
             goal[..., self.goal_idx],
             act,
@@ -551,15 +551,17 @@ class QVisitNetwork(QNetwork):
             rng_generator=rng_generator,
         )
 
-        # Average the error over positives and negatives, and over goal actions,
+        # Average the loss over positives and negatives, and over goal actions,
         # to one value per (B, T) sample as in batch["idx"]
-        mean_error_visit = error_visit.mean((-2, -1))
+        mean_loss_visit = loss_visit.mean((-2, -1))
 
-        # Update priorities in PER (will skip if no PER)
-        replay_memory.post_sampling(batch["idx"], mean_error_visit, "td_err_visit")  # td_err is already squared
+        # Update priorities in PER (will skip if no PER).
+        # The priority_key is the same one used to sample the batch above.
+        # The new priority value is the critic loss.
+        replay_memory.post_sampling(batch["idx"], mean_loss_visit, batch["priority_key"])
 
         return q_stats | {
-            "td_err_visit": mean_error_visit,
+            "loss_visit": mean_loss_visit,
             "grad_norm_visit": gradient_norm_visit,
             "q_visit_mean": q_visit.mean(),
         }

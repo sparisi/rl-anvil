@@ -5,7 +5,8 @@ from abc import ABC
 class RunningStandardization(ABC):
     """
     Compute a running standardization of values according to Welford's online
-    algorithm: https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm
+    algorithm, merging one batch at a time (Chan et al.):
+    https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
 
     """
     def __init__(self, shape, alpha=1e-32):
@@ -49,8 +50,9 @@ class RunningStandardization(ABC):
         self._n += batch_size
         alpha = max(batch_size / self._n, self._alpha)
         batch_mean = np.nanmean(value, 0, keepdims=True)
+        batch_m2 = np.nansum((value - batch_mean) ** 2, 0, keepdims=True)
         new_m = (1 - alpha) * self._m + alpha * batch_mean
-        new_s = self._s + (batch_mean - self._m) * (batch_mean - new_m)
+        new_s = self._s + batch_m2 + batch_size * (batch_mean - self._m) * (batch_mean - new_m)
         self._m, self._s = new_m, new_s
 
     def normalize(self, value):
@@ -104,8 +106,8 @@ class StreamingQuantiles:
 
         Args:
             shape (tuple): shape of the input data,
-            lr (float): learning rate (step size) for the estimates, as a
-                fraction of the current interquartile range,
+            lr (float): learning rate (step size) per sample for the estimates,
+                as a fraction of the current interquartile range,
             min_init_samples (int): estimates stay uninitialized until this many
                 samples have been seen, so that the first percentiles are not
                 taken from a single observation,
@@ -149,8 +151,11 @@ class StreamingQuantiles:
         # The bracket below is a probability, while the estimates carry the units
         # of the data, so the step is scaled by the current spread. Without this a
         # fixed lr moves a wide dimension far too slowly and a narrow one far too
-        # fast.
-        step = self._lr * np.maximum(self._q75 - self._q25, 1e-8)
+        # fast. Scaled by the batch size as well, so that one update with a
+        # batch moves the estimates as far as one update per sample would. The
+        # product of lr and batch size is capped at 1, so that one update moves an
+        # estimate by at most the interquartile range times its quantile error.
+        step = np.maximum(self._q75 - self._q25, 1e-8) * min(self._lr * value.shape[0], 1.0)
 
         # Calculate what fraction of the batch is above the current estimates:
         # np.mean(value > q, axis=0) gives a value between 0 and 1

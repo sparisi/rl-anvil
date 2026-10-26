@@ -549,8 +549,9 @@ class QVisitNetwork(QNetwork):
             rng_generator=rng_generator,
         )
 
-        # Average the error over positives and negatives
-        mean_error_visit = error_visit.mean(-1)
+        # Average the error over positives and negatives, and over goal actions,
+        # to one value per (B, T) sample as in batch["idx"]
+        mean_error_visit = error_visit.mean((-2, -1))
 
         # Update priorities in PER (will skip if no PER)
         replay_memory.post_sampling(batch["idx"], mean_error_visit, "td_err_visit")  # td_err is already squared

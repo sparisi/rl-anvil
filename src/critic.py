@@ -316,15 +316,17 @@ class QNetwork(QCritic):
             self.lmbda,
         )
         stepsize = self.lr.value * weights
-        error, gradient_norm, q = self.q.update(
+        loss, gradient_norm, q = self.q.update(
             obs, act, target=target, stepsize=stepsize, rng_generator=rng_generator,
         )
 
-        # Update priorities in PER (will skip if no PER)
-        replay_memory.post_sampling(batch["idx"], error, "td_err")  # td_err is already squared
+        # Update priorities in PER (will skip if no PER).
+        # The priority_key is the same one used to sample the batch above.
+        # The new priority value is the critic loss.
+        replay_memory.post_sampling(batch["idx"], loss, batch["priority_key"])
 
         return {
-            "td_err": error,
+            "loss": loss,
             "grad_norm": gradient_norm,
             "q_mean": q.mean(),
             "trace_cut_frac": trace_cut_frac,
@@ -589,22 +591,22 @@ class SUNRISE(QEnsemble):
 
         base_stepsize = weights * u_weights  # (B, T)
 
-        errors, grad_norms, q_means = [], [], []
+        losses, grad_norms, q_means = [], [], []
         for i, c in enumerate(self.critics):
             c.n_updates += 1
             stepsize = c.lr.value * base_stepsize * critic_mask[i]
-            error, grad_norm, q = c.q.update(
+            loss, grad_norm, q = c.q.update(
                 obs, act, target=target, stepsize=stepsize, rng_generator=rng_generator,
             )
-            errors.append(error)
+            losses.append(loss)
             grad_norms.append(grad_norm)
             q_means.append(q.mean())
 
-        mean_error = np.mean(errors, axis=0)
-        replay_memory.post_sampling(batch["idx"], mean_error, "td_err")
+        mean_loss = np.mean(losses, axis=0)
+        replay_memory.post_sampling(batch["idx"], mean_loss, batch["priority_key"])
 
         return {
-            "td_err": mean_error,
+            "loss": mean_loss,
             "grad_norm": np.mean(grad_norms),
             "q_mean": np.mean(q_means),
             "q_std_next": q_target_next_max_std.mean(),

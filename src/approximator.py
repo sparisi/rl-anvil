@@ -527,7 +527,6 @@ class MSENetwork(FunctionApproximator, nn.Module):
         return loss.detach().cpu().numpy(), gradient_norm, prediction.detach().cpu().numpy()
 
     def reset(self, seed=None):
-        # rng_generator = self.rng_generator(seed)
         # Currently, PyTorch does not support passing generator to init functions.
         # For example, you cannot do `nn.Linear(..., rng_generator)`.
         # Either you call custom init function (like `almost_zero_init`) with the generator
@@ -538,14 +537,19 @@ class MSENetwork(FunctionApproximator, nn.Module):
 
         # Cannot use LazyLinear and also have custom init, unless you
         # make a custom Module and override reset_parameters().
+        self._build_encoder()
+        self._build_body()
+        self._build_head()
+        self.reset_optimizer()
 
-        encoder_id = None if self._encoder_cfg is None else self._encoder_cfg.get('id')
+    def _build_encoder(self):
+        self._encoder_id = None if self._encoder_cfg is None else self._encoder_cfg.get('id')
 
-        if encoder_id is None:
+        if self._encoder_id is None:
             self._obs_encoder = nn.Identity().to(self.device)
         else:
             encoder_kwargs = {k: v for k, v in self._encoder_cfg.items() if k not in ('id', 'passthrough')}
-            encoder_cls = getattr(src.approximator, encoder_id)
+            encoder_cls = getattr(src.approximator, self._encoder_id)
             passthrough = self._encoder_cfg.get('passthrough')
             if passthrough is None:
                 self._obs_encoder = encoder_cls(self.state_shape, **encoder_kwargs)
@@ -556,16 +560,17 @@ class MSENetwork(FunctionApproximator, nn.Module):
             self._obs_encoder.to(self.device)
 
         self._obs_encoder.eval()
-        state_enc_dim = self._obs_encoder(
+        self._state_enc_dim = self._obs_encoder(
             torch.zeros((1,) + tuple(self.state_shape), device=self.device)
         ).shape[-1]
         self._obs_encoder.train()
 
+    def _build_body(self):
         self._body = nn.Sequential(
-            self.Norm(state_enc_dim) if encoder_id is not None else nn.Identity(),
+            self.Norm(self._state_enc_dim) if self._encoder_id is not None else nn.Identity(),
             # This is a Maxout block (Goodfellow et al., 2013)
             LinearN(
-                state_enc_dim,
+                self._state_enc_dim,
                 self._hidden_size,
                 self._maxout_layers,
                 normalization=nn.Identity,
@@ -578,14 +583,13 @@ class MSENetwork(FunctionApproximator, nn.Module):
             nn.Dropout(self._dropout_p) if self._dropout_p > 0.0 else nn.Identity(),
         ).to(self.device)
 
+    def _build_head(self):
         self._action_head = nn.Sequential(
             self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(almost_zero_init),
             self.Norm(self._hidden_size),
             self.NonLinear(),
             self.Linear(self._hidden_size, self.n_output).apply(almost_zero_init),
         ).to(self.device)
-
-        self.reset_optimizer()
 
     def reset_optimizer(self):
         self._optimizer = getattr(torch.optim, self._optimizer_id)(
@@ -612,15 +616,14 @@ class DuelingMSENetwork(MSENetwork):
     """MSENetwork with separate advantage and state-value heads, combined into Q-values
     (Wang et al., 2016, https://arxiv.org/abs/1511.06581)."""
 
-    def reset(self, seed=None):
-        super().reset(seed=seed)
+    def _build_head(self):
+        super()._build_head()
         self._state_head = nn.Sequential(
             self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(almost_zero_init),
             self.Norm(self._hidden_size),
             self.NonLinear(),
             self.Linear(self._hidden_size, 1).apply(almost_zero_init),
         ).to(self.device)
-        self.reset_optimizer()
 
     def _forward(self, state):
         h = self._obs_encoder(state)

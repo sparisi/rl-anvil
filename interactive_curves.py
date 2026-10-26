@@ -328,14 +328,14 @@ def rows_of(frame, stat):
     decoded = series_of(frame, stat)
     if decoded is None:
         return [], []
-    series, stepsize, _, seeds = decoded
+    series, x, _, seeds = decoded
     # `alive` is carried, not dropped: it is how many seeds still had a value at
     # that point. Where it is 1 the half-width is 0 and the band is drawn from a
     # single run, so it is kept per point and shown in the tooltip.
     mean, half, alive = ci_bounds(series.to_numpy().T)
     rows = [
         {
-            "x": i * stepsize,
+            "x": float(x[i]),
             "mean": float(m),
             "ci_lo": float(m - h),
             "ci_hi": float(m + h),
@@ -345,11 +345,11 @@ def rows_of(frame, stat):
         for i, (m, h, n) in enumerate(zip(mean, half, alive)) if not np.isnan(m)
     ]
     if args.with_rliable:
-        rows += iqm_rows(series, stepsize)
+        rows += iqm_rows(series, x)
     for j, seed in enumerate(seeds):
         seed_id = int(seed) if seed is not None and pd.notna(seed) else None
         rows += [
-            {"x": i * stepsize, "value": float(v), "seed": seed_id, "_kind": "seed"}
+            {"x": float(x[i]), "value": float(v), "seed": seed_id, "_kind": "seed"}
             for i, v in enumerate(series.iloc[:, j]) if pd.notna(v)
         ]
     # Scored once and used twice: the bar is the average of these, and the violin
@@ -378,7 +378,7 @@ def rows_of(frame, stat):
     return rows, seeds
 
 
-def iqm_rows(series, stepsize):
+def iqm_rows(series, x):
     """The rows of the "Curves IQM" mode for one curve: the IQM over its seeds at
     every point, with its 95% bootstrap interval.
 
@@ -397,7 +397,7 @@ def iqm_rows(series, stepsize):
     )
     return [
         {
-            "x": float(i * stepsize),
+            "x": float(x[i]),
             "iqm": float(p),
             "iqm_lo": float(l),
             "iqm_hi": float(h),

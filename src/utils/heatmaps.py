@@ -247,9 +247,11 @@ def value_map(critic, counter, env, nan_mask=None):
 
     q = None
     if getattr(critic, "q", None) is not None and callable(critic.q):
+        # A table returns itself when called with no arguments; a network
+        # raises TypeError for the missing state and is evaluated below.
         try:
             q = np.asarray(critic.q())
-        except Exception:
+        except TypeError:
             q = None
 
     if q is None and callable(critic):
@@ -260,8 +262,6 @@ def value_map(critic, counter, env, nan_mask=None):
             critic.eval()
         try:
             q = np.asarray(critic(states))
-        except Exception:
-            return None
         finally:
             if hasattr(critic, "train"):
                 critic.train()

@@ -380,7 +380,7 @@ class MyBatchNorm1d(nn.BatchNorm1d):
 # ----------------------------------- INIT -------------------------------------
 # ------------------------------------------------------------------------------
 
-def zero_init(module):
+def almost_zero_init(module):
     if module.weight is not None:
         nn.init.normal_(module.weight, mean=0.0, std=0.01)
     if module.bias is not None:

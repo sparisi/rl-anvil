@@ -1148,10 +1148,10 @@ def draw_curves(
             entry = entries[i]
             error_shade_plot(
                 ax, data,
-                stepsize=(size - warmup) / data.shape[1],
+                x=warmup + (size - warmup) / data.shape[1] * np.arange(data.shape[1]),
                 smoothing_window=args.smoothing_window,
                 color=entry["color"], linestyle=entry["linestyle"],
-                x_start=warmup, linewidth=2.0,
+                linewidth=2.0,
             )
             if i not in shown:
                 shown.append(i)

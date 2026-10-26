@@ -166,6 +166,18 @@ You can decide what to save via the `results` key (`results.data_dir`, `results.
 
 ## Code Structure
 
+> The code is a compromise between readability, long-term maintainability, and
+consistency. For example, configurations are defined with Hydra, which makes it
+easy to customize algorithms and define sweeps. However, every class reads its
+configuration through `**kwargs` and ignores the keys it does not use: an extra
+key is still accepted, does nothing, and changes the configuration ID. For
+example, `python main.py` and `python main.py ++agent.critic.whatever=99` run
+the same experiment, yet they get two different IDs and write to two different
+data folders. The alternative, declaring every argument in every class, would
+clutter the code and make maintenance harder every time a key is added. We trust
+the user to define the configuration of their algorithm properly and not to add
+random keys.
+
 ### 1. Configuration
 Hyperparameters and other settings are defined in YAML files in the [`configs/`](configs/) folder.
 For a complete overview of all configuration keys, refer to [`configs/full_config.yaml`](configs/full_config.yaml).

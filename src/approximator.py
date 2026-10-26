@@ -13,7 +13,7 @@ from src.utils.torch_nn import (
     get_torch_device,
     xavier_init,
     sparse_init,
-    zero_init,
+    almost_zero_init,
 )
 
 
@@ -265,7 +265,7 @@ class ConvEncoder(nn.Module):
             self.conv_paddings, self.conv_groups,
         ):
             layers += [
-                nn.Conv2d(in_ch, out_ch, kernel_size=ks, stride=st, padding=pad, bias=bias).apply(zero_init),
+                nn.Conv2d(in_ch, out_ch, kernel_size=ks, stride=st, padding=pad, bias=bias).apply(almost_zero_init),
                 nn.GroupNorm(num_groups=gr, num_channels=out_ch),
                 self.nonlinearity(),
             ]
@@ -304,7 +304,7 @@ class MaxoutGridEncoder(nn.Module):
         num_layers,
         normalization = None,
         bias = False,
-        init = zero_init,
+        init = almost_zero_init,
         **kwargs,
     ):
         super().__init__()
@@ -343,7 +343,7 @@ class GridAggregationEncoder(nn.Module):
         num_layers,
         normalization = None,
         bias = False,
-        init = zero_init,
+        init = almost_zero_init,
         **kwargs,
     ):
         super().__init__()
@@ -505,10 +505,9 @@ class MSENetwork(FunctionApproximator, nn.Module):
         return loss.detach().cpu().numpy(), gradient_norm, prediction.detach().cpu().numpy()
 
     def reset(self, seed=None):
-        # rng_generator = self.rng_generator(seed)
         # Currently, PyTorch does not support passing generator to init functions.
         # For example, you cannot do `nn.Linear(..., rng_generator)`.
-        # Either you call custom init function (like `zero_init`) with the generator
+        # Either you call custom init function (like `almost_zero_init`) with the generator
         # for all layers (but some do not support it), or set the seed globally (as below).
         # Also, functions like Dropout do not support generators.
         if seed is not None:
@@ -516,7 +515,12 @@ class MSENetwork(FunctionApproximator, nn.Module):
 
         # Cannot use LazyLinear and also have custom init, unless you
         # make a custom Module and override reset_parameters().
+        self._build_encoder()
+        self._build_body()
+        self._build_head()
+        self.reset_optimizer()
 
+    def _build_encoder(self):
         if self._encoder_cfg is None:
             self._obs_encoder = nn.Identity().to(self.device)
         else:
@@ -526,21 +530,22 @@ class MSENetwork(FunctionApproximator, nn.Module):
             ).to(self.device)
 
         self._obs_encoder.eval()
-        state_enc_dim = self._obs_encoder(
+        self._state_enc_dim = self._obs_encoder(
             torch.zeros((1,) + tuple(self.state_shape), device=self.device)
         ).shape[-1]
         self._obs_encoder.train()
 
+    def _build_body(self):
         self._body = nn.Sequential(
-            self.Norm(state_enc_dim) if self._encoder_cfg is not None else nn.Identity(),
+            self.Norm(self._state_enc_dim) if self._encoder_cfg is not None else nn.Identity(),
             # This is a Maxout block (Goodfellow et al., 2013)
             LinearN(
-                state_enc_dim,
+                self._state_enc_dim,
                 self._hidden_size,
                 self._maxout_layers,
                 normalization=nn.Identity,
                 bias=self._bias,
-                init=zero_init,
+                init=almost_zero_init,
             ),
             Aggregation(["max"]),
             self.Norm(self._hidden_size),
@@ -548,14 +553,13 @@ class MSENetwork(FunctionApproximator, nn.Module):
             nn.Dropout(self._dropout_p) if self._dropout_p > 0.0 else nn.Identity(),
         ).to(self.device)
 
+    def _build_head(self):
         self._action_head = nn.Sequential(
-            self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(zero_init),
+            self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(almost_zero_init),
             self.Norm(self._hidden_size),
             self.NonLinear(),
-            self.Linear(self._hidden_size, self.n_output).apply(zero_init),
+            self.Linear(self._hidden_size, self.n_output).apply(almost_zero_init),
         ).to(self.device)
-
-        self.reset_optimizer()
 
     def reset_optimizer(self):
         self._optimizer = getattr(torch.optim, self._optimizer_id)(
@@ -574,23 +578,26 @@ class MSENetwork(FunctionApproximator, nn.Module):
         if tau == 1.0:  # hard copy
             self.load_state_dict(source.state_dict())
         else:  # soft copy
-            for t, s in zip(self.parameters(), source.parameters()):
-                t.data.copy_(t.data * (1.0 - tau) + s.data * tau)
+            with torch.no_grad():
+                torch._foreach_lerp_(
+                    list(self.parameters()),
+                    list(source.parameters()),
+                    tau,
+                )
 
 
 class DuelingMSENetwork(MSENetwork):
     """MSENetwork with separate advantage and state-value heads, combined into Q-values
     (Wang et al., 2016, https://arxiv.org/abs/1511.06581)."""
 
-    def reset(self, seed=None):
-        super().reset(seed=seed)
+    def _build_head(self):
+        super()._build_head()
         self._state_head = nn.Sequential(
-            self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(zero_init),
+            self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(almost_zero_init),
             self.Norm(self._hidden_size),
             self.NonLinear(),
-            self.Linear(self._hidden_size, 1).apply(zero_init),
+            self.Linear(self._hidden_size, 1).apply(almost_zero_init),
         ).to(self.device)
-        self.reset_optimizer()
 
     def _forward(self, state):
         h = self._obs_encoder(state)
@@ -682,18 +689,18 @@ class MSEGoalNetwork(MSENetwork):
 
         # Obs and goal separate bodies
         self._obs_body = nn.Sequential(
-            self.Linear(state_enc_dim, self._hidden_size, bias=self._bias).apply(zero_init),
+            self.Linear(state_enc_dim, self._hidden_size, bias=self._bias).apply(almost_zero_init),
             self.Norm(self._hidden_size),
             # nn.Dropout(self._dropout_p) if self._dropout_p > 0.0 else nn.Identity(),
             self.NonLinear(),
-            self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(zero_init),
+            self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(almost_zero_init),
         ).to(self.device)
         self._goal_body = nn.Sequential(
-            self.Linear(goal_enc_dim, self._hidden_size, bias=self._bias).apply(zero_init),
+            self.Linear(goal_enc_dim, self._hidden_size, bias=self._bias).apply(almost_zero_init),
             self.Norm(self._hidden_size),
             # nn.Dropout(self._dropout_p) if self._dropout_p > 0.0 else nn.Identity(),
             self.NonLinear(),
-            self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(zero_init),
+            self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(almost_zero_init),
         ).to(self.device)
 
         # Shared body
@@ -706,16 +713,16 @@ class MSEGoalNetwork(MSENetwork):
                 self._maxout_layers,
                 normalization=nn.Identity,
                 bias=self._bias,
-                init=zero_init,
+                init=almost_zero_init,
             ),
             Aggregation(["max"]),
             self.Norm(self._hidden_size),
             self.NonLinear(),
             nn.Dropout(self._dropout_p) if self._dropout_p > 0.0 else nn.Identity(),
-            self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(zero_init),
+            self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(almost_zero_init),
             self.Norm(self._hidden_size),
             self.NonLinear(),
-            self.Linear(self._hidden_size, self.n_output ** 2).apply(zero_init),
+            self.Linear(self._hidden_size, self.n_output ** 2).apply(almost_zero_init),
         ).to(self.device)
 
         self.reset_optimizer()

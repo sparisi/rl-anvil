@@ -298,13 +298,11 @@ class QNetwork(QCritic):
             rwd = np.clip(rwd, -1.0, 1.0)
 
         # Double DQN
-        tolerance_max = 1.0 - self.gamma
         q_next = self.q(next_obs, with_gradient=False)
         next_a_max = random_argmax(
             q_next,
             rng_generator=rng_generator,
             axis=-1,
-            # rtol=tolerance_max,
         )
         target_q_next = np.take_along_axis(
             self.q_target(next_obs, with_gradient=False),
@@ -318,7 +316,6 @@ class QNetwork(QCritic):
                 q_next[:, :-1],
                 act[:, 1:],
                 axis=-1,
-                # rtol=tolerance_max,
             )  # use the main Q, not the target Q
             trace_cut_frac = (1.0 - is_next_act_greedy).mean()
         else:

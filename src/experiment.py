@@ -614,11 +614,11 @@ class Experiment:
         complaint, so every value would silently plot one checkpoint early.
         Backfill with nan instead.
 
-        All keys should always show up at every checkpoint. If that is not the
-        case (e.g., if your algorithm returns some statistics every other step),
-        data and steps will be misaligned.
-        We suggest NOT to fill this missing data with np.nan, as that should be
-        reserved for detecting bugs (e.g., gradient norm should never be np.nan).
+        Keys can also be missing from a later checkpoint. Their column gets nan
+        at that checkpoint, so every column stays as long as "steps" and every
+        value stays at the step it was recorded at. In the npz, a missing
+        statistic and a statistic equal to nan are therefore indistinguishable;
+        the printed progress report shows the former as "--".
         """
 
         new_key = False
@@ -628,6 +628,9 @@ class Experiment:
                 new_key = True
             self._data[k].append(v)
         self._data["steps"].append(self._tot_steps)
+        for col in self._data.values():
+            if len(col) < len(self._data["steps"]):
+                col.append(np.nan)
         return new_key
 
 
@@ -643,6 +646,8 @@ class Experiment:
             k: v.item() if isinstance(v, np.generic) else v
             for k, v in stats.items()
         }
+        # Keys recorded at earlier checkpoints and absent from this one print as "--".
+        printed = {k: stats.get(k, "--") for k in self._data if k != "steps"}
 
         if self._pbar is not None:
             self._pbar.refresh()
@@ -657,7 +662,7 @@ class Experiment:
             # The bar already shows elapsed and remaining, so the timing columns
             # would be redundant width in an already wide table.
             shown = {"steps": self._tot_steps} | {
-                k: v for k, v in stats.items() if k not in self._TIME_KEYS
+                k: v for k, v in printed.items() if k not in self._TIME_KEYS
             }
 
             if self._progress_report == "live_table":
@@ -675,7 +680,7 @@ class Experiment:
         elif self._progress_report == "dict":
             # builtins.print, not the rich print imported at the top of this
             # module: this print is meant to be caught by SLURM log.out to debug jobs.
-            builtins.print({"steps": self._tot_steps} | stats, flush=True)
+            builtins.print({"steps": self._tot_steps} | printed, flush=True)
 
 
     def test(self):

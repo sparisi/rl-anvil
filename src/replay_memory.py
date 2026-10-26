@@ -244,88 +244,77 @@ class ReplayMemory(object):
         self._full = True
 
 
+# ------------------------------------------------------------------------------
+# Prioritized Experience Replay
+# ------------------------------------------------------------------------------
+
 class SumTree:
     """
-    A binary sum tree data structure for prioritized sampling.
+    Sum tree over `capacity` priorities with batched sampling and updates.
 
-    This structure is used in Prioritized Experience Replay (PER) to efficiently:
-    - Store scalar priorities associated with each transition in a fixed-capacity buffer.
-    - Sample indices proportionally to priority values in O(log N) time.
-    - Update individual priorities and propagate changes up the tree in O(log N) time.
-
-    The tree is stored as a flat NumPy array of size `2 * capacity - 1`.
-    The `capacity` corresponds to the number of leaf nodes (i.e., number of transitions),
-    and all leaf nodes store the actual priority values.
-    The internal nodes store the sum of the priorities of their children.
+    Leaves are padded to the next power of two so that all of them sit at the
+    same depth: a batch of values then descends the tree in lockstep, one level
+    per iteration, and a batch of updates writes its leaves and recomputes
+    their ancestors level by level from the children, so internal sums never
+    drift.
     """
 
     def __init__(self, capacity):
         self.capacity = capacity
-        self.tree = zeros_resident(2 * capacity - 1, np.float32)
-
-    def add(self, idx, priority):
-        """Add new priority to the leaf node for memory index idx."""
-        tree_idx = idx + self.capacity - 1
-        self.update(tree_idx, priority)
-
-    def update(self, tree_idx, priority):
-        """Update tree and propagate change."""
-        # `update` must only ever target a leaf node. A non-leaf index (e.g. data-
-        # space indices accidentally passed instead of tree-space ones) would either
-        # silently corrupt the internal sums or, when it hits the root, send
-        # `_propagate` into infinite recursion via a negative parent. Fail loudly.
-        assert self.capacity - 1 <= tree_idx < len(self.tree), (
-            f"tree_idx {tree_idx} is not a leaf node in "
-            f"[{self.capacity - 1}, {len(self.tree)}); did you pass data-space "
-            f"indices instead of tree-space ones?"
-        )
-        change = priority - self.tree[tree_idx]
-        self.tree[tree_idx] = priority
-        self._propagate(tree_idx, change)
-
-    def _propagate(self, tree_idx, change):
-        parent = (tree_idx - 1) // 2
-        self.tree[parent] += change
-        if parent != 0:
-            self._propagate(parent, change)
+        self.n_leaves = 1 << (capacity - 1).bit_length()
+        self.depth = self.n_leaves.bit_length() - 1
+        self.tree = zeros_resident(2 * self.n_leaves - 1, np.float64)
+        self._first_leaf = self.n_leaves - 1
 
     def total(self):
         return self.tree[0]
 
-    def get(self, value):
-        """Sample value in [0, total) and return index."""
-        # Guard against value >= total(): the stratified sampler computes segment
-        # bounds in floating point, so `uniform(a, b)` can occasionally return a
-        # value at or just above total(). Left unclamped, the traversal would walk
-        # fully right into an unwritten (zero-priority) leaf and return a data_idx
-        # outside [0, size). Clamp to strictly below total() so we always land in a
-        # real, non-zero leaf.
-        total = self.total()
-        if value >= total:
-            value = np.nextafter(total, np.float32(0.0))
-        parent = 0
-        while True:
-            left = 2 * parent + 1
-            right = left + 1
-            if left >= len(self.tree):
-                leaf_idx = parent
-                break
-            if value <= self.tree[left]:
-                parent = left
-            else:
-                value -= self.tree[left]
-                parent = right
-        data_idx = leaf_idx - self.capacity + 1
-        return leaf_idx, data_idx, self.tree[leaf_idx]
+    def get(self, idx):
+        """Return the priorities of the leaves at data indices `idx`."""
+
+        return self.tree[self._first_leaf + np.asarray(idx)]
+
+    def update(self, idx, priorities):
+        """
+        Set the priorities of the leaves at data indices `idx` and recompute
+        their ancestors. If an index is repeated, its last priority is kept.
+        """
+
+        idx = np.asarray(idx).ravel()[::-1]
+        priorities = np.asarray(priorities, dtype=np.float64).ravel()[::-1]
+        idx, last = np.unique(idx, return_index=True)
+        nodes = self._first_leaf + idx
+        self.tree[nodes] = priorities[last]
+        for _ in range(self.depth):
+            nodes = (nodes - 1) // 2
+            self.tree[nodes] = self.tree[2 * nodes + 1] + self.tree[2 * nodes + 2]
+
+    def sample(self, values):
+        """
+        Return the data indices of the leaves that `values`, in [0, total),
+        fall into: leaf i is chosen by the values in (sum_{j<i} p_j, sum_{j<=i} p_j],
+        and leaf 0 also by the value 0.
+        """
+
+        values = np.minimum(
+            np.asarray(values, dtype=np.float64),
+            np.nextafter(self.total(), 0.0),
+        )
+        nodes = np.zeros(len(values), dtype=np.int64)
+        for _ in range(self.depth):
+            left = 2 * nodes + 1
+            left_sum = self.tree[left]
+            go_left = values <= left_sum
+            nodes = np.where(go_left, left, left + 1)
+            values = np.where(go_left, values, values - left_sum)
+        return nodes - self._first_leaf
 
     def _random_fill(self, min_p=0.01, max_p=1.0):
         rng_generator = np.random.default_rng(42)
-        leaf_priorities = rng_generator.uniform(min_p, max_p, size=self.capacity)
-        self.tree[self.capacity - 1 : 2 * self.capacity - 1] = leaf_priorities
-        for i in reversed(range(self.capacity - 1)):
-            left = 2 * i + 1
-            right = left + 1
-            self.tree[i] = self.tree[left] + self.tree[right]
+        self.update(
+            np.arange(self.capacity),
+            rng_generator.uniform(min_p, max_p, size=self.capacity),
+        )
 
 
 class PrioritizedReplayMemory(ReplayMemory):
@@ -336,6 +325,10 @@ class PrioritizedReplayMemory(ReplayMemory):
     For example, in the original PER paper, priorities are proportional to the
     TD error of the sample.
     Priorities are stored in a SumTree structure for faster sampling.
+    SumTree is batched: sampling, adding samples and updating priorities are
+    vectorized over the batch.
+    Unlike PrioritizedReplayMemory, the "idx" of a batch holds data indices, as
+    in ReplayMemory, and so does `post_sampling`.
     It is possible to keep multiple SumTree and sample data according to different
     priorities.
     You don't need to define immediately what priorities you will use: if a new
@@ -406,22 +399,34 @@ class PrioritizedReplayMemory(ReplayMemory):
         self.beta = getattr(src.parameter, beta.id)(**beta)
         self.trees = {}  # Dictionary to store multiple SumTrees
         self._default_priority = 1.0
+        self._pending_idx = []
+        self._pending_priority = []
 
     def _create_tree(self, key: str):
-        """Initializes a new SumTree and fills it with current default priorities."""
+        """Initialize a new SumTree and fill it with current default priorities."""
 
-        new_tree = SumTree(self._max_size)
+        tree = SumTree(self._max_size)
         initial_p = self._default_priority ** self.alpha.value
-        for i in range(self.size):
-            new_tree.add(i, initial_p)
-        self.trees[key] = new_tree
-        return new_tree
+        tree.update(np.arange(self.size), np.full(self.size, initial_p))
+        self.trees[key] = tree
+        return tree
+
+    def _flush(self):
+        """Write the priorities of the samples added since the last flush to every tree."""
+
+        if not self._pending_idx:
+            return
+        idx = np.array(self._pending_idx)
+        priorities = np.array(self._pending_priority)
+        self._pending_idx = []
+        self._pending_priority = []
+        for tree in self.trees.values():
+            tree.update(idx, priorities)
 
     def add(self, **kwargs):
-        write_index = self._idx  # capture before super() advances _idx
+        self._pending_idx.append(self._idx)
+        self._pending_priority.append(self._default_priority ** self.alpha.value)
         super().add(**kwargs)
-        for tree in self.trees.values():
-            tree.add(write_index, self._default_priority ** self.alpha.value)
 
     def get(
         self,
@@ -432,14 +437,12 @@ class PrioritizedReplayMemory(ReplayMemory):
         priority_key: str = None,
         **kwargs,
     ):
+        self._flush()
         if priority_key is None:
-            batch = ReplayMemory.get(self, batch_size, sequence_length, rng_generator, keys)
-            batch["idx"] += self._max_size - 1  # convert data idx to tree idx (_max_size is the tree capacity)
-            return batch
+            return ReplayMemory.get(self, batch_size, sequence_length, rng_generator, keys)
 
         if priority_key not in self.trees:
             self._create_tree(priority_key)
-
         active_tree = self.trees[priority_key]
 
         if keys is None:
@@ -447,36 +450,20 @@ class PrioritizedReplayMemory(ReplayMemory):
         if rng_generator is None:
             rng_generator = self.rng_generator()
 
+        # Stratified sampling: one value in each of batch_size segments of equal mass
         segment = active_tree.total() / batch_size
+        values = (np.arange(batch_size) + rng_generator.random(batch_size)) * segment
+        data_idxs = np.minimum(active_tree.sample(values), self.size - 1)
+        priorities = active_tree.get(data_idxs)
 
-        leaf_idxs = []
-        data_idxs = []
-        priorities = []
-
-        for i in range(batch_size):
-            a = segment * i
-            b = segment * (i + 1)
-            v = rng_generator.uniform(a, b)
-            leaf_idx, data_idx, priority = active_tree.get(v)
-
-            leaf_idxs.append(leaf_idx)
-            data_idxs.append(data_idx)
-            priorities.append(priority)
-
-        leaf_idxs = np.array(leaf_idxs)
-        data_idxs = np.array(data_idxs)
-        priorities = np.array(priorities)
-
-        # Build sequences ending at sampled indices
-        buffer_idx = data_idxs[:, None] + np.arange(-sequence_length + 1, 1)
-        buffer_idx = np.remainder(buffer_idx, self.size)
-
-        batch = {k: getattr(self, k)[buffer_idx] for k in keys}
+        idx = data_idxs[:, None] + np.arange(-sequence_length + 1, 1)
+        idx = np.remainder(idx, self.size)
+        batch = {k: getattr(self, k)[idx] for k in keys}
 
         # A sequence holding the newest sample before its last position continues
         # with the oldest sample, which is not its successor: mark truncation here.
         if "trunc" in batch:
-            is_newest = buffer_idx == (self._idx - 1) % self.size
+            is_newest = idx == (self._idx - 1) % self.size
             batch["trunc"] = np.logical_or(batch["trunc"], is_newest)
 
         # Importance sampling weights computed ONLY from sampled endpoints
@@ -493,43 +480,25 @@ class PrioritizedReplayMemory(ReplayMemory):
         batch["weights"] = weights[:, None]
         # Tree indices for ALL (B, T) samples, not just endpoints, so
         # post_sampling can update each sample's priority.
-        batch["idx"] = buffer_idx + self._max_size - 1
+        batch["idx"] = idx
         batch["priority_key"] = priority_key
-
         return batch
 
-    def get_sorted(self, *args, **kwargs):
-        # The base implementation returns data-space indices, but this subclass's
-        # `get` returns tree-space indices (offset by _max_size - 1). Keep the two
-        # consistent so a caller can safely pass batch["idx"] to post_sampling.
-        batch = super().get_sorted(*args, **kwargs)
-        batch["idx"] += self._max_size - 1
-        return batch
-
-    def set_values(self, idx, **kwargs):
-        """
-        Overwrite the stored values of the given keys at the indices returned in a
-        batch by `get`, which are tree indices.
-        """
-
-        super().set_values(idx - (self._max_size - 1), **kwargs)
-
-    def update_priorities(self, tree_idxs, new_priorities, priority_key):
+    def update_priorities(self, idx, new_priorities, priority_key):
+        self._flush()
         if priority_key not in self.trees:
             self._create_tree(priority_key)
         tree = self.trees[priority_key]
-        flat_priorities = new_priorities.flatten()
+        flat_priorities = np.asarray(new_priorities, dtype=np.float64).ravel()
         flat_priorities = np.nan_to_num(flat_priorities, nan=0.0, posinf=1e6)
         self._default_priority = max(self._default_priority, float(flat_priorities.max()))
-        alpha = self.alpha.value
-        for idx, priority in zip(tree_idxs.flatten(), (flat_priorities + 1e-5) ** alpha):
-            tree.update(idx, float(priority))
+        tree.update(np.asarray(idx).ravel(), (flat_priorities + 1e-5) ** self.alpha.value)
 
-    def post_sampling(self, tree_idxs, new_priorities, priority_key, **kwargs):
+    def post_sampling(self, idx, new_priorities, priority_key, **kwargs):
         if priority_key is None:
             return
         self.update_priorities(
-            tree_idxs,
+            idx,
             np.clip(new_priorities, 0, None) + 1e-8,
             priority_key,
         )
@@ -540,9 +509,15 @@ class PrioritizedReplayMemory(ReplayMemory):
 
     def _random_fill(self):
         super()._random_fill()
+        self._pending_idx = []
+        self._pending_priority = []
         for tree in self.trees.values():
             tree._random_fill()
 
+
+# ------------------------------------------------------------------------------
+# No Memory
+# ------------------------------------------------------------------------------
 
 class OnlineMemory(ReplayMemory):
     """

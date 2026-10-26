@@ -346,7 +346,7 @@ def bar_values(decoded):
     units of the y axis and configurations trained for different lengths stay
     comparable."""
 
-    series, stepsize, _steps, _seeds = decoded
+    series, x, _steps, _seeds = decoded
     peaks, steps, areas = [], [], []
     for column in series.columns:
         run = series[column].to_numpy(dtype=float)
@@ -356,7 +356,7 @@ def bar_values(decoded):
         peaks.append(float(finite.max()))
         # nanargmax raises on an all-NaN run, which the guard above has already
         # dropped; -inf stands in for the NaNs so they can never be the peak.
-        steps.append(float(np.argmax(np.nan_to_num(run, nan=-np.inf))) * stepsize)
+        steps.append(float(x[int(np.argmax(np.nan_to_num(run, nan=-np.inf)))]))
         areas.append(float(finite.mean()))
     return {
         "peak": summarize(peaks),
@@ -520,9 +520,10 @@ def draw_iqm_curve(drawing, name, present, stat, decoded_of, drawn):
     for i in complete_entries(drawing, present, stat, decoded_of, drawn):
         per_env = []
         for env in present:
-            series, _stepsize, env_steps, _seeds = decoded_of[(env, i)]
+            series, x, env_steps, _seeds = decoded_of[(env, i)]
             values = series.to_numpy(dtype=float).T
-            index = np.round(fractions * (values.shape[1] - 1)).astype(int)
+            # The point recorded closest to each fraction of the training steps
+            index = np.abs(x[None, :] - (fractions * env_steps)[:, None]).argmin(axis=1)
             picked = values[:, index]
             per_env.append(picked[np.all(np.isfinite(picked), axis=1)])
             steps.add(env_steps)
@@ -982,11 +983,11 @@ def draw_config(config_name, cfg):
                     for i, entry in enumerate(drawing.entries):
                         if (env, i) not in decoded_of:
                             continue
-                        series, stepsize, steps, _ = decoded_of[(env, i)]
+                        series, x, steps, _ = decoded_of[(env, i)]
                         error_shade_plot(
                             ax,
                             series.to_numpy().T,
-                            stepsize=stepsize,
+                            x=x,
                             smoothing_window=args.smoothing_window,
                             color=entry["color"],
                             linestyle=entry["linestyle"],
@@ -1247,11 +1248,11 @@ def draw_config(config_name, cfg):
                         for i, entry in enumerate(drawing.entries):
                             if (env, stat, i) not in curves_of:
                                 continue
-                            series, stepsize, steps, _ = curves_of[(env, stat, i)]
+                            series, x, steps, _ = curves_of[(env, stat, i)]
                             error_shade_plot(
                                 ax,
                                 series.to_numpy().T,
-                                stepsize=stepsize,
+                                x=x,
                                 smoothing_window=args.smoothing_window,
                                 color=entry["color"],
                                 linestyle=entry["linestyle"],

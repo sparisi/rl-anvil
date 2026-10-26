@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 
+from src.utils.slurm import parse_seeds
 from src.utils.sweep import format_override, load_sweep
 
 # Applied to every run, but a sweep file can override them.
@@ -23,19 +24,6 @@ DEFAULT_OVERRIDES = [
     "results.progress_report=history_table",
     "wandb.mode=disabled",
 ]
-
-
-def parse_seeds(tokens):
-    """Seeds from `--seeds`: ints are literal, `a-b` is an inclusive range."""
-
-    seeds = []
-    for token in tokens:
-        if "-" in token[1:]:
-            lo, hi = token.split("-", 1)
-            seeds.extend(range(int(lo), int(hi) + 1))
-        else:
-            seeds.append(int(token))
-    return sorted(dict.fromkeys(seeds))
 
 
 def sweep_override(key, values):

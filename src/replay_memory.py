@@ -327,8 +327,8 @@ class PrioritizedReplayMemory(ReplayMemory):
     Priorities are stored in a SumTree structure for faster sampling.
     SumTree is batched: sampling, adding samples and updating priorities are
     vectorized over the batch.
-    Unlike PrioritizedReplayMemory, the "idx" of a batch holds data indices, as
-    in ReplayMemory, and so does `post_sampling`.
+    The "idx" of a batch holds data indices, as in ReplayMemory, and
+    `post_sampling` takes the same indices.
     It is possible to keep multiple SumTree and sample data according to different
     priorities.
     You don't need to define immediately what priorities you will use: if a new
@@ -478,7 +478,7 @@ class PrioritizedReplayMemory(ReplayMemory):
 
         # Broadcast weights over sequence dimension
         batch["weights"] = weights[:, None]
-        # Tree indices for ALL (B, T) samples, not just endpoints, so
+        # Data indices for ALL (B, T) samples, not just endpoints, so
         # post_sampling can update each sample's priority.
         batch["idx"] = idx
         batch["priority_key"] = priority_key

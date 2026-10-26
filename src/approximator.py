@@ -608,8 +608,12 @@ class MSENetwork(FunctionApproximator, nn.Module):
         if tau == 1.0:  # hard copy
             self.load_state_dict(source.state_dict())
         else:  # soft copy
-            for t, s in zip(self.parameters(), source.parameters()):
-                t.data.copy_(t.data * (1.0 - tau) + s.data * tau)
+            with torch.no_grad():
+                torch._foreach_lerp_(
+                    list(self.parameters()),
+                    list(source.parameters()),
+                    tau,
+                )
 
 
 class DuelingMSENetwork(MSENetwork):

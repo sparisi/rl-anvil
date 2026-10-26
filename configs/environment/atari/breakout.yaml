@@ -9,11 +9,10 @@ experiment:
   cool_down: 10_000
   training_steps: 1_000_000
   testing_episodes: 10
-  replay_memory:
-    batch_size: 512
 
 agent:
   critic:
+    batch_size: 512
     approximator:
       device: cpu
       hidden_size: 512

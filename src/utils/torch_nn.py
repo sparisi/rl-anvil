@@ -369,18 +369,6 @@ class FlattenBatch(nn.Module):
         return x.reshape(-1, *self.input_shape)
 
 
-class LazyLayerNorm(nn.Module):
-    """Lazy version of LayerNorm (no need to manually specify input size)."""
-    def forward(self, input):
-        return F.layer_norm(input, input.size())
-
-
-class LazyRMSNorm(nn.Module):
-    """Lazy version of RMSNorm (no need to manually specify input size)."""
-    def forward(self, input):
-        return F.rms_norm(input, input.size())
-
-
 class MyBatchNorm1d(nn.BatchNorm1d):
     """BatchNorm1d that works when the input has only one dimension."""
     def forward(self, x):

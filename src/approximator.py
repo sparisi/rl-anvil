@@ -646,6 +646,7 @@ class MSEGoalNetwork(MSENetwork):
         gf = goal_body(z_g)
         h = [sf, gf, sf * gf]
         h = shared_body(h)
+        q = action_head(h)
     """
 
     def __init__(self, goal_shape, *args, **kwargs):
@@ -653,26 +654,9 @@ class MSEGoalNetwork(MSENetwork):
         self.goal_shape = goal_shape
         super().__init__(*args, **kwargs)
 
-    def reset(self, seed=None):
-        if seed is not None:
-            torch.manual_seed(seed)
+    def _build_encoder(self):
+        super()._build_encoder()
 
-        # Obs encoder
-        if self._encoder_cfg is None:
-            self._obs_encoder = nn.Identity().to(self.device)
-        else:
-            encoder_kwargs = {k: v for k, v in self._encoder_cfg.items() if k != 'id'}
-            self._obs_encoder = getattr(src.approximator, self._encoder_cfg.id)(
-                self.state_shape, **encoder_kwargs,
-            ).to(self.device)
-
-        self._obs_encoder.eval()
-        state_enc_dim = self._obs_encoder(
-            torch.zeros((1,) + tuple(self.state_shape), device=self.device)
-        ).shape[-1]
-        self._obs_encoder.train()
-
-        # Goal encoder
         if self._encoder_cfg is None:
             self._goal_encoder = nn.Identity().to(self.device)
         else:
@@ -682,21 +666,22 @@ class MSEGoalNetwork(MSENetwork):
             ).to(self.device)
 
         self._goal_encoder.eval()
-        goal_enc_dim = self._goal_encoder(
+        self._goal_enc_dim = self._goal_encoder(
             torch.zeros((1,) + tuple(self.goal_shape), device=self.device)
         ).shape[-1]
         self._goal_encoder.train()
 
+    def _build_body(self):
         # Obs and goal separate bodies
         self._obs_body = nn.Sequential(
-            self.Linear(state_enc_dim, self._hidden_size, bias=self._bias).apply(almost_zero_init),
+            self.Linear(self._state_enc_dim, self._hidden_size, bias=self._bias).apply(almost_zero_init),
             self.Norm(self._hidden_size),
             # nn.Dropout(self._dropout_p) if self._dropout_p > 0.0 else nn.Identity(),
             self.NonLinear(),
             self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(almost_zero_init),
         ).to(self.device)
         self._goal_body = nn.Sequential(
-            self.Linear(goal_enc_dim, self._hidden_size, bias=self._bias).apply(almost_zero_init),
+            self.Linear(self._goal_enc_dim, self._hidden_size, bias=self._bias).apply(almost_zero_init),
             self.Norm(self._hidden_size),
             # nn.Dropout(self._dropout_p) if self._dropout_p > 0.0 else nn.Identity(),
             self.NonLinear(),
@@ -719,18 +704,20 @@ class MSEGoalNetwork(MSENetwork):
             self.Norm(self._hidden_size),
             self.NonLinear(),
             nn.Dropout(self._dropout_p) if self._dropout_p > 0.0 else nn.Identity(),
+        ).to(self.device)
+
+    def _build_head(self):
+        self._action_head = nn.Sequential(
             self.Linear(self._hidden_size, self._hidden_size, bias=self._bias).apply(almost_zero_init),
             self.Norm(self._hidden_size),
             self.NonLinear(),
             self.Linear(self._hidden_size, self.n_output ** 2).apply(almost_zero_init),
         ).to(self.device)
 
-        self.reset_optimizer()
-
     def _forward(self, state, goal):
         sf = self._obs_body(self._obs_encoder(state))
         gf = self._goal_body(self._goal_encoder(goal))
-        return self._shared_body(torch.concat((sf, gf, sf * gf), -1))
+        return self._action_head(self._shared_body(torch.concat((sf, gf, sf * gf), -1)))
 
     def forward(self, state, goal, action=None, with_gradient=False, **kwargs):
         batch_shapes = state.shape[:-len(self.state_shape)]

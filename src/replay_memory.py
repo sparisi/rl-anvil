@@ -789,13 +789,25 @@ class PrioritizedReplayMemory(ReplayMemory):
         tree.update(np.asarray(idx).ravel(), (flat_priorities + 1e-5) ** self.alpha.value)
 
     def post_sampling(self, idx, new_priorities, priority_key, **kwargs):
+        """
+        Set the priorities of the samples at `idx` in the tree of `priority_key`.
+        `new_priorities` has as many elements as `idx`, and each one must be >= 0.
+        Nothing is updated when `priority_key` is None, i.e., when the batch was
+        not sampled by priority.
+        """
+
         if priority_key is None:
             return
-        self.update_priorities(
-            idx,
-            np.clip(new_priorities, 0, None) + 1e-8,
-            priority_key,
-        )
+        new_priorities = np.asarray(new_priorities)
+        if new_priorities.size != np.size(idx):
+            raise ValueError(
+                f"post_sampling got {new_priorities.size} priorities for "
+                f"{np.size(idx)} indices of shape {np.shape(idx)}: pass one "
+                f"priority per index."
+            )
+        if np.any(new_priorities < 0):
+            raise ValueError("post_sampling got negative priorities.")
+        self.update_priorities(idx, new_priorities + 1e-8, priority_key)
 
     def post_step(self, *args, **kwargs):
         self.alpha.step()

@@ -84,4 +84,4 @@ statistics:
   "test (γ)": "Test Return (γ)"
   sa_h: "Entropy"
   sa_%: "Coverage"
-  td_err: "Squared TD Error"
+  loss: "Critic Loss"

@@ -5,7 +5,8 @@ from abc import ABC
 class RunningStandardization(ABC):
     """
     Compute a running standardization of values according to Welford's online
-    algorithm: https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm
+    algorithm, merging one batch at a time (Chan et al.):
+    https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
 
     """
     def __init__(self, shape, alpha=1e-32):
@@ -49,8 +50,9 @@ class RunningStandardization(ABC):
         self._n += batch_size
         alpha = max(batch_size / self._n, self._alpha)
         batch_mean = np.nanmean(value, 0, keepdims=True)
+        batch_m2 = np.nansum((value - batch_mean) ** 2, 0, keepdims=True)
         new_m = (1 - alpha) * self._m + alpha * batch_mean
-        new_s = self._s + (batch_mean - self._m) * (batch_mean - new_m)
+        new_s = self._s + batch_m2 + batch_size * (batch_mean - self._m) * (batch_mean - new_m)
         self._m, self._s = new_m, new_s
 
     def normalize(self, value):

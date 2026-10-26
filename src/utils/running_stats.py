@@ -106,8 +106,8 @@ class StreamingQuantiles:
 
         Args:
             shape (tuple): shape of the input data,
-            lr (float): learning rate (step size) for the estimates, as a
-                fraction of the current interquartile range,
+            lr (float): learning rate (step size) per sample for the estimates,
+                as a fraction of the current interquartile range,
             min_init_samples (int): estimates stay uninitialized until this many
                 samples have been seen, so that the first percentiles are not
                 taken from a single observation,
@@ -151,8 +151,11 @@ class StreamingQuantiles:
         # The bracket below is a probability, while the estimates carry the units
         # of the data, so the step is scaled by the current spread. Without this a
         # fixed lr moves a wide dimension far too slowly and a narrow one far too
-        # fast.
-        step = self._lr * np.maximum(self._q75 - self._q25, 1e-8)
+        # fast. Scaled by the batch size as well, so that one update with a
+        # batch moves the estimates as far as one update per sample would. The
+        # product of lr and batch size is capped at 1, so that one update moves an
+        # estimate by at most the interquartile range times its quantile error.
+        step = np.maximum(self._q75 - self._q25, 1e-8) * min(self._lr * value.shape[0], 1.0)
 
         # Calculate what fraction of the batch is above the current estimates:
         # np.mean(value > q, axis=0) gives a value between 0 and 1

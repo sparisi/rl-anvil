@@ -50,6 +50,23 @@ def _random_goals(replay_memory, n, rng_generator):
     return np.where(goals["goal_valid"][..., None], goals["goal_obs"], random_obs)
 
 
+def _prioritized_goals(replay_memory, n, rng_generator):
+    """
+    `n` goals drawn from the observations stored in the replay memory, as an
+    (n, 1, d) array. A PrioritizedReplayMemory draws them by the "count"
+    priority, (1 / count) ** alpha with the count summed over actions; a memory
+    without priorities draws them uniformly.
+    """
+
+    return replay_memory.get(
+        batch_size=n,
+        sequence_length=1,
+        rng_generator=rng_generator,
+        keys=["obs"],
+        priority_key="count",
+    )["obs"]
+
+
 def her_future(batch, replay_memory, rng_generator, K, *args, **kwargs):
     """
     The original HER `future` strategy assigns each timestep its own future goal,

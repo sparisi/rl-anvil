@@ -195,9 +195,11 @@ class ReplayMemory(object):
                 new_bin = int(np.ravel(self.counter.bin_index(kwargs["obs"]))[0])
                 new_act = int(np.asarray(kwargs["act"]).flat[0])
                 n = self._max_size if self._full else write_idx
-                self.count[:n][self.bin_idx[:n] == new_bin, new_act] += 1
+                same_bin = np.nonzero(self.bin_idx[:n] == new_bin)[0]
+                self.count[same_bin, new_act] += 1
                 self.bin_idx[write_idx] = new_bin
                 self.count[write_idx] = self.counter(kwargs["obs"])
+                self._counts_changed(np.append(same_bin, write_idx))
             else:
                 self._update_counts(write_idx, kwargs, evicted)
 
@@ -297,6 +299,7 @@ class ReplayMemory(object):
             np.maximum(dist2, 0.0, out=dist2)  # clamp floating-point negatives
             mask = (dist2 <= radius2).astype(float)
             self.count[start:stop] = (mask @ onehot).astype(self.count.dtype)
+        self._counts_changed(np.arange(n))
 
     def _update_counts(self, write_idx, kwargs, evicted):
         n_actions = self.count.shape[-1]
@@ -367,6 +370,11 @@ class ReplayMemory(object):
         ).astype(np.int64)
         count[new_act] += 1  # count self
         self.count[write_idx] = count
+
+        changed = [new_rows, [write_idx]]
+        if evicted is not None:
+            changed.append(evicted_rows)
+        self._counts_changed(np.concatenate(changed))
 
     def counts(self, obs):
         """Count of every action in each observation of obs, shaped (..., n_actions).
@@ -484,6 +492,11 @@ class ReplayMemory(object):
         batch["idx"] = idx
         batch["priority_key"] = None
         return batch
+
+    def _counts_changed(self, rows):
+        """Called with the indices of the stored entries whose count has just changed."""
+
+        pass
 
     def post_sampling(self, *args, **kwargs):
         pass
@@ -662,6 +675,11 @@ class PrioritizedReplayMemory(ReplayMemory):
         >>> n = visit_count(batch["obs"], batch"[act"])
         >>> mem.post_sampling(batch["idx"], 1.0 / n, "rarity")
 
+    The tree of the priority key "count" is kept by the memory itself when it
+    stores counts (see init_counting): the priority of an entry is the inverse
+    of its count summed over actions, and it is updated whenever that count
+    changes, so it needs no `post_sampling`.
+
     When sampling n-step sequences, priorities are used to sample the LAST step of
     a sequence. For example, let's say we want to sample sequences of 10 steps.
     If the element of index 12 (in the memory) has high priority and is sampled,
@@ -697,16 +715,36 @@ class PrioritizedReplayMemory(ReplayMemory):
         self._pending_priority = []
 
     def _create_tree(self, key: str):
-        """Initialize a new SumTree and fill it with current default priorities."""
+        """
+        Initialize a new SumTree and fill it with current default priorities, or
+        with the count priorities for the "count" key.
+        """
 
         tree = SumTree(self._max_size)
-        initial_p = self._default_priority ** self.alpha.value
-        tree.update(np.arange(self.size), np.full(self.size, initial_p))
+        if key == "count" and hasattr(self, "count"):
+            tree.update(np.arange(self.size), self._count_priorities(np.arange(self.size)))
+        else:
+            initial_p = self._default_priority ** self.alpha.value
+            tree.update(np.arange(self.size), np.full(self.size, initial_p))
         self.trees[key] = tree
         return tree
 
+    def _count_priorities(self, rows):
+        """Priorities of the stored entries at `rows` from their counts (minimum
+        over actions)."""
+
+        return (1.0 / np.maximum(self.count[rows].min(-1), 1)) ** self.alpha.value
+
+    def _counts_changed(self, rows):
+        tree = self.trees.get("count")
+        if tree is not None:
+            tree.update(rows, self._count_priorities(rows))
+
     def _flush(self):
-        """Write the priorities of the samples added since the last flush to every tree."""
+        """
+        Write the priorities of the samples added since the last flush to every
+        tree, except the "count" tree, which _counts_changed keeps up to date.
+        """
 
         if not self._pending_idx:
             return
@@ -714,8 +752,9 @@ class PrioritizedReplayMemory(ReplayMemory):
         priorities = np.array(self._pending_priority)
         self._pending_idx = []
         self._pending_priority = []
-        for tree in self.trees.values():
-            tree.update(idx, priorities)
+        for key, tree in self.trees.items():
+            if key != "count":
+                tree.update(idx, priorities)
 
     def add(self, **kwargs):
         self._pending_idx.append(self._idx)

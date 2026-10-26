@@ -129,14 +129,14 @@ def run(cfg: DictConfig) -> None:
                 )
         stats = critic.update(replay_memory=memory, rng_generator=critic_rng)
         critic.post_step()
-        tot_loss = float(np.abs(stats["td_err"]).sum())
+        tot_loss = float(np.abs(stats["loss"]).sum())
         tot_loss_visit = (
-            float(np.abs(stats["td_err_visit"]).sum())
-            if "td_err_visit" in stats
+            float(np.abs(stats["loss_visit"]).sum())
+            if "loss_visit" in stats
             else 0.0
         )
         pbar.set_description(
-            f"td_err={tot_loss:.6f} td_err_visit={tot_loss_visit:.6f}"
+            f"loss={tot_loss:.6f} loss_visit={tot_loss_visit:.6f}"
         )
         if i % 25 == 0:
             save_pics(i)

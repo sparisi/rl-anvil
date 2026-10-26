@@ -93,7 +93,7 @@ generating very large HTML files.
 
 Example
 
-    python interactive_curves.py -f data_example --sweep=example --stats train test td_err
+    python interactive_curves.py -f data_example --sweep=example --stats train test loss
 """
 
 import argparse

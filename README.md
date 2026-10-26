@@ -77,7 +77,7 @@ Here is what you will see printed on screen during training.
 💻 (Critic) Running PyTorch on CPU
 steps | train (γ) |      train |  test (γ) |       test |   sa_% |   sa_h |    s_% |    s_h | eps
 10000 | -512.8785 | -1190.6856 | -611.7217 | -1487.3069 | 0.4752 | 0.9079 | 0.7975 |  0.949 |   1
-steps | train (γ) |      train |  test (γ) |       test |   sa_% |   sa_h |    s_% |    s_h |  eps | td_err | grad_norm |   q_mean | trace_cut_frac
+steps | train (γ) |      train |  test (γ) |       test |   sa_% |   sa_h |    s_% |    s_h |  eps |   loss | grad_norm |   q_mean | trace_cut_frac
 11000 | -559.9887 | -1292.2218 | -548.1097 | -1298.6761 | 0.4973 | 0.9114 | 0.7975 | 0.9475 | 0.81 | 1.3707 |    5.7773 | -7.365   |         0.8764
 12000 | -526.8196 | -1240.1048 | -564.3862 | -1358.2616 | 0.5232 | 0.9164 | 0.805  | 0.9502 | 0.62 | 0.7652 |    9.2342 | -13.3648 |         0.8735
 13000 |  -507.325 | -1243.7619 | -544.5045 | -1302.2352 | 0.5338 | 0.9163 | 0.8056 | 0.9461 | 0.43 | 0.8071 |   12.5352 | -18.8743 |         0.8697
@@ -87,7 +87,7 @@ steps | train (γ) |      train |  test (γ) |       test |   sa_% |   sa_h |   
 17000 | -498.8683 | -1139.0065 | -413.6176 | -944.2951  | 0.5517 | 0.9052 | 0.8056 | 0.9298 | 0.05 | 1.4996 |     16.61 | -41.667  |         0.8203
 18000 | -530.4734 | -1190.9065 | -354.4569 | -781.2514  | 0.5608 | 0.907  | 0.8056 | 0.9322 | 0.05 | 1.6135 |   16.6759 | -47.1844 |         0.8097
 19000 | -472.9179 | -1061.903  | -379.2295 | -858.8809  | 0.5666 | 0.9073 | 0.8056 | 0.9338 | 0.05 | 1.6941 |   16.7434 | -52.434  |         0.8003
-steps | train (γ) |     train  |  test (γ) |      test  |   sa_% |   sa_h |    s_% |    s_h |  eps | td_err | grad_norm |   q_mean | trace_cut_frac
+steps | train (γ) |     train  |  test (γ) |      test  |   sa_% |   sa_h |    s_% |    s_h |  eps |   loss | grad_norm |   q_mean | trace_cut_frac
 20000 | -398.5283 | -843.1945  | -247.0061 | -400.6085  | 0.5716 | 0.9036 | 0.8056 | 0.9297 | 0.05 | 1.7599 |   16.6345 | -56.7332 |          0.793
 21000 | -304.0222 | -526.6313  | -157.9989 | -210.3629  | 0.5763 | 0.8969 | 0.8056 | 0.9212 | 0.05 | 1.6835 |   17.1282 | -60.3145 |         0.7947
 22000 | -204.7916 | -284.4521  | -146.8495 | -180.4918  | 0.5776 | 0.8839 | 0.8056 | 0.9054 | 0.05 | 1.5727 |   17.8044 | -62.374  |         0.8019
@@ -299,7 +299,7 @@ Then, there are two default scripts to visualize the results (both save files un
 **<ins>Interactive.</ins>** Generate interactive curve plots or heatmaps, where
 you can select the statistic to display, the seeds, switch scale, zoom in/out, ...
 ```
-python interactive_curves.py -f data_example --sweep=example -v --stats train test td_err
+python interactive_curves.py -f data_example --sweep=example -v --stats train test loss
 python interactive_heatmaps.py -f data_example --sweep=example -v --progression_step=0.1
 ```
 

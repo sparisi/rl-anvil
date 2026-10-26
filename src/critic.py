@@ -249,21 +249,22 @@ class QTable(QCritic):
         target = td_target(rwd, term, trunc, is_next_act_greedy, q_next, self.gamma, self.lmbda)
         stepsize = np.asarray(self.lr.value * weights)
 
-        error, gradient_norm = self.q.update(
+        loss, gradient_norm = self.q.update(
             obs.ravel(),
             act.ravel(),
             target=target.ravel(),
             stepsize=np.broadcast_to(stepsize, target.shape).ravel(),
         )
-        error = error.reshape(target.shape)
+        loss = loss.reshape(target.shape)
 
         # Update priorities in PER (no-op on plain ReplayMemory).
+        # The priority_key is the same one used to sample the batch above.
         # Every sample in the (B, T) batch gets its priority set from its own
-        # TD error, independent of how sampling picked the sequence endpoints.
-        replay_memory.post_sampling(batch["idx"], error, "td_err")
+        # loss, independent of how sampling picked the sequence endpoints.
+        replay_memory.post_sampling(batch["idx"], loss, batch["priority_key"])
 
         return {
-            "td_err": error,
+            "loss": loss,
             "grad_norm": gradient_norm,
             "trace_cut_frac": trace_cut_frac,
         }
@@ -370,22 +371,23 @@ class QVisitTable(QTable):
         )
 
         stepsize = np.asarray(self.lr_visit.value * weights)
-        error_visit, gradient_norm_visit = self.q_visit.update(
+        loss_visit, gradient_norm_visit = self.q_visit.update(
             obs.ravel(),
             act.ravel(),
             target=target.reshape(-1, self.n_observations * self.n_actions),
             stepsize=np.broadcast_to(stepsize, target.shape[:-1]).ravel()[..., None],
         )
-        error_visit = error_visit.reshape(target.shape)
+        loss_visit = loss_visit.reshape(target.shape)
 
         # Update priorities in PER (no-op on plain ReplayMemory).
+        # The priority_key is the same one used to sample the batch above.
         # Every sample in the (B, T) batch gets its priority set from its own
-        # error (reduced over goals with max, since each sample is trained
+        # loss (reduced over goals with max, since each sample is trained
         # against every goal), independent of how sampling picked endpoints.
-        replay_memory.post_sampling(batch["idx"], error_visit.max(-1), "td_err_visit")
+        replay_memory.post_sampling(batch["idx"], loss_visit.max(-1), batch["priority_key"])
 
         return q_stats | {
-            "td_err_visit": error_visit,
+            "loss_visit": loss_visit,
             "grad_norm_visit": gradient_norm_visit,
             "trace_cut_frac_visit": trace_cut_frac_visit,
         }

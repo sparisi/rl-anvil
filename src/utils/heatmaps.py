@@ -336,9 +336,11 @@ def visit_value_map(critic, counter, env, nan_mask=None):
 
     v = None
     if callable(q_visit):
+        # A table returns itself when called with no arguments; a network
+        # raises TypeError for the missing state and goal and is evaluated below.
         try:
             table = np.asarray(q_visit())
-        except Exception:
+        except TypeError:
             table = None
         if (
             table is not None
@@ -363,8 +365,6 @@ def visit_value_map(critic, counter, env, nan_mask=None):
                     goal=np.broadcast_to(states[None, :, :], (n, n, dim)),
                 )
             )
-        except Exception:
-            return None
         finally:
             if hasattr(critic, "train"):
                 critic.train()

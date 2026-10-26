@@ -1566,12 +1566,13 @@ def draw_bars(
         ax.invert_yaxis()
 
 
-def error_shade_plot(ax, data, stepsize, smoothing_window=0, x_start=0, **kwargs):
-    """Plot the mean across seeds with a shaded 95% confidence interval. Takes
-    standard pyplot.plot arguments (color, linestyle, linewidth, label, ...)."""
+def error_shade_plot(ax, data, x, smoothing_window=0, **kwargs):
+    """Plot the mean across seeds with a shaded 95% confidence interval against
+    `x`, the training step of each point. Takes standard pyplot.plot arguments
+    (color, linestyle, linewidth, label, ...)."""
 
     y, error, _alive = ci_bounds(data)
-    x = [x_start + stepsize * step for step in range(len(y))]
+    x = np.asarray(x, dtype=float)
     if smoothing_window > 0:
         y = smooth(y, smoothing_window)
         error = smooth(error, smoothing_window)
@@ -1767,11 +1768,11 @@ def vega_field_name(labels, key):
     return labels[key].replace(".", "_")
 
 
-# The columns a cell is decoded from: where a run's seed is recorded, and the two
-# hyperparameters that turn a point index into a training step.
+# The columns a cell is decoded from: where a run's seed is recorded, how many
+# steps it trained for, and the training step each of its points was recorded at.
 SEED = ("seed", "experiment.rng_seed")
 STEPS = ("hyperparameter", "experiment.training_steps")
-POINTS = ("hyperparameter", "experiment.testing_points")
+STEPS_STAT = ("statistic", "steps")
 
 # The columns every script that reads a run needs by name. `environment` and
 # `algorithm` hold the label assign_configs wrote rather than anything a run
@@ -1927,15 +1928,15 @@ _MIXED_AXIS_WARNED: set = set()
 
 def series_of(frame, stat):
     """Decode the runs of one cell into a curve per seed and return
-    (values, stepsize, training steps, seed ids), or None when there is nothing
+    (values, x, training steps, seed ids), or None when there is nothing
     plottable.
 
     `values` is a DataFrame with one column per seed and one row per recorded
-    point, `stepsize` the training steps between two points, and `seed ids` names
-    the columns in order. A statistic is stored as a JSON array per run, so this
-    is the step between what a cell holds and what can be drawn from it: whatever
-    goes in a cell -- a mean and its band, one seed's line, an area -- is computed
-    from these columns.
+    point, `x` the recorded training step of each point (the "steps" statistic
+    of the longest run), and `seed ids` names the columns in order. A statistic
+    is stored as a JSON array per run, so this is the step between what a cell
+    holds and what can be drawn from it: whatever goes in a cell -- a mean and
+    its band, one seed's line, an area -- is computed from these columns.
 
     Returns None rather than raising when the statistic is not a curve at all: a
     device name, a git hash, a job id and a single number are all recorded the
@@ -1945,13 +1946,12 @@ def series_of(frame, stat):
     for the same reason it cannot be drawn."""
 
     stat_col = ("statistic", stat)
-    if any(c not in frame.columns for c in (stat_col, STEPS, POINTS)):
+    if any(c not in frame.columns for c in (stat_col, STEPS_STAT, STEPS)):
         return None
-    # Read before the deduplication below, which reorders the frame: these say
-    # what the cell was run at, and taking them from whichever row ends up first
-    # afterwards would scale the x axis by another run's training length.
+    # Read before the deduplication below, which reorders the frame: this says
+    # what the cell was run at, and taking it from whichever row ends up first
+    # afterwards would report another run's training length.
     recorded_steps = frame[STEPS].dropna()
-    recorded_points = frame[POINTS].dropna()
     if SEED in frame.columns:
         # Only among the rows that record one: drop_duplicates counts two NaNs as
         # the same value, so runs recording no seed would collapse into one --
@@ -1962,8 +1962,9 @@ def series_of(frame, stat):
             frame[seeded].drop_duplicates(subset=[SEED]),
             frame[~seeded],
         ])
-    valid = frame[stat_col].notna()
+    valid = frame[stat_col].notna() & frame[STEPS_STAT].notna()
     raw = frame.loc[valid, stat_col]
+    raw_x = frame.loc[valid, STEPS_STAT]
     seeds = (
         frame.loc[valid, SEED].to_list()
         if SEED in frame.columns
@@ -1971,6 +1972,7 @@ def series_of(frame, stat):
     )
     try:
         arrays = [json.loads(a) for a in raw]
+        x_arrays = [np.asarray(json.loads(a), dtype=float) for a in raw_x]
     except (ValueError, TypeError):
         return None
     # Not every statistic is a curve: a device name, a git hash, a job id or a
@@ -1983,42 +1985,50 @@ def series_of(frame, stat):
         return None
     keep = [bool(np.any(np.isfinite(a))) for a in arrays]
     arrays = [a for a, k in zip(arrays, keep) if k]
+    x_arrays = [a for a, k in zip(x_arrays, keep) if k]
     seeds = [s for s, k in zip(seeds, keep) if k]
     if not arrays:
         return None
-    # A column that is present but null for every row of the cell, and a testing
-    # points of zero, are both a cell whose points cannot be placed on a step
-    # axis. Returning None puts them where every other undecodable cell goes,
-    # rather than raising out of the middle of a figure.
-    if recorded_steps.empty or recorded_points.empty:
-        return None
-    steps = float(recorded_steps.iloc[0])
-    points = float(recorded_points.iloc[0])
-    if not points:
-        return None
-    # Runs of one cell that trained for different lengths, or were tested a
-    # different number of times. The first is taken, so every seed of the cell is
-    # placed on that one's step axis and the rest are drawn at the wrong x. It is
-    # the cell a caller has already warned about when it holds runs differing in
-    # a key it does not lay out -- but the step axis is the consequence that
-    # reaches the figure, so it is said here, where the value is chosen.
-    #
-    # Said once per disagreement, not once per cell: series_of runs for every
-    # cell and every statistic, and a sweep where this happens at all has it in
-    # all of them.
-    for column, taken in ((recorded_steps, steps), (recorded_points, points)):
-        if column.nunique() > 1:
+    # The x axis is the recorded steps of the longest run; a shorter run is drawn
+    # against its prefix, which is where its points belong when it stopped early.
+    # A run whose recorded steps are not that prefix is drawn at the wrong x. The
+    # message names no cell, so it is said once per process.
+    x = x_arrays[int(np.argmax([len(a) for a in arrays]))]
+    for a in x_arrays:
+        if len(a) > len(x) or not np.array_equal(a, x[:len(a)]):
             message = (
-                f"WARNING: the runs of one cell disagree on {column.name[1]} "
-                f"({sorted(set(column))}); {taken:g} is the one every seed of "
-                f"it is drawn against."
+                "WARNING: the runs of one cell disagree on the recorded steps "
+                "of their points; the steps of the longest run are the ones "
+                "every seed of it is drawn against."
             )
             if message not in _MIXED_AXIS_WARNED:
                 _MIXED_AXIS_WARNED.add(message)
                 print(message)
+            break
+    # A training_steps column that is present but null for every row of the
+    # cell is a cell whose training length is unknown. Returning None puts it
+    # where every other undecodable cell goes, rather than raising out of the
+    # middle of a figure.
+    if recorded_steps.empty:
+        return None
+    steps = float(recorded_steps.iloc[0])
+    # Runs of one cell that trained for different lengths. The first is taken as
+    # the cell's training length, which callers use as the extent of the x axis.
+    # Said once per disagreement, not once per cell: series_of runs for every
+    # cell and every statistic, and a sweep where this happens at all has it in
+    # all of them.
+    if recorded_steps.nunique() > 1:
+        message = (
+            f"WARNING: the runs of one cell disagree on {recorded_steps.name[1]} "
+            f"({sorted(set(recorded_steps))}); {steps:g} is taken as the cell's "
+            f"training length."
+        )
+        if message not in _MIXED_AXIS_WARNED:
+            _MIXED_AXIS_WARNED.add(message)
+            print(message)
     return (
         pd.concat([pd.Series(a) for a in arrays], axis=1),
-        steps / points,
+        x,
         steps,
         seeds,
     )

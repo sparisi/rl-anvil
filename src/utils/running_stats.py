@@ -23,7 +23,7 @@ class RunningStandardization(ABC):
         assert 0.0 < alpha < 1.0
         self._alpha = alpha
 
-        self._n = 1
+        self._n = np.ones(self._shape)
         self._m = np.zeros(self._shape)
         self._s = np.ones(self._shape)
 
@@ -32,7 +32,7 @@ class RunningStandardization(ABC):
         Reset the mean and standard deviation.
         """
 
-        self._n = 1
+        self._n = np.ones(self._shape)
         self._m = np.zeros(self._shape)
         self._s = np.ones(self._shape)
 
@@ -46,10 +46,13 @@ class RunningStandardization(ABC):
         """
 
         value = np.atleast_2d(value).reshape(-1, *self._shape)
-        batch_size = len(value)
-        self._n += batch_size
-        alpha = max(batch_size / self._n, self._alpha)
-        batch_mean = np.nanmean(value, 0, keepdims=True)
+        # Counts, means and weights are per dimension and use only non-NaN
+        # samples. A dimension with only NaNs gets a zero weight and a zero
+        # contribution, so its statistics stay unchanged.
+        batch_size = np.sum(~np.isnan(value), 0)
+        self._n = self._n + batch_size
+        alpha = np.where(batch_size > 0, np.maximum(batch_size / self._n, self._alpha), 0.0)
+        batch_mean = np.nansum(value, 0, keepdims=True) / np.maximum(batch_size, 1)
         batch_m2 = np.nansum((value - batch_mean) ** 2, 0, keepdims=True)
         new_m = (1 - alpha) * self._m + alpha * batch_mean
         new_s = self._s + batch_m2 + batch_size * (batch_mean - self._m) * (batch_mean - new_m)
@@ -86,13 +89,13 @@ class RunningStandardization(ABC):
     def n_samples(self):
         """
         Returns:
-            The number of samples observed so far.
+            The number of non-NaN samples observed so far, per dimension.
         """
 
         return self._n
 
     def copy_from(self, source):
-        self._n = source._n
+        self._n = source._n.copy()
         self._m = source._m.copy()
         self._s = source._s.copy()
         self._shape = source._shape
@@ -151,24 +154,28 @@ class StreamingQuantiles:
         # The bracket below is a probability, while the estimates carry the units
         # of the data, so the step is scaled by the current spread. Without this a
         # fixed lr moves a wide dimension far too slowly and a narrow one far too
-        # fast. Scaled by the batch size as well, so that one update with a
-        # batch moves the estimates as far as one update per sample would. The
-        # product of lr and batch size is capped at 1, so that one update moves an
-        # estimate by at most the interquartile range times its quantile error.
-        step = np.maximum(self._q75 - self._q25, 1e-8) * min(self._lr * value.shape[0], 1.0)
+        # fast. Scaled by the number of non-NaN samples in each dimension as well,
+        # so that one update with a batch moves the estimates as far as one update
+        # per sample would. The product of lr and sample count is capped at 1, so
+        # that one update moves an estimate by at most the interquartile range
+        # times its quantile error. A dimension with only NaNs gets a zero step.
+        n_valid = np.sum(~np.isnan(value), axis=0)
+        step = np.maximum(self._q75 - self._q25, 1e-8) * np.minimum(self._lr * n_valid, 1.0)
+        n_valid = np.maximum(n_valid, 1)
 
-        # Calculate what fraction of the batch is above the current estimates:
-        # np.mean(value > q, axis=0) gives a value between 0 and 1
+        # Calculate what fraction of the non-NaN samples is above the current
+        # estimates: NaN > q is False, so the count of samples above excludes
+        # NaNs, and dividing by n_valid gives a value between 0 and 1
 
         # Q25: we want 75% of data to be above it.
         # If mean(above) > 0.75, estimate is too low, move UP.
-        self._q25 += step * (np.mean(value > self._q25, axis=0) - 0.75)
+        self._q25 += step * (np.sum(value > self._q25, axis=0) / n_valid - 0.75)
 
         # Q50: we want 50% above
-        self._q50 += step * (np.mean(value > self._q50, axis=0) - 0.50)
+        self._q50 += step * (np.sum(value > self._q50, axis=0) / n_valid - 0.50)
 
         # Q75: we want 25% above
-        self._q75 += step * (np.mean(value > self._q75, axis=0) - 0.25)
+        self._q75 += step * (np.sum(value > self._q75, axis=0) / n_valid - 0.25)
 
     @property
     def iqr(self):

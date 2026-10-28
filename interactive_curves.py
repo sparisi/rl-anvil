@@ -1,4 +1,4 @@
-"""Training curves from a pre-built results.gzip, as one interactive page.
+"""Training curves from a pre-built results.parquet, as one interactive page.
 
 Writes <folder>/plots/<sweep>_curves.html: a self-contained Vega-Lite page with a
 tab per environment and, inside a tab, a nested grid of subplots.
@@ -115,6 +115,8 @@ from src.utils.aggregate import (
     probability_of_improvement,
     stack_runs,
 )
+from src.utils.id import decode_stat
+from src.utils.misc import make_vprint
 from src.utils.plot import (
     ALGO,
     ENV,
@@ -122,7 +124,9 @@ from src.utils.plot import (
     SEED,
     TIME,
     SweepLayout,
+    add_config_group_args,
     apply_filters,
+    area_over_span,
     assign_configs,
     ci_bounds,
     declared_environments,
@@ -144,7 +148,7 @@ from src.utils.plot import (
     vega_field_name,
     write_missing_runs_script,
 )
-from src.utils.sweep import load_sweep
+from src.utils.sweep import expand_sweep, load_sweep
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -153,17 +157,8 @@ parser.add_argument(
     metavar="DIR",
     help="Data directory to read.",
 )
-parser.add_argument("-g", "--gzip", default="results.gzip")
-parser.add_argument(
-    "-e", "--environments",
-    default="configs/environment",
-    help="Directory of environment YAMLs.",
-)
-parser.add_argument(
-    "-a", "--algorithms",
-    default="configs/algorithm",
-    help="Directory of algorithm YAMLs.",
-)
+parser.add_argument("--parquet", default="results.parquet")
+add_config_group_args(parser)
 parser.add_argument(
     "--stats",
     nargs="+",
@@ -273,11 +268,7 @@ unreadable_times = 0
 ragged_curves = set()
 
 
-def vprint(*a):
-    """Print only under --verbose."""
-
-    if args.verbose:
-        print(*a)
+vprint = make_vprint(args.verbose)
 
 
 def axes_of(block, row_vals, col_vals, curve_vals):
@@ -354,7 +345,7 @@ def rows_of(frame, stat):
         ]
     # Scored once and used twice: the bar is the average of these, and the violin
     # is their density.
-    scores = scores_of(series)
+    scores = scores_of(series, x)
     count_ragged(frame, scores)
     # One row per curve for the bars: the same area the --auc figure draws, so the
     # two agree, and it is over every seed by construction.
@@ -407,11 +398,12 @@ def iqm_rows(series, x):
     ]
 
 
-def scores_of(series):
+def scores_of(series, x):
     """The three scores of every seed of a curve, one dict per run.
 
-    `score_auc` is the mean over the curve, i.e. its area divided by the span it
-    covers, which rewards getting there early as well as ending high;
+    `score_auc` is the area under the curve over the recorded steps `x`, divided
+    by the span it covers, which rewards getting there early as well as ending
+    high;
     `score_final` is where it ended;
     `score_max` its best point.
     All three are carried, and the page picks between them -- they are three
@@ -421,16 +413,17 @@ def scores_of(series):
     for count_ragged; it is stripped before the scores reach a row.
 
     Non-finite points are dropped rather than propagated: one inf anywhere in a
-    curve would carry through the mean and end up as an axis limit. A seed with no
+    curve would carry through the area and end up as an axis limit. A seed with no
     finite point at all scores nothing and is left out."""
 
     scores = []
     for j in range(series.shape[1]):
         values = series.iloc[:, j].to_numpy(dtype=float)
-        values = values[np.isfinite(values)]
-        if len(values):
+        finite = np.isfinite(values)
+        if finite.any():
+            values = values[finite]
             scores.append({
-                "score_auc": float(values.mean()),
+                "score_auc": area_over_span(values, x[finite]),
                 "score_max": float(values.max()),
                 "score_final": float(values[-1]),
                 "_n_finite": int(len(values)),
@@ -441,7 +434,7 @@ def scores_of(series):
 def count_ragged(frame, scores):
     """Note a curve whose seeds were scored over different numbers of points.
 
-    `score_auc` is the mean over the points a seed HAS, so a seed that stopped
+    `score_auc` is taken over the points a seed HAS, so a seed that stopped
     early is scored over its own span rather than over the training run. That is
     not a like-for-like comparison with the seeds beside it -- a run still
     climbing when it died scores higher for having died -- and nothing on the
@@ -459,11 +452,11 @@ def auc_of(scores):
     """Reduce a cell's seeds to one number and return (mean area under the curve,
     half-width of its 95% confidence interval), or None when no seed has a curve.
 
-    `scores` is what scores_of returned for the cell. The area is divided by the
-    span it covers, so it comes out in the units of the y axis -- the average
-    value over training rather than a number that grows with the number of steps.
-    With evenly spaced points that is the mean of the curve, which also skips the
-    gaps a seed that died early leaves behind (see count_ragged).
+    `scores` is what scores_of returned for the cell. The area is the trapezoid
+    rule over the recorded steps of the points a seed has, divided by the span
+    they cover, so it comes out in the units of the y axis -- the average value
+    over training rather than a number that grows with the number of steps. A
+    seed that died early is scored over its own span (see count_ragged).
 
     Taken per seed and then averaged, so the interval says how much the seeds
     disagreed, the same thing the shaded band around the curves says."""
@@ -506,19 +499,13 @@ def time_of(frame):
         ])
     minutes = []
     for raw in frame[TIME].dropna():
-        numeric = isinstance(raw, (int, float, np.integer, np.floating))
-        if numeric and not isinstance(raw, bool):
-            value = float(raw)
-        else:
-            try:
-                decoded = json.loads(raw)
-            except (ValueError, TypeError):
-                decoded = None
-            value = (
-                float(decoded)
-                if isinstance(decoded, (int, float)) and not isinstance(decoded, bool)
-                else None
-            )
+        decoded = decode_stat(raw)
+        value = (
+            float(decoded)
+            if isinstance(decoded, (int, float, np.integer, np.floating))
+            and not isinstance(decoded, bool)
+            else None
+        )
         if value is None or not np.isfinite(value):
             # One count for both: a value that did not parse and an infinity are
             # equally absent from the bars.
@@ -551,17 +538,13 @@ def declared_rows(df_env, env_stem):
     environment, so combinations belonging to another environment are skipped
     rather than counted as missing here."""
 
-    for entry in sweep:
-        keys = list(global_sweep) + [k for k in entry if k not in global_sweep]
-        declared = [entry.get(k, global_sweep.get(k)) for k in keys]
-        for combo in itertools.product(*declared):
-            hp = dict(zip(keys, combo))
-            if "environment" in hp and value_str(hp["environment"]) != env_stem:
-                continue
-            # One value per key here, not a list of alternatives -- and a value
-            # can itself be a list, so wrap before selecting.
-            mask, _ = select_rows(df_env, {k: [v] for k, v in hp.items()})
-            yield hp, df_env[mask]
+    for hp in expand_sweep(global_sweep, sweep):
+        if "environment" in hp and value_str(hp["environment"]) != env_stem:
+            continue
+        # One value per key here, not a list of alternatives -- and a value
+        # can itself be a list, so wrap before selecting.
+        mask, _ = select_rows(df_env, {k: [v] for k, v in hp.items()})
+        yield hp, df_env[mask]
 
 
 def algorithm_of(frame):
@@ -1690,38 +1673,55 @@ def build_spec(
     # are placed IN training steps, across the run they summarise, and two
     # invisible points per block hold the domain at exactly that span whichever
     # mode is showing.
-    x_max = float(long_df["x"].max()) if long_df["x"].notna().any() else 1.0
-    if x_max <= 0:
-        x_max = 1.0
+    #
+    # The span runs from the first step the statistic is recorded at to the
+    # last, and is taken per statistic: one first recorded after the run's first
+    # logged step starts later than the others. The anchors carry their
+    # statistic and the positions below read the statistic dropdown, so the
+    # domain and everything placed in it follow the statistic on screen.
+    curve_x = long_df[long_df["x"].notna() & long_df["statistic"].notna()]
+    spans = {}
+    for stat, g in curve_x.groupby("statistic"):
+        lo, hi = float(g["x"].min()), float(g["x"].max())
+        spans[stat] = (lo, hi if hi > lo else lo + 1.0)
     first_cell = long_df.groupby("_block")[["_row", "_col"]].first()
     anchors = [
-        {"_block": int(b), "_row": row, "_col": col, "_anchor": 1, "x": x}
+        {"_block": int(b), "_row": row, "_col": col, "_anchor": 1, "statistic": stat, "x": x}
         for b, (row, col) in first_cell.iterrows()
-        for x in (0.0, x_max)
+        for stat, span in spans.items()
+        for x in span
     ]
+    # The start and the length of the span of the statistic on screen, as
+    # expressions.
+    x_lo = f"{json.dumps({s: lo for s, (lo, _) in spans.items()})}[p_statistic]"
+    x_len = f"{json.dumps({s: hi - lo for s, (lo, hi) in spans.items()})}[p_statistic]"
+    # Neither zero nor rounded out to a nice number: the domain is the span the
+    # anchors hold.
+    x_scale = {"zero": False, "nice": False}
 
     # The span is cut into one slot per curve INDEX rather than per curve present,
     # so a cell missing a curve leaves a gap instead of shifting the rest along,
     # and every block puts the same curve in the same place. A bar is 80% of its
     # slot: wide enough to read, never wide enough to touch its neighbour.
-    bar_step = x_max / (int(long_df["_curve_i"].max()) + 2)
+    n_slots = int(long_df["_curve_i"].max()) + 2
+    bar_step = f"({x_len}) / {n_slots}"
 
     def bar_at(side):
         """The x of a bar's left edge, middle or right edge, as an expression."""
 
-        return f"{bar_step} * (datum._curve_i + 1) + {side * 0.4 * bar_step}"
+        return f"({x_lo}) + {bar_step} * (datum._curve_i + 1 + {side * 0.4})"
 
     # The violin stands in the middle of the same span, four fifths of it wide at
     # its widest, with the quartile box on its centre line.
-    v_mid = x_max / 2
-    v_half = 0.4 * x_max
+    v_mid = f"(({x_lo}) + ({x_len}) / 2)"
+    v_half = f"0.4 * ({x_len})"
     # The runs are scattered across the middle of it rather than stacked on the
     # centre line, so runs that scored alike stay countable. The offsets are the
     # golden-ratio sequence over (curve, run) rather than random(): a Vega
     # expression is re-evaluated on every signal change, and dots that jump when
     # a dropdown moves read as new data.
     jitter = (
-        f"{v_mid} + {0.3 * x_max} * ((((datum._curve_i * 7 + datum._run)"
+        f"{v_mid} + 0.3 * ({x_len}) * ((((datum._curve_i * 7 + datum._run)"
         f" * 0.6180339887498949) % 1) - 0.5)"
     )
     # What the annotation reports: tune within this configuration and keep the
@@ -1970,6 +1970,7 @@ def build_spec(
                 "field": "x",
                 "type": "quantitative",
                 "title": "Training steps",
+                "scale": x_scale,
                 "axis": {
                     "labelExpr": f"{curve_mode} ? datum.label : ''",
                 },
@@ -2176,6 +2177,7 @@ def build_spec(
                             "field": "_bar_lo",
                             "type": "quantitative",
                             "title": None,
+                            "scale": x_scale,
                         },
                         x2={"field": "_bar_hi"},
                         # Where the bar starts (see the floor in the main loop).
@@ -2191,6 +2193,7 @@ def build_spec(
                             "field": "_bar_mid",
                             "type": "quantitative",
                             "title": None,
+                            "scale": x_scale,
                         },
                         color={"value": "black"},
                     ),
@@ -2224,6 +2227,7 @@ def build_spec(
                             "field": "_bar_lo",
                             "type": "quantitative",
                             "title": None,
+                            "scale": x_scale,
                         },
                         x2={"field": "_bar_hi"},
                         y2={"field": "time_base"},
@@ -2238,6 +2242,7 @@ def build_spec(
                             "field": "_bar_mid",
                             "type": "quantitative",
                             "title": None,
+                            "scale": x_scale,
                         },
                         color={"value": "black"},
                     ),
@@ -2284,6 +2289,7 @@ def build_spec(
                                         "field": "x",
                                         "type": "quantitative",
                                         "title": None,
+                                        "scale": x_scale,
                                     },
                                     "y": {
                                         "field": "ci_lo",
@@ -2305,6 +2311,7 @@ def build_spec(
                                         "field": "x",
                                         "type": "quantitative",
                                         "title": None,
+                                        "scale": x_scale,
                                     },
                                     "y": {
                                         "field": "mean",
@@ -2338,13 +2345,14 @@ def build_spec(
                             {"filter": auc_all_filter},
                             # One bar, in the middle of the span the others share.
                             {
-                                "calculate": f"{v_mid} - {0.4 * bar_step}",
+                                "calculate": f"{v_mid} - 0.4 * {bar_step}",
                                 "as": "_bar_lo",
                             },
                             {
-                                "calculate": f"{v_mid} + {0.4 * bar_step}",
+                                "calculate": f"{v_mid} + 0.4 * {bar_step}",
                                 "as": "_bar_hi",
                             },
+                            {"calculate": v_mid, "as": "_bar_mid"},
                         ],
                         "layer": [
                             {
@@ -2360,6 +2368,7 @@ def build_spec(
                                         "field": "_bar_lo",
                                         "type": "quantitative",
                                         "title": None,
+                                        "scale": x_scale,
                                     },
                                     "x2": {"field": "_bar_hi"},
                                     "y": {
@@ -2386,7 +2395,12 @@ def build_spec(
                                     "color": "black",
                                 },
                                 "encoding": {
-                                    "x": {"datum": v_mid},
+                                    "x": {
+                                        "field": "_bar_mid",
+                                        "type": "quantitative",
+                                        "title": None,
+                                        "scale": x_scale,
+                                    },
                                     "y": {
                                         "field": "auc_lo",
                                         "type": "quantitative",
@@ -2405,13 +2419,14 @@ def build_spec(
                         "transform": [
                             {"filter": time_all_filter},
                             {
-                                "calculate": f"{v_mid} - {0.4 * bar_step}",
+                                "calculate": f"{v_mid} - 0.4 * {bar_step}",
                                 "as": "_bar_lo",
                             },
                             {
-                                "calculate": f"{v_mid} + {0.4 * bar_step}",
+                                "calculate": f"{v_mid} + 0.4 * {bar_step}",
                                 "as": "_bar_hi",
                             },
+                            {"calculate": v_mid, "as": "_bar_mid"},
                         ],
                         "layer": [
                             {
@@ -2427,6 +2442,7 @@ def build_spec(
                                         "field": "_bar_lo",
                                         "type": "quantitative",
                                         "title": None,
+                                        "scale": x_scale,
                                     },
                                     "x2": {"field": "_bar_hi"},
                                     "y": {
@@ -2453,7 +2469,12 @@ def build_spec(
                                     "color": "black",
                                 },
                                 "encoding": {
-                                    "x": {"datum": v_mid},
+                                    "x": {
+                                        "field": "_bar_mid",
+                                        "type": "quantitative",
+                                        "title": None,
+                                        "scale": x_scale,
+                                    },
                                     "y": {
                                         "field": "time_lo",
                                         "type": "quantitative",
@@ -2465,18 +2486,25 @@ def build_spec(
                             },
                         ],
                     },
-                    # The two ends of the training run, drawn as nothing. They are
-                    # here for the x scale alone (see `anchors`), in every mode
-                    # and past every dropdown, so the domain is the same span
-                    # whichever mode is showing and whichever curves a block has.
+                    # The two ends of the statistic's span, drawn as nothing. They
+                    # are here for the x scale alone (see `anchors`), in every mode
+                    # and past every dropdown but the statistic, so the domain is
+                    # the same span whichever mode is showing and whichever curves
+                    # a block has.
                     {
-                        "transform": [{"filter": "datum._anchor === 1"}],
+                        "transform": [
+                            {
+                                "filter": "datum._anchor === 1"
+                                          " && datum.statistic === p_statistic",
+                            },
+                        ],
                         "mark": {"type": "point", "opacity": 0},
                         "encoding": {
                             "x": {
                                 "field": "x",
                                 "type": "quantitative",
                                 "title": None,
+                                "scale": x_scale,
                             },
                         },
                     },
@@ -2540,6 +2568,7 @@ def build_spec(
                                 "field": "_v_lo",
                                 "type": "quantitative",
                                 "title": None,
+                                "scale": x_scale,
                             },
                             "x2": {"field": "_v_hi"},
                             "color": {"value": "#7f7f7f"},
@@ -2563,6 +2592,9 @@ def build_spec(
                                 ],
                                 "groupby": [],
                             },
+                            {"calculate": v_mid, "as": "_v_mid"},
+                            {"calculate": f"{v_mid} - 0.035 * ({x_len})", "as": "_m_lo"},
+                            {"calculate": f"{v_mid} + 0.035 * ({x_len})", "as": "_m_hi"},
                         ],
                         "layer": [
                             {
@@ -2580,7 +2612,12 @@ def build_spec(
                                         "axis": y_axis,
                                     },
                                     "y2": {"field": "_q3"},
-                                    "x": {"datum": v_mid},
+                                    "x": {
+                                        "field": "_v_mid",
+                                        "type": "quantitative",
+                                        "title": None,
+                                        "scale": x_scale,
+                                    },
                                 },
                             },
                             {
@@ -2597,8 +2634,13 @@ def build_spec(
                                         "scale": y_scale,
                                         "axis": y_axis,
                                     },
-                                    "x": {"datum": v_mid - 0.035 * x_max},
-                                    "x2": {"datum": v_mid + 0.035 * x_max},
+                                    "x": {
+                                        "field": "_m_lo",
+                                        "type": "quantitative",
+                                        "title": None,
+                                        "scale": x_scale,
+                                    },
+                                    "x2": {"field": "_m_hi"},
                                 },
                             },
                         ],
@@ -2630,6 +2672,7 @@ def build_spec(
                             "field": "_dot_x",
                             "type": "quantitative",
                             "title": None,
+                            "scale": x_scale,
                         },
                         color={"value": "#262626"},
                     ),
@@ -2772,9 +2815,9 @@ def build_spec(
     }
 
 
-gzip_path = os.path.join(args.folder, args.gzip)
-df = pd.read_parquet(gzip_path)
-vprint(f"\nLoaded gzip from: {gzip_path}")
+parquet_path = os.path.join(args.folder, args.parquet)
+df = pd.read_parquet(parquet_path)
+vprint(f"\nLoaded parquet file from: {parquet_path}")
 if all(isinstance(c, str) and c.startswith("(") for c in df.columns):
     df.columns = pd.MultiIndex.from_tuples([literal_eval(c) for c in df.columns])
 
@@ -2823,8 +2866,8 @@ for pairs, flag, keep in (
 
 missing_runs = {}
 
-# Only the environments the sweep declares. The gzip holds whatever ran in the
-# folder, and a sweep that names two of them is a figure about those two.
+# Only the environments the sweep declares. The parquet file holds whatever ran
+# in the folder, and a sweep that names two of them is a figure about those two.
 #
 # An entry that declares no environment of its own and finds none in
 # global_sweep constrains none of them, so there is nothing to filter by and the
@@ -2954,8 +2997,8 @@ for env in envs_present:
     if args.stats:
         # `time` is ignored rather than reported absent -- it is drawn by its own
         # mode rather than selected here -- but only where the data records it:
-        # a name that is nowhere in the gzip should still be reported, whichever
-        # name it is.
+        # a name that is nowhere in the parquet file should still be reported,
+        # whichever name it is.
         records_time = TIME in df_env.columns
         absent = [
             s for s in args.stats

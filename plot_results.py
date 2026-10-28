@@ -1,4 +1,4 @@
-"""Curve figures from a pre-built results.gzip, laid out by a plot config.
+"""Curve figures from a pre-built results.parquet, laid out by a plot config.
 
 A plot config names the configurations to draw and the environments to draw them
 over (see configs/plots/example.yaml). Every key of an entry but `plot.label` is
@@ -56,7 +56,6 @@ Example
 
 import argparse
 import itertools
-import json
 import os
 import sys
 from ast import literal_eval
@@ -80,10 +79,14 @@ from src.utils.aggregate import (
     probability_of_improvement,
     stack_runs,
 )
+from src.utils.id import decode_stat
+from src.utils.misc import make_vprint
 from src.utils.plot import (
     PLOT_CONFIG_DIR,
     SEED,
     TIME,
+    add_config_group_args,
+    area_over_span,
     assign_groups,
     composed_mask,
     detect_precision,
@@ -125,9 +128,9 @@ parser.add_argument(
     "-f", "--folder",
     required=True,
     metavar="DIR",
-    help="Data directory holding the gzip.",
+    help="Data directory holding the parquet file.",
 )
-parser.add_argument("-g", "--gzip", default="results.gzip")
+parser.add_argument("--parquet", default="results.parquet")
 parser.add_argument(
     "-p", "--plot_config",
     required=True,
@@ -143,16 +146,7 @@ parser.add_argument(
          "<root>/curves/<plot config>, so one data directory holds the output of "
          "every plotting script without one overwriting another.",
 )
-parser.add_argument(
-    "-a", "--algorithms",
-    default="configs/algorithm",
-    help="Directory of algorithm YAMLs.",
-)
-parser.add_argument(
-    "-e", "--environments",
-    default="configs/environment",
-    help="Directory of environment YAMLs.",
-)
+add_config_group_args(parser)
 parser.add_argument(
     "--stats",
     nargs="+",
@@ -268,19 +262,14 @@ if not any(getattr(args, f) for f in FIGURES):
         setattr(args, f, True)
 
 
-def vprint(*a):
-    """Print only under --verbose."""
-
-    if args.verbose:
-        print(*a)
-
+vprint = make_vprint(args.verbose)
 
 plot_cfgs = load_plot_configs(args.plot_config)
 vprint(f"\n{len(plot_cfgs)} plot config(s): {[n for n, _, _ in plot_cfgs]}")
 
-gzip_path = os.path.join(args.folder, args.gzip)
-df = pd.read_parquet(gzip_path)
-vprint(f"\nLoaded gzip from: {gzip_path}")
+parquet_path = os.path.join(args.folder, args.parquet)
+df = pd.read_parquet(parquet_path)
+vprint(f"\nLoaded parquet file from: {parquet_path}")
 if all(isinstance(c, str) and c.startswith("(") for c in df.columns):
     df.columns = pd.MultiIndex.from_tuples([literal_eval(c) for c in df.columns])
 
@@ -342,12 +331,10 @@ def bar_values(decoded):
 
     Each is taken per seed and then summarized, so the interval says how much the
     seeds disagreed -- the same thing the band around the curve says. The area is
-    the mean over the curve, i.e. divided by the span it covers, so it is in the
-    units of the y axis and configurations trained for different lengths stay
-    comparable."""
+    the one run_scores computes."""
 
     series, x, _steps, _seeds = decoded
-    peaks, steps, areas = [], [], []
+    peaks, steps = [], []
     for column in series.columns:
         run = series[column].to_numpy(dtype=float)
         finite = run[np.isfinite(run)]
@@ -357,11 +344,10 @@ def bar_values(decoded):
         # nanargmax raises on an all-NaN run, which the guard above has already
         # dropped; -inf stands in for the NaNs so they can never be the peak.
         steps.append(float(x[int(np.argmax(np.nan_to_num(run, nan=-np.inf)))]))
-        areas.append(float(finite.mean()))
     return {
         "peak": summarize(peaks),
         "steps": summarize(steps),
-        "auc": summarize(areas),
+        "auc": summarize(run_scores(decoded, "auc")),
     }
 
 
@@ -452,18 +438,21 @@ RLIABLE_SCORES = {"final": "Final", "auc": "AUC"}
 
 def run_scores(decoded, kind):
     """One score per seed of a configuration: the mean of the last
-    --rliable_last_k finite points of its curve (`final`), or the mean of the
-    whole curve (`auc`, the area bar_values reports)."""
+    --rliable_last_k finite points of its curve (`final`), or its area over the
+    recorded steps divided by their span (`auc`, the area bar_values reports)."""
 
-    series = decoded[0]
+    series, x = decoded[0], decoded[1]
     scores = []
     for column in series.columns:
         run = series[column].to_numpy(dtype=float)
-        finite = run[np.isfinite(run)]
+        kept = np.isfinite(run)
+        finite = run[kept]
         if not finite.size:
             continue
-        kept = finite if kind == "auc" else finite[-args.rliable_last_k:]
-        scores.append(float(kept.mean()))
+        if kind == "auc":
+            scores.append(area_over_span(finite, x[kept]))
+        else:
+            scores.append(float(finite[-args.rliable_last_k:].mean()))
     return scores
 
 
@@ -503,11 +492,12 @@ def draw_iqm_curve(drawing, name, present, stat, decoded_of, drawn):
     --iqm_points points along training, with its stratified-bootstrap band.
     Returns the number of figures written.
 
-    A point is placed by the fraction of training it sits at, so environments
+    A point is placed by the fraction it sits at of the span from the first step
+    the statistic is recorded at to the end of training, so environments
     recording a different number of points are read at the same fraction. The x
-    axis is in steps when every run trained for the same number of them, and in
-    the fraction of training otherwise. A seed with no value at one of the points
-    is dropped."""
+    axis is in steps when every environment shares that span, and in the
+    fraction of it otherwise. A seed with no value at one of the points is
+    dropped."""
 
     bounds = norm_bounds(drawing, present, stat)
     if bounds is None:
@@ -516,17 +506,18 @@ def draw_iqm_curve(drawing, name, present, stat, decoded_of, drawn):
     low, high = bounds
     fractions = np.linspace(0.0, 1.0, args.iqm_points)
 
-    data, steps = {}, set()
+    data, spans = {}, set()
     for i in complete_entries(drawing, present, stat, decoded_of, drawn):
         per_env = []
         for env in present:
             series, x, env_steps, _seeds = decoded_of[(env, i)]
             values = series.to_numpy(dtype=float).T
-            # The point recorded closest to each fraction of the training steps
-            index = np.abs(x[None, :] - (fractions * env_steps)[:, None]).argmin(axis=1)
+            # The point recorded closest to each fraction of the span
+            at = x[0] + fractions * (env_steps - x[0])
+            index = np.abs(x[None, :] - at[:, None]).argmin(axis=1)
             picked = values[:, index]
             per_env.append(picked[np.all(np.isfinite(picked), axis=1)])
-            steps.add(env_steps)
+            spans.add((float(x[0]), env_steps))
         if any(len(p) == 0 for p in per_env):
             continue
         # (points, runs, environments): the metrics reduce the last two axes.
@@ -545,7 +536,11 @@ def draw_iqm_curve(drawing, name, present, stat, decoded_of, drawn):
         )
     }
 
-    x = fractions * steps.pop() if len(steps) == 1 else fractions
+    if len(spans) == 1:
+        start, end = spans.pop()
+        x = start + fractions * (end - start)
+    else:
+        x = fractions
     ylabel = drawing.stat_labels.get(stat, stat)
     fig, axs = plt.subplots(
         1, 1,
@@ -577,8 +572,8 @@ def draw_iqm_curve(drawing, name, present, stat, decoded_of, drawn):
         ax.xaxis.offsetText.set_visible(False)
     else:
         ax.set_xlabel("Fraction Of Training", fontsize=FONT_SIZE)
-    ax.set_xlim(0, x[-1])
-    ax.set_xticks([0, x[-1] / 2, x[-1]])
+    ax.set_xlim(x[0], x[-1])
+    ax.set_xticks([x[0], x[-1] / 2, x[-1]])
     label = f"IQM Normalized {ylabel}"
     ax.set_ylabel(label, fontsize=FONT_SIZE, **tex_kwargs(label))
     set_3_ticks(ax, which="y")
@@ -830,7 +825,7 @@ def draw_config(config_name, cfg):
 
     A `-p` naming a directory is a set of configs that belong together -- one
     sweep's -- and every one of them is drawn here in turn, so the run that
-    reads the gzip once produces all of them."""
+    reads the parquet file once produces all of them."""
 
     entries = style_entries(cfg)
     if not entries:
@@ -928,7 +923,7 @@ def draw_config(config_name, cfg):
                     if raw.empty:
                         continue
                     try:
-                        seconds = [float(json.loads(v)) for v in raw]
+                        seconds = [float(decode_stat(v)) for v in raw]
                     except (TypeError, ValueError):
                         continue
                     drawing.time_table[(env, i)] = float(np.nanmean(seconds)) / 60
@@ -979,7 +974,9 @@ def draw_config(config_name, cfg):
                     title = drawing.env_labels.get(str(env), str(env))
                     ax.set_title(title, fontsize=FONT_SIZE, **tex_kwargs(title))
 
-                    x_hi = 0.0
+                    # The axis spans the steps the statistic is recorded over: from
+                    # the first recorded point of any curve to the training length.
+                    x_lo, x_hi = np.inf, 0.0
                     for i, entry in enumerate(drawing.entries):
                         if (env, i) not in decoded_of:
                             continue
@@ -993,6 +990,7 @@ def draw_config(config_name, cfg):
                             linestyle=entry["linestyle"],
                             linewidth=2.0,
                         )
+                        x_lo = min(x_lo, float(x[0]))
                         x_hi = max(x_hi, steps)
 
                     ax.tick_params(axis="x", labelsize=FONT_SIZE - 2, pad=-2)
@@ -1004,9 +1002,9 @@ def draw_config(config_name, cfg):
                         fontsize=FONT_SIZE,
                         **tex_kwargs(ylabel),
                     )
-                    if x_hi > 0:
-                        ax.set_xlim(0, x_hi)
-                        ax.set_xticks([0, x_hi / 2, x_hi])
+                    if x_hi > x_lo:
+                        ax.set_xlim(x_lo, x_hi)
+                        ax.set_xticks([x_lo, x_hi / 2, x_hi])
                     bounds = drawing.stat_ylims.get((str(env), stat))
                     if bounds:
                         ax.set_ylim(*bounds)
@@ -1244,7 +1242,9 @@ def draw_config(config_name, cfg):
                         title = drawing.stat_labels.get(stat, stat)
                         ax.set_title(title, fontsize=FONT_SIZE, **tex_kwargs(title))
 
-                        x_hi = 0.0
+                        # From the first recorded point of any curve to the
+                        # training length, as in the curves figure.
+                        x_lo, x_hi = np.inf, 0.0
                         for i, entry in enumerate(drawing.entries):
                             if (env, stat, i) not in curves_of:
                                 continue
@@ -1258,15 +1258,16 @@ def draw_config(config_name, cfg):
                                 linestyle=entry["linestyle"],
                                 linewidth=2.0,
                             )
+                            x_lo = min(x_lo, float(x[0]))
                             x_hi = max(x_hi, steps)
 
                         ax.tick_params(axis="x", labelsize=FONT_SIZE - 2, pad=-2)
                         ax.tick_params(axis="y", labelsize=FONT_SIZE - 2, pad=1)
                         ax.ticklabel_format(style="sci", axis="x", scilimits=(3, 3))
                         ax.xaxis.offsetText.set_visible(False)
-                        if x_hi > 0:
-                            ax.set_xlim(0, x_hi)
-                            ax.set_xticks([0, x_hi / 2, x_hi])
+                        if x_hi > x_lo:
+                            ax.set_xlim(x_lo, x_hi)
+                            ax.set_xticks([x_lo, x_hi / 2, x_hi])
                         bounds = drawing.stat_ylims.get((str(env), stat))
                         if bounds:
                             ax.set_ylim(*bounds)

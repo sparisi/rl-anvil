@@ -15,10 +15,9 @@ That is the only equality in this module: the same rule decides whether a run
 matches a config YAML, whether a row belongs in a cell, and what a curve is
 labelled. A second pairwise comparison would eventually disagree with it.
 
-`resolve_yaml` reimplements Hydra's `defaults:` chain rather than composing it,
-so reading a config group needs no Hydra run. `load_config_group` does import
-src.utils.id for the keys that do not define a configuration, which pulls hydra
-in; nothing else here does.
+Config groups are read by composing each of their YAMLs with Hydra (see
+`load_config_group`), so a `defaults:` chain means what it means to Hydra.
+Importing this module imports src.utils.id, which pulls hydra in.
 """
 
 import colorsys
@@ -45,6 +44,18 @@ import matplotlib.colors as mc
 from matplotlib import font_manager
 from matplotlib import pyplot as plt
 from pathvalidate import sanitize_filename
+
+from omegaconf import OmegaConf
+
+from src.utils.id import (
+    DROPPED_CFG_KEYS,
+    compose_cfg,
+    composed_config,
+    decode_stat,
+    flatten_cfg,
+)
+from src.utils.paths import CONFIG_DIR
+from src.utils.misc import _warn_once
 
 
 # -----------------------------------------------------------------------------
@@ -95,7 +106,9 @@ def value_str(v) -> str:
     a key only some configurations record forces its column to float; containers
     render element-wise, since a list hyperparameter comes back from parquet as
     an unhashable numpy array repr'd without commas; every null spelling
-    collapses to `NULL_STR`, so an absent key and a recorded null read alike."""
+    collapses to `NULL_STR`, so an absent key and a recorded null read alike.
+    A string that parses as a number normalizes as that number, since PyYAML
+    reads an exponent float such as `1e-3` in a sweep file as a string."""
 
     if isinstance(v, (list, tuple, np.ndarray)):
         return "[" + ", ".join(value_str(x) for x in v) + "]"
@@ -130,100 +143,47 @@ def native(v):
 # ----- Config files ----------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-def deep_merge(
-    base: dict,
-    override: dict,
-    replace_keys: frozenset = frozenset(),
-) -> dict:
-    """Recursively merge override into base; child wins on leaves and non-dict
-    values. Keys in replace_keys are replaced wholesale instead of recursing."""
-
-    out = dict(base)
-    for k, v in override.items():
-        if k in replace_keys:
-            out[k] = v
-        elif isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = deep_merge(out[k], v, replace_keys)
-        else:
-            out[k] = v
-    return out
-
-
-def resolve_yaml(
-    yaml_files: dict,
-    name: str,
-    seen: set = None,
-    replace_keys: frozenset = frozenset(),
-) -> dict:
-    """Resolve a YAML file's Hydra-style `defaults:` chain by hand (deep merge,
-    child wins). Follows `defaults:` only; `${...}` interpolations are NOT
-    evaluated, which is why `flatten_cfg` drops the keys still holding one."""
-
-    if seen is None:
-        seen = set()
-    if name in seen or name not in yaml_files:
-        return {}
-    seen.add(name)
-    cfg = yaml.safe_load(Path(yaml_files[name]).read_text(encoding="utf-8")) or {}
-    defaults = cfg.pop("defaults", [])
-    merged: dict = {}
-    for dep in defaults:
-        dep_name = dep if isinstance(dep, str) else next(iter(dep.values()))
-        merged = deep_merge(
-            merged,
-            resolve_yaml(yaml_files, dep_name, seen.copy(), replace_keys),
-            replace_keys,
-        )
-    return deep_merge(merged, cfg, replace_keys)
-
-
-def flatten_cfg(nested: dict, drop_interpolations=True) -> dict:
-    """Nested config -> {dotted_key: value}. The one place deciding what a flat
-    config looks like: process_data.py and `load_config_group` must agree on it or
-    a row never matches the YAML it came from.
-
-    `drop_interpolations` leaves out the values still holding "${", which is the
-    default. What defines a run is decided once, by src.utils.id.DROPPED_CFG_KEYS,
-    before cfg.yaml is written."""
-
-    records = pd.json_normalize(nested, sep=".").to_dict(orient="records")
-    if not records:
-        return {}
-    flat = records[0]
-    if drop_interpolations:
-        flat = {k: v for k, v in flat.items() if not (isinstance(v, str) and "${" in v)}
-    return flat
-
-
 def load_config_group(config_dir: str) -> dict:
     """Every YAML in a Hydra config group directory -- configs/environment,
-    configs/algorithm -- with `defaults:` resolved, as {name: {flat_key: value}}.
-    Both groups are matched against a run identically; only the directory differs.
+    configs/algorithm -- composed by Hydra with its `defaults:` list, as
+    {name: {flat_key: value}}. Both groups are matched against a run identically;
+    only the directory differs.
 
     Subdirectories are searched too. A YAML's name is its path relative to
     `config_dir` without the suffix (e.g., gymnasium/lunar_lander), which is the
-    name Hydra selects it by.
+    name Hydra selects it by. `config_dir` must be under CONFIG_DIR, where Hydra
+    composes from.
 
-    Does NOT compose with agent/default, whose keys are CLI-swept per experiment
-    and are not part of a config's identity.
+    Does NOT compose with configs/default.yaml, whose keys are CLI-swept per
+    experiment and are not part of a config's identity. Interpolations are left
+    unresolved, and `flatten_cfg` drops the keys still holding one.
 
     The keys that do not define a configuration are dropped, as they are from a
     run's cfg.yaml: a YAML declaring one would be compared against a run that
     cannot record it, and would match nothing."""
 
-    # Imported here rather than at module level: src.utils.id pulls in hydra.
-    from src.utils.id import DROPPED_CFG_KEYS
-
-    def defining(flat):
-        return compared_keys(flat, DROPPED_CFG_KEYS)
-
-    yaml_files = {
-        p.relative_to(config_dir).with_suffix("").as_posix(): p
+    try:
+        group = Path(config_dir).resolve().relative_to(Path(CONFIG_DIR).resolve())
+    except ValueError:
+        raise ValueError(
+            f"{config_dir} is not under {CONFIG_DIR}, so Hydra cannot compose "
+            f"its files."
+        ) from None
+    names = [
+        p.relative_to(config_dir).with_suffix("").as_posix()
         for p in Path(config_dir).rglob("*.yaml")
-    }
+    ]
     return {
-        name: defining(flatten_cfg(resolve_yaml(yaml_files, name)))
-        for name in yaml_files
+        name: compared_keys(
+            flatten_cfg(
+                OmegaConf.to_container(
+                    compose_cfg(config_name=f"{group.as_posix()}/{name}"),
+                    resolve=False,
+                )
+            ),
+            DROPPED_CFG_KEYS,
+        )
+        for name in names
     }
 
 
@@ -303,9 +263,16 @@ def assign_configs(
     # same way and one message says all of it.
     reported_ties = set()
 
+    # Whether a row is null for a declared key, subtree included: the one rule
+    # for a declared null, null_mask's, read once per key over the whole frame.
+    keys = dict.fromkeys(key for declared in candidates.values() for key in declared)
+    is_null = {key: null_mask(df, ("hyperparameter", key)) for key in keys}
+
     def label(row, skip):
-        def recorded(key):
-            return value_str(row[col_of[key]] if key in col_of else None)
+        def matches(key, value):
+            if value_str(value) == NULL_STR:
+                return bool(is_null[key].loc[row.name])
+            return key in col_of and value_str(row[col_of[key]]) == value_str(value)
 
         best_name, best_len, tied = None, None, []
         for name, declared in candidates.items():
@@ -314,10 +281,7 @@ def assign_configs(
             }
             if not declared:
                 continue
-            if any(
-                recorded(key) != value_str(value)
-                for key, value in declared.items()
-            ):
+            if any(not matches(key, value) for key, value in declared.items()):
                 continue
             if best_name is None or len(declared) > best_len:
                 best_name, best_len, tied = name, len(declared), [name]
@@ -352,16 +316,17 @@ def assign_configs(
             for stem in over_stem.unique()
         }
 
-    # Labelling a row only depends on the columns some config declares and on
-    # which keys it skips, so rows agreeing on those get the same label: build a
-    # signature from them, label one row per distinct signature, map the rest.
-    # value_str first -- list-valued hyperparameters arrive from parquet as numpy
-    # arrays, which are unhashable, and it also keeps 64 and 64.0 in one group.
-    keys = dict.fromkeys(key for declared in candidates.values() for key in declared)
+    # Labelling a row only depends on the columns some config declares, on its
+    # nullness for them and on which keys it skips, so rows agreeing on those get
+    # the same label: build a signature from them, label one row per distinct
+    # signature, map the rest. value_str first -- list-valued hyperparameters
+    # arrive from parquet as numpy arrays, which are unhashable, and it also
+    # keeps 64 and 64.0 in one group.
     sig = over_stem.astype(str)
     for key in keys:
         if key in col_of:
             sig = sig + "\x00" + df[col_of[key]].map(value_str)
+        sig = sig + "\x00" + is_null[key].astype(str)
 
     first = ~sig.duplicated()
     resolved = {
@@ -531,6 +496,24 @@ def apply_filters(
 
 
 PLOT_CONFIG_DIR = "configs/plots"
+
+
+def add_config_group_args(parser):
+    """Add the `-a/--algorithms` and `-e/--environments` options, the config
+    group directories a script matches runs against, to an argparse parser and
+    return it."""
+
+    parser.add_argument(
+        "-a", "--algorithms",
+        default="configs/algorithm",
+        help="Directory of algorithm YAMLs.",
+    )
+    parser.add_argument(
+        "-e", "--environments",
+        default="configs/environment",
+        help="Directory of environment YAMLs.",
+    )
+    return parser
 
 
 def load_plot_configs(name: str):
@@ -822,11 +805,9 @@ def entry_config(env: str, selector: dict, label: str) -> dict | None:
     composed in from the group being drawn, since one entry stands for one
     configuration per environment of its group."""
 
-    # Imported here rather than at module level: src.utils.id imports this
-    # module, so a module-level import would be a cycle, and src.utils.sweep
-    # scans CONFIG_DIR as it is imported, which need not be readable for the rest
-    # of this module to work.
-    from src.utils.id import composed_config
+    # Imported here rather than at module level: src.utils.sweep scans
+    # CONFIG_DIR as it is imported, which need not be readable for the rest of
+    # this module to work.
     from src.utils.sweep import CONFIG_GROUPS, format_override
 
     overrides = dict(selector)
@@ -876,10 +857,9 @@ def composed_sweep_mask(
 
     The message says how the comparison was split, for a caller being verbose."""
 
-    # Imported here rather than at module level, as in entry_config: the one is
-    # an import cycle, the other scans CONFIG_DIR at import time.
-    from src.utils.id import composed_config
-    from src.utils.sweep import format_override
+    # Imported here rather than at module level, as in entry_config:
+    # src.utils.sweep scans CONFIG_DIR at import time.
+    from src.utils.sweep import expand_sweep, format_override
 
     recorded = {
         c[1]: c for c in df.columns
@@ -901,25 +881,21 @@ def composed_sweep_mask(
     }
 
     composed = pd.Series(False, index=df.index)
-    for entry in sweep:
-        keys = list(global_sweep) + [k for k in entry if k not in global_sweep]
-        declared = [entry.get(k, global_sweep.get(k)) for k in keys]
-        for combo in itertools.product(*declared):
-            hp = dict(zip(keys, combo))
-            flat = composed_config(
-                tuple(format_override(k, v) for k, v in hp.items())
-            )
-            # A key the composed config sets and the data has no column for is a
-            # key no run recorded, so no run has this configuration. A null is
-            # the exception: an absent column already means null everywhere.
-            if any(k not in as_str and not is_null(v) for k, v in flat.items()):
-                continue
-            if any(value_str(flat.get(k)) != v for k, v in constant.items()):
-                continue
-            mask = pd.Series(True, index=df.index)
-            for key, series in varying.items():
-                mask &= series == value_str(flat.get(key))
-            composed |= mask
+    for hp in expand_sweep(global_sweep, sweep):
+        flat = composed_config(
+            tuple(format_override(k, v) for k, v in hp.items())
+        )
+        # A key the composed config sets and the data has no column for is a
+        # key no run recorded, so no run has this configuration. A null is
+        # the exception: an absent column already means null everywhere.
+        if any(k not in as_str and not is_null(v) for k, v in flat.items()):
+            continue
+        if any(value_str(flat.get(k)) != v for k, v in constant.items()):
+            continue
+        mask = pd.Series(True, index=df.index)
+        for key, series in varying.items():
+            mask &= series == value_str(flat.get(key))
+        composed |= mask
 
     message = (
         f"Matching on {len(varying)} varying key(s), "
@@ -1372,6 +1348,18 @@ def smooth(arr, span):
         arr[max(0, i - span):i + span + 1].mean()
         for i in range(len(arr))
     ])
+
+
+def area_over_span(values, x):
+    """Integrate `values` over `x` with the trapezoid rule, divide by the span of
+    `x` and return it: the average value over the span. With a single point it
+    is that point's value."""
+
+    values = np.asarray(values, dtype=float)
+    x = np.asarray(x, dtype=float)
+    if len(values) < 2:
+        return float(values[0])
+    return float(np.sum((values[1:] + values[:-1]) * np.diff(x)) / (2.0 * (x[-1] - x[0])))
 
 
 # Sample std (ddof=1), as a confidence interval over a sample of seeds requires.
@@ -1920,12 +1908,6 @@ def fitted_rows_cols(config_name, key, n, spec):
     return rows, cols
 
 
-# The cell disagreements series_of has already reported, so that a sweep where
-# every cell holds runs of two training lengths says so once rather than once per
-# cell per statistic.
-_MIXED_AXIS_WARNED: set = set()
-
-
 def series_of(frame, stat):
     """Decode the runs of one cell into a curve per seed and return
     (values, x, training steps, seed ids), or None when there is nothing
@@ -1933,7 +1915,8 @@ def series_of(frame, stat):
 
     `values` is a DataFrame with one column per seed and one row per recorded
     point, `x` the recorded training step of each point (the "steps" statistic
-    of the longest run), and `seed ids` names the columns in order. A statistic
+    of the longest run, from the first step any seed recorded the statistic at),
+    and `seed ids` names the columns in order. A statistic
     is stored as a JSON array per run, so this is the step between what a cell
     holds and what can be drawn from it: whatever goes in a cell -- a mean and
     its band, one seed's line, an area -- is computed from these columns.
@@ -1970,15 +1953,11 @@ def series_of(frame, stat):
         if SEED in frame.columns
         else [None] * len(raw)
     )
-    try:
-        arrays = [json.loads(a) for a in raw]
-        x_arrays = [np.asarray(json.loads(a), dtype=float) for a in raw_x]
-    except (ValueError, TypeError):
-        return None
     # Not every statistic is a curve: a device name, a git hash, a job id or a
     # single number is recorded the same way and is not plottable.
     try:
-        arrays = [np.asarray(a, dtype=float) for a in arrays]
+        arrays = [np.asarray(decode_stat(a), dtype=float) for a in raw]
+        x_arrays = [np.asarray(decode_stat(a), dtype=float) for a in raw_x]
     except (ValueError, TypeError):
         return None
     if any(a.ndim != 1 for a in arrays):
@@ -1994,17 +1973,12 @@ def series_of(frame, stat):
     # A run whose recorded steps are not that prefix is drawn at the wrong x. The
     # message names no cell, so it is said once per process.
     x = x_arrays[int(np.argmax([len(a) for a in arrays]))]
-    for a in x_arrays:
-        if len(a) > len(x) or not np.array_equal(a, x[:len(a)]):
-            message = (
-                "WARNING: the runs of one cell disagree on the recorded steps "
-                "of their points; the steps of the longest run are the ones "
-                "every seed of it is drawn against."
-            )
-            if message not in _MIXED_AXIS_WARNED:
-                _MIXED_AXIS_WARNED.add(message)
-                print(message)
-            break
+    if any(len(a) > len(x) or not np.array_equal(a, x[:len(a)]) for a in x_arrays):
+        _warn_once(
+            "WARNING: the runs of one cell disagree on the recorded steps of "
+            "their points; the steps of the longest run are the ones every seed "
+            "of it is drawn against."
+        )
     # A training_steps column that is present but null for every row of the
     # cell is a cell whose training length is unknown. Returning None puts it
     # where every other undecodable cell goes, rather than raising out of the
@@ -2018,20 +1992,20 @@ def series_of(frame, stat):
     # cell and every statistic, and a sweep where this happens at all has it in
     # all of them.
     if recorded_steps.nunique() > 1:
-        message = (
+        _warn_once(
             f"WARNING: the runs of one cell disagree on {recorded_steps.name[1]} "
             f"({sorted(set(recorded_steps))}); {steps:g} is taken as the cell's "
             f"training length."
         )
-        if message not in _MIXED_AXIS_WARNED:
-            _MIXED_AXIS_WARNED.add(message)
-            print(message)
-    return (
-        pd.concat([pd.Series(a) for a in arrays], axis=1),
-        x,
-        steps,
-        seeds,
-    )
+    # One step per row of the values: a column recorded shorter than its run's
+    # steps leaves the steps past its end without a value.
+    values = pd.concat([pd.Series(a) for a in arrays], axis=1)
+    x = x[:len(values)]
+    # A statistic first recorded after the run's first logged step is NaN in
+    # every seed before it. Those steps are dropped, so `x` starts at the first
+    # step any seed recorded the statistic at.
+    first = int(np.argmax(values.notna().any(axis=1).to_numpy()))
+    return values.iloc[first:].reset_index(drop=True), x[first:], steps, seeds
 
 
 # -----------------------------------------------------------------------------
@@ -2170,7 +2144,7 @@ class SweepLayout:
             # declare never becomes an axis, however much it varies in the rows
             # the entry selects: an entry loose enough to admit runs from other
             # sweeps would otherwise produce a grid of every other key in the
-            # gzip.
+            # parquet file.
             taken = (
                 [c for c, _ in axes]
                 + [("hyperparameter", k) for k in self.global_sweep]
@@ -2229,10 +2203,10 @@ def keep_declared_environments(df, declared_envs, verb: str):
     """Drop the runs whose environment the sweep does not declare, and return the
     frame. `declared_envs` of None leaves it alone.
 
-    The gzip holds whatever ran in the folder, and a sweep that names two
-    environments is a figure about those two. Matched on the stem, as the sweep
-    names an environment by its config file while an overridden run is labelled
-    `<stem> (key=value)`.
+    The parquet file holds whatever ran in the folder, and a sweep that names
+    two environments is a figure about those two. Matched on the stem, as the
+    sweep names an environment by its config file while an overridden run is
+    labelled `<stem> (key=value)`.
 
     `verb` is what the caller does with a run -- "plotted", "drawn" -- for the
     messages."""

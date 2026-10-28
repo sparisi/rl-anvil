@@ -1,8 +1,12 @@
+import copy
 import hashlib
+import json
 import os
+import re
 import tempfile
 from functools import lru_cache
 from omegaconf import DictConfig, OmegaConf
+from omegaconf.errors import OmegaConfBaseException
 from hydra import compose, initialize_config_dir
 from rich import print
 
@@ -17,29 +21,49 @@ DROPPED_CFG_KEYS = (
     "meta",
     "results",
     "experiment.rng_seed",
+    # "agent.critic.approximator.device",
 )
+
+# The columns of the results table that hold a run's seed and its config ID.
+SEED = ("seed", "experiment.rng_seed")
+CONFIG_ID = ("config", "config_id")
 
 # Characters of the md5 digest a config ID keeps.
 CONFIG_ID_LEN = 8
 
 # A config ID is the first CONFIG_ID_LEN of the 32 hex characters of the MD5 of
-# `cfg` stripped of DROPPED_CFG_KEYS.
+# the config_identity() YAML: `cfg` stripped of DROPPED_CFG_KEYS, with sorted
+# keys and ints converted to floats.
 # This is much better than Hydra default directory naming that concatenates all
 # keys=value in the DictConfig.
 
 
 def strip_config(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> dict:
-    """`cfg` as a plain resolved dict, without the keys that do not define a
-    configuration."""
-    container = OmegaConf.to_container(
-        cfg,
-        resolve=True,
-        throw_on_missing=True,
-    )
+    """Return `cfg` as a plain resolved dict, without the keys in `dropped`.
+
+    Top-level dropped keys are never resolved, so a missing value or an
+    interpolation that cannot resolve under one of them raises nothing. Each
+    kept top-level node is resolved with its parent, so interpolations into
+    other kept keys resolve as they do in `cfg`."""
+
+    top = {d for d in dropped if "." not in d}
+    container = {}
+    for key in cfg:
+        if key in top:
+            continue
+        node = cfg[key]
+        container[key] = (
+            OmegaConf.to_container(node, resolve=True, throw_on_missing=True)
+            if OmegaConf.is_config(node)
+            else node
+        )
     return drop_keys(container, dropped)
 
 
 def drop_keys(d: dict, drop: tuple) -> dict:
+    """Remove each dotted key in `drop`, with its whole subtree, from the nested
+    dict `d` in place, and return `d`. Keys absent from `d` are ignored."""
+
     for dotted in drop:
         *parents, leaf = dotted.split(".")
         node = d
@@ -51,12 +75,10 @@ def drop_keys(d: dict, drop: tuple) -> dict:
 
 
 def numbers_to_float(x):
-    """Ints to float, so that `lrate=1` and `lrate=1.0` -- same run, two
-    YAML spellings -- do not hash to two different config IDs.
+    """Return `x` with every int converted to float, recursively through dicts
+    and lists, so that `lrate=1` and `lrate=1.0` (same run, two YAML spellings)
+    do not hash to two different config IDs. Bools are kept."""
 
-    Only ever fed to make the ID. The config written to disk and the config the
-    run is built from keep their original types, so ints stay ints.
-    """
     if isinstance(x, dict):
         return {k: numbers_to_float(v) for k, v in x.items()}
     if isinstance(x, list):
@@ -68,17 +90,39 @@ def numbers_to_float(x):
     return x
 
 
+def escape_interpolations(x):
+    """Return `x` with "${" in every string escaped, recursively through dicts
+    and lists, so that YAML written from it loads back to the same strings.
+    Backslashes right before "${" are doubled, as OmegaConf reads "\\\\${" as a
+    literal backslash followed by an interpolation."""
+
+    if isinstance(x, dict):
+        return {k: escape_interpolations(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [escape_interpolations(v) for v in x]
+    if isinstance(x, str):
+        return re.sub(r"(\\*)\$\{", lambda m: m.group(1) * 2 + "\\${", x)
+    return x
+
+
 def config_for_save(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> str:
-    """The YAML written to cfg.yaml: resolved, sorted, stripped of the keys
-    that do not define the configuration, types untouched."""
+    """Return the YAML written to cfg.yaml: `cfg` resolved, with sorted keys,
+    without the keys in `dropped`, and with its original types. A resolved
+    string holding "${" is written escaped, so cfg.yaml loads back to the same
+    string and hashes to the same config ID."""
+
     return OmegaConf.to_yaml(
-        OmegaConf.create(strip_config(cfg, dropped)),
+        OmegaConf.create(escape_interpolations(strip_config(cfg, dropped))),
         sort_keys=True,
     )
 
 
 def config_identity(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> str:
-    """What make_id() hashes: config_for_save() with ints as floats."""
+    """Return the YAML that the config ID hashes: the same YAML as
+    config_for_save(), with every int converted to float."""
+
+    # The conversion applies to the hashed YAML only: the config written to disk
+    # and the config the run is built from keep their original types.
     return OmegaConf.to_yaml(
         OmegaConf.create(numbers_to_float(strip_config(cfg, dropped))),
         sort_keys=True,
@@ -86,78 +130,94 @@ def config_identity(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> str:
 
 
 def make_id(
-    cfg: DictConfig = None,
+    cfg: DictConfig | None = None,
     overrides=None,
     n_chars: int = CONFIG_ID_LEN,
 ) -> str:
-    """The config ID of `cfg`, or of the config `overrides` would compose."""
+    """Return the config ID of `cfg`, or of the config that `overrides`
+    compose. Exactly one of the two must be given."""
 
-    assert (cfg is None) != (overrides is None), (
-        "must pass either cfg or overrides, and not both"
-    )
+    if (cfg is None) == (overrides is None):
+        raise ValueError("Pass either cfg or overrides, and not both.")
     if overrides is not None:
         cfg = compose_cfg(overrides)
+    return id_of(config_identity(cfg), n_chars)
+
+
+def id_of(identity: str, n_chars: int = CONFIG_ID_LEN) -> str:
+    """Return the config ID of a config_identity() YAML: the first `n_chars`
+    hex characters of its MD5 digest."""
+
     digest = hashlib.md5(
-        config_identity(cfg).encode(),
+        identity.encode(),
         usedforsecurity=False,
     ).hexdigest()
     return digest[:n_chars]
 
 
 @lru_cache(maxsize=None)
-def composed_config(overrides: tuple) -> dict:
-    """The flat config `overrides` compose, as {dotted_key: value}, without the
-    keys that do not define a configuration.
-
-    The same shape process_data records for a run, so the two compare key by key:
-    a sweep entry declares part of a configuration, and the rest comes from the
-    config files it selects and from configs/default.yaml under them.
-
-    Interpolations are kept, unlike `flatten_cfg`'s default: this config is
-    resolved, so a value still holding "${" is one the config really contains,
-    and process_data keeps it too. Dropping it here would leave a key on one
-    side of the comparison and not the other.
-
-    `overrides` is a tuple (rather than a list) so the composition is cached.
-    """
-
-    # Imported here rather than at module level: src.utils.plot pulls in
-    # matplotlib and seaborn, which the training path has no use for.
-    from src.utils.plot import flatten_cfg
+def _composed_config(overrides: tuple) -> dict:
+    """Return the flat config that `overrides` compose, without the keys in
+    DROPPED_CFG_KEYS. The result is cached: every call with the same
+    `overrides` returns the same object."""
 
     return flatten_cfg(strip_config(compose_cfg(overrides)), drop_interpolations=False)
 
 
-def compose_cfg(overrides) -> DictConfig:
-    """The config main.py would build from `overrides`, without running main.py.
+def composed_config(overrides: tuple) -> dict:
+    """Return the flat config that `overrides` compose, as {dotted_key: value},
+    without the keys in DROPPED_CFG_KEYS.
+
+    The keys are the dotted paths that flatten_cfg() produces.
+
+    Values holding "${" are kept (drop_interpolations=False).
+
+    `overrides` is a tuple (rather than a list) so the composition is cached.
+    Each call returns its own deep copy of the cached result.
+    """
+
+    return copy.deepcopy(_composed_config(overrides))
+
+
+def compose_cfg(overrides=(), config_name: str = "default") -> DictConfig:
+    """Return the DictConfig that Hydra composes from the config file
+    `config_name` (a path relative to CONFIG_DIR, without the suffix) and the
+    `overrides`.
 
     For example
         compose_cfg(("environment=gymnasium/lunar_lander", "++agent.critic.lr=0.001"))
 
     returns the DictConfig resulting from running
         python main.py environment=gymnasium/lunar_lander ++agent.critic.lr=0.001
+
+    and compose_cfg(config_name="environment/gymnasium/lunar_lander") composes
+    that file and its `defaults:` list alone, without configs/default.yaml.
     """
+
     with initialize_config_dir(version_base=None, config_dir=CONFIG_DIR):
-        return compose(config_name="default", overrides=list(overrides))
+        return compose(config_name=config_name, overrides=list(overrides))
 
 
 def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
-    """Check for existing data.npz for the same run. If so, and the user has not
-    forced this run, stop. The presence of videos, heatmaps, ... does not stop
-    the run.
+    """Return the config ID of `cfg`, or None if the run should be skipped.
 
-    Then, make the root directory to save data (if needed) and save the
-    cfg.yaml that identifies this run.
-    No other folder is created at this time. During an experiment, the code always
-    runs os.makedirs(..., exist_ok=True) to guard against deleted folders.
+    The run is skipped if a data.npz for the same run exists and
+    results.force_run is not set. The presence of videos, heatmaps, ... does
+    not skip the run.
 
-    Returns the config ID, or None if the run should be skipped. On return
+    Otherwise, make the seed directory (if data is saved) and save the cfg.yaml
+    that identifies this run. No other folder is created. On return
     results.data_dir points at the seed folder, so everything the run writes
     goes into <data_dir>/<config_id>/<rng_seed>/
+    Call it once per `cfg`: a second call appends the folders again.
+
+    With results.force_run, the files already in the seed folder are not
+    removed. Files the new run writes under the same names are overwritten,
+    and the others stay next to them.
     """
 
     cfg_identity = config_identity(cfg)
-    config_id = make_id(cfg)
+    config_id = id_of(cfg_identity)
 
     need_data_dir = (
         cfg.results.save_videos or
@@ -166,18 +226,44 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
     )
     if need_data_dir and cfg.results.data_dir is None:
         if verbose:
-            print(":warning:  The user requested to save data but "
-                  "[bold italic]results.data_dir[/bold italic] is not defined. "
-                  "Using default directory: [italic]data[/italic]")
+            print(
+                ":warning:  The user requested to save data but "
+                "[bold italic]results.data_dir[/bold italic] is not defined. "
+                "Using default directory: [italic]data[/italic]"
+            )
         cfg.results.data_dir = "data"
 
     # Nothing to save, the run can start
     if cfg.results.data_dir is None:
         return config_id
 
-    # Make data root folder
     config_dir = os.path.join(cfg.results.data_dir, config_id)
     run_dir = os.path.join(config_dir, str(cfg.experiment.rng_seed))
+    yaml_path = os.path.join(
+        config_dir,
+        "cfg.yaml",
+    )
+
+    # Checked before the data of this seed, so a collision or an edited cfg.yaml
+    # raises for every seed, including the ones that already have data.
+    if os.path.exists(yaml_path):
+        # Compare identities, not file bytes: cfg.yaml keeps the types it was
+        # written with, so two seeds passing 1 and 1.0 for the same key write
+        # different bytes for the same configuration.
+        try:
+            existing_identity = config_identity(OmegaConf.load(yaml_path))
+        except OmegaConfBaseException as e:
+            raise RuntimeError(
+                f"{yaml_path} cannot be resolved ({e}). It may predate the escaping "
+                f"of '${{' in cfg.yaml; rewrite it or remove the folder."
+            ) from e
+        if existing_identity != cfg_identity:
+            raise RuntimeError(
+                f"{yaml_path} already exists but describes a different "
+                f"configuration. Either two distinct configurations collided on "
+                f"the same {len(config_id)}-character ID (see src.utils.id), or "
+                f"cfg.yaml has been edited."
+            )
 
     data_path = os.path.join(run_dir, "data.npz")
     if os.path.exists(data_path):
@@ -185,39 +271,29 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
             print(f":warning:  Data for this seed already exists: {data_path}.")
         if not cfg.results.force_run:
             if verbose:
-                print(":x: Stopping. If you want to force this run, "
-                      "pass [italic]results.force_run=True[/italic].")
+                print(
+                    ":x: Stopping. If you want to force this run, "
+                    "pass [italic]results.force_run=True[/italic]."
+                )
             return None
         elif verbose:
-            print(":white_check_mark: Overriding. To prevent it, interrupt "
-                  "before the end of the run. Next time, run with "
-                  "[italic]results.force_run=False[/italic].")
-
-    os.makedirs(run_dir, exist_ok=True)
-
-    yaml_path = os.path.join(
-        config_dir,
-        "cfg.yaml",
-    )
-
-    if os.path.exists(yaml_path):
-        # Compare identities, not file bytes: cfg.yaml keeps the types it was
-        # written with, so two seeds passing 1 and 1.0 for the same key write
-        # different bytes for the same configuration.
-        if config_identity(OmegaConf.load(yaml_path)) != cfg_identity:
-            raise RuntimeError(
-                f"{yaml_path} already exists but describes a different "
-                f"configuration. Either two distinct configurations collided on "
-                f"the same {len(config_id)}-character ID (see src.utils.id), or "
-                f"cfg.yaml has been edited."
+            print(
+                ":white_check_mark: Overriding. To prevent it, interrupt "
+                "before the end of the run. Next time, run with "
+                "[italic]results.force_run=False[/italic]."
             )
-    else:
+
+    os.makedirs(config_dir, exist_ok=True)
+
+    if not os.path.exists(yaml_path):
         # Seeds of one config_id share this folder and may start within
         # milliseconds of each other, if launched in parallel (e.g., with SLURM jobs).
         # Thus, more than one can find the file missing and write at the same time.
         # To prevent that, write to a temp file and rename: os.replace is atomic
         # on POSIX, so a reader never sees a half-written cfg.yaml. Every seed
-        # writes identical content, so which one lands last does not matter.
+        # writes the same configuration, so which one lands last does not change
+        # the config ID. The int or float types in cfg.yaml are those of the seed
+        # that lands last.
         fd, tmp_path = tempfile.mkstemp(
             dir=config_dir,
             prefix=".cfg-",
@@ -234,9 +310,49 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
                 os.remove(tmp_path)
             raise
 
+    # The seed folder is made only once cfg.yaml matches this configuration
+    os.makedirs(run_dir, exist_ok=True)
+
     # Update the directory (append /<config_id>/<rng_seed>)
     cfg.results.data_dir = run_dir
 
     if verbose:
         print(f":floppy_disk: Data will be saved at {run_dir}")
     return config_id
+
+
+def decode_stat(raw):
+    """
+    Decode one cell of a statistics table and return it as a Python value: a
+    string holding JSON is parsed (a list for a curve, a number or a string
+    for a scalar), a string that is not JSON is returned as it is, and
+    anything else is returned unchanged.
+    """
+
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except ValueError:
+            return raw
+    return raw
+
+
+def flatten_cfg(nested: dict, drop_interpolations=True) -> dict:
+    """Return `nested` flattened to {dotted_key: value}.
+
+    Nested mappings are flattened recursively, with keys joined by ".". An empty
+    mapping is kept as the value "{}", so a key holding one stays distinct from
+    an absent key. With `drop_interpolations`, string values holding "${" are
+    left out.
+    """
+
+    flat = {}
+    for key, value in nested.items():
+        if isinstance(value, dict) and value:
+            for sub_key, sub_value in flatten_cfg(value, drop_interpolations=False).items():
+                flat[f"{key}.{sub_key}"] = sub_value
+        else:
+            flat[str(key)] = "{}" if isinstance(value, dict) else value
+    if drop_interpolations:
+        flat = {k: v for k, v in flat.items() if not (isinstance(v, str) and "${" in v)}
+    return flat

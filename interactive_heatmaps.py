@@ -46,12 +46,14 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from src.utils.misc import make_vprint
 from src.utils.plot import (
     ALGO,
     ENV,
     ENV_ID,
     SEED,
     SweepLayout,
+    add_config_group_args,
     apply_filters,
     assign_configs,
     declared_environments,
@@ -69,7 +71,7 @@ from src.utils.plot import (
     values_of,
     vega_field_name,
 )
-from src.utils.heatmaps import compute_maps_all_fractions, pooled_range
+from src.utils.heatmaps import memory_maps, pooled_range
 from src.utils.slurm import parse_seeds
 from src.utils.sweep import load_sweep
 
@@ -95,16 +97,7 @@ parser.add_argument(
          "layout: one block per config_sweep entry, an axis per key it declares, "
          "and a cell for every configuration it expects, run or not.",
 )
-parser.add_argument(
-    "-a", "--algorithms",
-    default="configs/algorithm",
-    help="Directory of algorithm YAMLs.",
-)
-parser.add_argument(
-    "-e", "--environments",
-    default="configs/environment",
-    help="Directory of environment YAMLs.",
-)
+add_config_group_args(parser)
 parser.add_argument(
     "--include",
     nargs="+",
@@ -150,11 +143,7 @@ except ValueError as err:
 missing_cfg = []
 duplicate_runs = []
 
-def vprint(*a):
-    """Print only under --verbose."""
-
-    if args.verbose:
-        print(*a)
+vprint = make_vprint(args.verbose)
 
 
 def runs_of(cell):
@@ -828,7 +817,11 @@ for name in df.index:
         print(f"WARNING: could not read {mem_files[name]}: {e}")
         continue
     try:
-        per_fraction = compute_maps_all_fractions(run_cfgs[name], mem, FRACTIONS)
+        per_fraction = memory_maps(
+            mem,
+            env_cfg=run_cfgs[name]["environment"],
+            fractions=FRACTIONS,
+        )
     except Exception as e:
         print(f"WARNING: could not compute maps for {name}: {e}")
         continue

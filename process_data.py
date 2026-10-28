@@ -1,31 +1,65 @@
 import os
 import re
+import shutil
+import threading
 import argparse
+import multiprocessing
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+import pyarrow.parquet as pq
 import yaml
 import json
-from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 from tqdm import tqdm
 
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
+from omegaconf.errors import OmegaConfBaseException
 
-from src.utils.id import DROPPED_CFG_KEYS, make_id
+from src.utils.id import flatten_cfg, make_id, strip_config
+
+# Minimum number of rows in each row group of the merged parquet file.
+PARQUET_CHUNK_ROWS = 10_000
+
+# Number of config directories a worker loads and writes to one part file. A
+# worker holds the rows of one batch at a time, so this bounds its memory.
+CONFIG_DIRS_PER_PART = 8
+
+# ProcessPoolExecutor on Windows accepts at most this many workers.
+MAX_WINDOWS_WORKERS = 61
+
+SEED_COL = ("seed", "experiment.rng_seed")
+CONFIG_ID_COL = ("config", "config_id")
+CFG_DIR_COL = ("_meta", "cfg_dir")
+
+
+def default_workers() -> int:
+    """Return the number of CPUs this process may run on: the CPU affinity where
+    the platform reports it (a SLURM allocation sets it), os.cpu_count()
+    otherwise.
+    """
+
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
 
 
 def check_column_types(flat_cfgs) -> None:
     """Raise a TypeError naming every hyperparameter whose values pyarrow cannot
     store in one parquet column, with the types of its values.
 
-    `flat_cfgs` are flat configs keyed by (group, key) tuples, and the error
-    names each column by its key. NaN values, which stand for keys absent from
-    a config, are left out of the listed types.
+    `flat_cfgs` are flat configs keyed by (group, key) tuples. Only the
+    ("hyperparameter", key) columns are checked, and the error names each by
+    its key. NaN values, which stand for keys absent from a config, are left
+    out of the listed types.
     """
 
     df = pd.DataFrame(list(flat_cfgs))
     bad = []
     for col in df.columns:
+        if col[0] != "hyperparameter":
+            continue
         try:
             pa.array(df[col], from_pandas=True)
         except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError):
@@ -44,17 +78,200 @@ def check_column_types(flat_cfgs) -> None:
         )
 
 
+def report(header: str, lines: list[str], verbose: bool) -> None:
+    """Print `header` followed by `lines` when `verbose` is true, and `header`
+    with a pointer to -v otherwise. Nothing is printed when `lines` is empty.
+    """
+
+    if not lines:
+        return
+    if verbose:
+        print(f"{header}:")
+        for line in lines:
+            print(f"  {line}")
+    else:
+        print(f"{header}. Run with -v to list them.")
+
+
+def read_cfg(dirpath: str, data_dir: str) -> tuple:
+    """Read the 'cfg.yaml' of the config directory `dirpath` and return
+    (flat config, skip reason, expected config ID).
+
+    The flat config holds the key-value pairs of 'cfg.yaml' without the keys in
+    DROPPED_CFG_KEYS, keyed by ("hyperparameter", key), the config ID taken
+    from the name of `dirpath`, and the path of `dirpath` relative to
+    `data_dir`. It is None when 'cfg.yaml' cannot be read, is empty, is not a
+    mapping, or cannot be resolved (src.utils.id.strip_config), and the skip
+    reason says why; the skip reason is None otherwise.
+    The expected config ID is the one 'cfg.yaml' hashes to
+    (src.utils.id.make_id) when it differs from the name of `dirpath`, and
+    None when they match.
+    """
+
+    cfg_file_path = os.path.join(dirpath, "cfg.yaml")
+    try:
+        cfg = OmegaConf.load(cfg_file_path)
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
+        return None, f"'cfg.yaml' could not be read ({e}).", None
+    if not isinstance(cfg, DictConfig) or not cfg:
+        return (
+            None,
+            f"'cfg.yaml' is empty or not a mapping (parsed as {type(cfg).__name__}).",
+            None,
+        )
+
+    try:
+        cfg_dict = strip_config(cfg)
+    except OmegaConfBaseException as e:
+        return None, f"'cfg.yaml' could not be resolved ({e}).", None
+
+    # Check the folder name against the config ID that cfg.yaml hashes to
+    config_id = os.path.basename(os.path.abspath(dirpath))
+    expected_id = make_id(cfg)
+    if config_id == expected_id:
+        expected_id = None
+
+    flat = flatten_cfg(cfg_dict, drop_interpolations=False)
+    dict_cfg_flat = {("hyperparameter", k): v for k, v in flat.items()}
+    dict_cfg_flat[CONFIG_ID_COL] = config_id
+    dict_cfg_flat[CFG_DIR_COL] = os.path.relpath(dirpath, data_dir)
+    return dict_cfg_flat, None, expected_id
+
+
+def load_seeds(dirpath: str, dict_cfg_flat: dict) -> tuple:
+    """Load the 'data.npz' of every seed directory of the config directory
+    `dirpath` and return (rows, skipped folders, seeds lacking 'data.npz').
+
+    Each row is `dict_cfg_flat` with the seed and every entry of 'data.npz' as
+    a JSON string. Each skipped folder is a (path, reason) pair.
+    """
+
+    seed_dirs = sorted(
+        (
+            entry
+            for entry in os.listdir(dirpath)
+            if re.fullmatch(r"-?\d+", entry)
+            and os.path.isdir(os.path.join(dirpath, entry))
+        ),
+        key=int,
+    )
+    if not seed_dirs:
+        return [], [(dirpath, "no seed subdirectories found.")], []
+
+    rows, skipped, missing = [], [], []
+    for seed in seed_dirs:
+        npz_file_path = os.path.join(dirpath, seed, "data.npz")
+        if not os.path.isfile(npz_file_path):
+            missing.append(int(seed))
+            continue
+
+        row_dict = dict(dict_cfg_flat)
+        # The seed is the name of the seed directory, since cfg.yaml is shared
+        # by all seeds of a config.
+        row_dict[SEED_COL] = int(seed)
+
+        try:
+            with np.load(npz_file_path) as data:
+                dict_data = {
+                    ("statistic", k): json.dumps(data[k].tolist()) for k in data
+                }
+                rows.append(row_dict | dict_data)
+        except Exception as e:
+            skipped.append(
+                (
+                    os.path.join(dirpath, seed),
+                    f"'data.npz' could not be loaded ({e}).",
+                )
+            )
+    return rows, skipped, missing
+
+
+def load_batch(index: int, items: list, parts_dir: str, progress) -> tuple:
+    """Load the rows of a batch of config directories (load_seeds) and write
+    them to the parquet file part_<index>.parquet in `parts_dir`.
+
+    `items` are (config directory, flat config) pairs, and one item is put on
+    the queue `progress` after each directory is loaded. Return (part path,
+    columns, seeds per directory, skipped folders, seeds lacking 'data.npz' per
+    directory). The part path is None when the batch has no row, and the
+    columns are those of the part, in order of first appearance in the rows.
+    The "_meta" columns are left out of the part.
+    """
+
+    rows, seeds_of, skipped, missing_of = [], {}, [], {}
+    for dirpath, dict_cfg_flat in items:
+        dir_rows, dir_skipped, dir_missing = load_seeds(dirpath, dict_cfg_flat)
+        rows.extend(dir_rows)
+        skipped.extend(dir_skipped)
+        if dir_rows:
+            seeds_of[dirpath] = [row[SEED_COL] for row in dir_rows]
+        if dir_missing:
+            missing_of[dirpath] = dir_missing
+        progress.put(1)
+    if not rows:
+        return None, [], seeds_of, skipped, missing_of
+
+    part = pd.DataFrame(rows)
+    part = part.drop(columns=[c for c in part.columns if c[0] == "_meta"])
+    part_path = os.path.join(parts_dir, f"part_{index:06d}.parquet")
+    pq.write_table(pa.Table.from_pandas(part, preserve_index=False), part_path)
+    return part_path, list(part.columns), seeds_of, skipped, missing_of
+
+
+def write_parquet(part_paths: list, columns: list, cfg_df: pd.DataFrame, path: str) -> None:
+    """Merge the parquet files `part_paths` into one parquet file at `path`, with
+    the columns `columns` in that order.
+
+    The schema is the one pyarrow infers for the whole table: the
+    hyperparameter and config columns are inferred from `cfg_df`, which holds
+    the flat config of every config directory with a row, the seed column is
+    int64, and every statistic column holds JSON strings. Each part is cast to
+    that schema, with a null column for every column it lacks, and the parts
+    are written in row groups of at least PARQUET_CHUNK_ROWS rows.
+    """
+
+    proxy = cfg_df.drop(columns=[c for c in cfg_df.columns if c[0] == "_meta"])
+    proxy[SEED_COL] = 0
+    for col in columns:
+        if col[0] == "statistic":
+            proxy[col] = ""
+    schema = pa.Schema.from_pandas(proxy[columns], preserve_index=False)
+
+    pending, n_pending = [], 0
+    # Snappy compresses and decompresses faster than gzip and writes larger files.
+    with pq.ParquetWriter(path, schema, compression="snappy") as writer:
+        for part_path in tqdm(part_paths, desc="Writing parquet"):
+            part = pq.read_table(part_path)
+            pending.append(
+                pa.Table.from_arrays(
+                    [
+                        part[f.name].cast(f.type)
+                        if f.name in part.column_names
+                        else pa.chunked_array([pa.nulls(part.num_rows, f.type)])
+                        for f in schema
+                    ],
+                    schema=schema,
+                )
+            )
+            n_pending += part.num_rows
+            if n_pending >= PARQUET_CHUNK_ROWS:
+                writer.write_table(pa.concat_tables(pending))
+                pending, n_pending = [], 0
+        if pending:
+            writer.write_table(pa.concat_tables(pending))
+
+
 def process_data_folders(
     data_dir: str,
+    parquet_path: str,
     verbose: bool = False,
     log_configs: bool = False,
-) -> pd.DataFrame:
-    """Return a DataFrame with one row per seed directory under `data_dir`
-    (<data_dir>/<config_id>/<rng_seed>/) that holds a readable 'data.npz' file.
-
-    The function loops over the folder structure, loads the 'data.npz' file
-    from each seed subdirectory, extracts its NumPy array values, and
-    consolidates them into a pandas DataFrame.
+    workers: int | None = None,
+) -> None:
+    """Write a parquet file at `parquet_path` with one row per seed directory
+    (<config_id>/<rng_seed>/) under `data_dir` that holds a readable 'data.npz'
+    file. A '<config_id>' directory is any directory holding a 'cfg.yaml', at
+    any depth under `data_dir`.
 
     Each row holds the key-value pairs of the 'cfg.yaml' file in its
     '<config_id>' directory, without the keys in DROPPED_CFG_KEYS; every entry
@@ -64,10 +281,18 @@ def process_data_folders(
     and grouped into 'hyperparameter', 'statistic', 'seed', and 'config'.
 
     A '<config_id>' directory whose name differs from the config ID of its
-    'cfg.yaml' (src.utils.id.make_id) is reported. Its rows are kept.
+    'cfg.yaml' (src.utils.id.make_id) is reported. Its rows are kept. Rows that
+    share their config ID and seed are reported and kept.
 
     Every 'cfg.yaml' is read before any 'data.npz' is loaded. A hyperparameter
     whose values cannot share a parquet column raises a TypeError that names it.
+    The config directories are read in parallel by a pool of `workers`
+    processes. Each worker writes the rows of a batch of config directories to
+    a part file in '<parquet_path>.parts', and the parts are merged into
+    `parquet_path` in the order of the directory walk (write_parquet), so no
+    process holds every row at once. The merged file is written to
+    '<parquet_path>.tmp' and moved onto `parquet_path` once complete. The part
+    files and the temporary file are removed whether or not the write succeeds.
 
     The function expects the following folder structure:
 
@@ -90,240 +315,255 @@ def process_data_folders(
 
     Args:
         data_dir (str): The path to the data directory, which contains
-                        one or more '<config_id>' subdirectories.
-        verbose (bool): If True, list the skipped folders and the folders whose
-                        name differs from their config ID, and print the recap
+                        one or more '<config_id>' directories at any depth.
+        parquet_path (str): The path of the parquet file to write.
+        verbose (bool): If True, list the skipped folders, the folders whose
+                        name differs from their config ID, and the rows sharing
+                        their config ID and seed, and print the recap
                         header and summary (without the per-configuration
                         details).
         log_configs (bool): If True, write the full recap (including every
                         configuration's hyperparameters) to a
                         'configs_log.txt' file inside data_dir.
+        workers (int | None): The number of worker processes, at most
+                        MAX_WINDOWS_WORKERS on Windows. None uses
+                        default_workers().
     """
 
-    all_df_rows = []
-    found_any_npz = False  # Flag to track if any NPZ files were processed
     skipped_folders: list[tuple[str, str]] = []  # (dirpath, reason)
     missing_npz: dict[str, list[int]] = {}  # cfg dirpath -> seeds lacking 'data.npz'
     id_mismatches: list[tuple[str, str]] = []  # (dirpath, config ID of its cfg.yaml)
+    seeds_of: dict[str, list[int]] = {}  # cfg dirpath -> seeds with a row
+    columns: dict = {}  # row columns in order of first appearance (values unused)
+    part_paths: list[str] = []
 
     data_dir = os.path.normpath(data_dir)
     if not os.path.isdir(data_dir):
         raise ValueError(
-            f"Error: The provided data_dir '{data_dir}' is not a valid directory or does not exist."
+            f"The provided data_dir '{data_dir}' is not a valid directory or does not exist."
         )
 
     print(f"Starting directory walk from: {data_dir}")
 
     # Collect the config directories first: any directory holding a 'cfg.yaml'.
     # Their subtrees are pruned so that seed directories -- and the potentially
-    # large 'heatmaps'/'videos' folders inside them -- are never walked.
+    # large 'heatmaps'/'videos' folders inside them -- are never walked. The
+    # other subdirectories are walked in sorted order, so the rows come in the
+    # same order on every filesystem.
     cfg_dirs = []
     for dirpath, dirnames, filenames in os.walk(data_dir):
         if "cfg.yaml" in filenames:
             dirnames[:] = []
             cfg_dirs.append(dirpath)
+        dirnames.sort()
 
-    # Every cfg.yaml is read, and its hyperparameter columns are checked, before
-    # any data.npz is loaded
-    cfg_flats = {}  # cfg dirpath -> flat dict of its cfg.yaml
-    for dirpath in tqdm(cfg_dirs, desc="Reading cfg.yaml"):
-        cfg_file_path = os.path.join(dirpath, "cfg.yaml")
-        try:
-            cfg_dict = yaml.safe_load(Path(cfg_file_path).read_text())
-        except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
-            skipped_folders.append((dirpath, f"'cfg.yaml' could not be read ({e})."))
-            continue
-        if not isinstance(cfg_dict, dict):
-            skipped_folders.append(
-                (
-                    dirpath,
-                    f"'cfg.yaml' is empty or malformed (parsed as {type(cfg_dict).__name__}).",
-                )
-            )
-            continue
+    workers = workers or default_workers()
+    if os.name == "nt":
+        workers = min(workers, MAX_WINDOWS_WORKERS)
 
-        # Check the folder name against the config ID that cfg.yaml hashes to
-        try:
-            expected_id = make_id(OmegaConf.load(cfg_file_path))
-        except Exception as e:
-            expected_id = f"<config ID could not be computed: {e}>"
-        if os.path.basename(os.path.abspath(dirpath)) != expected_id:
-            id_mismatches.append((dirpath, expected_id))
-
-        # Make DataFrame from cfg.yaml
-        df_cfg = pd.json_normalize(cfg_dict, sep=".")
-
-        # Make a flat dict, dropping keys that are irrelevant for analysis. A
-        # dropped key removes its whole subtree, as in src.utils.id.drop_keys.
-        dict_cfg_flat = df_cfg.to_dict(orient="records")[0]
-        dict_cfg_flat = {
-            ("hyperparameter", k): v
-            for k, v in dict_cfg_flat.items()
-            if not any(k == d or k.startswith(f"{d}.") for d in DROPPED_CFG_KEYS)
-        }
-        dict_cfg_flat[("_meta", "cfg_dir")] = os.path.relpath(dirpath, data_dir)
-        cfg_flats[dirpath] = dict_cfg_flat
-
-    check_column_types(cfg_flats.values())
-
-    for dirpath, dict_cfg_flat in tqdm(cfg_flats.items(), desc="Loading data.npz"):
-        seed_dirs = sorted(
-            (
-                entry
-                for entry in os.listdir(dirpath)
-                if re.fullmatch(r"-?\d+", entry)
-                and os.path.isdir(os.path.join(dirpath, entry))
-            ),
-            key=int,
+    parts_dir = parquet_path + ".parts"
+    tmp_path = parquet_path + ".tmp"
+    manager = multiprocessing.Manager()
+    pool = ProcessPoolExecutor(max_workers=workers)
+    shutil.rmtree(parts_dir, ignore_errors=True)
+    os.makedirs(parts_dir)
+    try:
+        # Every cfg.yaml is read, and its hyperparameter columns are checked,
+        # before any data.npz is loaded. Each task reads a batch of cfg.yaml
+        # files, so a read does not pay an inter-process round trip of its own.
+        cfg_flats = {}  # cfg dirpath -> flat dict of its cfg.yaml
+        results = pool.map(
+            partial(read_cfg, data_dir=data_dir),
+            cfg_dirs,
+            chunksize=max(1, len(cfg_dirs) // (4 * workers)),
         )
-        if not seed_dirs:
-            skipped_folders.append((dirpath, "no seed subdirectories found."))
-            continue
-
-        for seed in seed_dirs:
-            npz_file_path = os.path.join(dirpath, seed, "data.npz")
-            if not os.path.isfile(npz_file_path):
-                missing_npz.setdefault(dirpath, []).append(int(seed))
+        for dirpath, (dict_cfg_flat, reason, expected_id) in zip(
+            cfg_dirs,
+            tqdm(results, total=len(cfg_dirs), desc="Reading cfg.yaml"),
+        ):
+            if dict_cfg_flat is None:
+                skipped_folders.append((dirpath, reason))
                 continue
+            if expected_id is not None:
+                id_mismatches.append((dirpath, expected_id))
+            cfg_flats[dirpath] = dict_cfg_flat
 
-            row_dict = dict(dict_cfg_flat)
-            # The seed is the name of the seed directory, since cfg.yaml is shared
-            # by all seeds of a config.
-            row_dict[("seed", "experiment.rng_seed")] = int(seed)
-            row_dict[("config", "config_id")] = os.path.basename(os.path.abspath(dirpath))
+        check_column_types(cfg_flats.values())
 
+        items = list(cfg_flats.items())
+        batches = [
+            items[i:i + CONFIG_DIRS_PER_PART]
+            for i in range(0, len(items), CONFIG_DIRS_PER_PART)
+        ]
+
+        # The workers put one item on `progress` per config directory, and a
+        # thread advances the bar from it while the batch results come back.
+        progress = manager.Queue()
+        bar = tqdm(total=len(items), desc="Loading data.npz")
+
+        def track():
             try:
-                with np.load(npz_file_path) as data:
-                    dict_data = {
-                        ("statistic", k): json.dumps(data[k].tolist()) for k in data
-                    }
-                    all_df_rows.append(row_dict | dict_data)
-                    found_any_npz = True
-            except Exception as e:
-                skipped_folders.append(
-                    (
-                        os.path.join(dirpath, seed),
-                        f"'data.npz' could not be loaded ({e}).",
-                    )
-                )
-                continue
+                for _ in range(len(items)):
+                    progress.get()
+                    bar.update()
+            except (EOFError, OSError):
+                # The manager is shut down before every directory reports when
+                # a batch fails.
+                pass
 
-    n_skipped = len(skipped_folders) + sum(len(seeds) for seeds in missing_npz.values())
-    if verbose and n_skipped:
-        print(f"Skipped {n_skipped} folders:")
-        for path, reason in skipped_folders:
-            print(f"  {path}: {reason}")
+        tracker = threading.Thread(target=track, daemon=True)
+        tracker.start()
+        results = pool.map(
+            partial(load_batch, parts_dir=parts_dir, progress=progress),
+            range(len(batches)),
+            batches,
+        )
+        for part_path, part_columns, batch_seeds, skipped, batch_missing in results:
+            if part_path is not None:
+                part_paths.append(part_path)
+            columns.update(dict.fromkeys(part_columns))
+            seeds_of.update(batch_seeds)
+            skipped_folders.extend(skipped)
+            missing_npz.update(batch_missing)
+        tracker.join()
+        bar.close()
+        pool.shutdown()
+
+        n_skipped = len(skipped_folders) + sum(len(seeds) for seeds in missing_npz.values())
+        skipped_lines = [f"{path}: {reason}" for path, reason in skipped_folders]
         for path, seeds in missing_npz.items():
             seed_str = ", ".join(str(s) for s in sorted(seeds))
-            print(f"  {path}{os.sep} {{{seed_str}}}: 'data.npz' is missing.")
-    elif n_skipped:
-        print(f"Skipped {n_skipped} folders. Run with -v to list them.")
+            skipped_lines.append(f"{path}{os.sep} {{{seed_str}}}: 'data.npz' is missing.")
+        report(f"Skipped {n_skipped} folders", skipped_lines, verbose)
 
-    if verbose and id_mismatches:
-        print(
+        report(
             f"{len(id_mismatches)} config folder(s) not named after the config ID "
-            f"of their cfg.yaml (rows kept):"
-        )
-        for path, expected_id in id_mismatches:
-            print(f"  {path}: expected {expected_id}")
-    elif id_mismatches:
-        print(
-            f"{len(id_mismatches)} config folder(s) not named after the config ID "
-            f"of their cfg.yaml (rows kept). Run with -v to list them."
+            f"of their cfg.yaml (rows kept)",
+            [f"{path}: expected {expected_id}" for path, expected_id in id_mismatches],
+            verbose,
         )
 
-    if not found_any_npz:
-        raise FileNotFoundError(
-            f"\nNo .npz data found in the specified structure under '{data_dir}'."
-        )
-
-    # Create a pandas DataFrame from the list of dictionaries
-    df = pd.DataFrame(all_df_rows)
-
-    # --- Recap ---
-    seed_col = ("seed", "experiment.rng_seed")
-    cfg_dir_col = ("_meta", "cfg_dir")
-    hyp_cols = [c for c in df.columns if c[0] == "hyperparameter"]
-
-    varying_hyp = sorted(
-        [c for c in hyp_cols if df[c].astype(str).nunique() > 1],
-        key=lambda c: c[1],
-    )
-
-    need_recap = verbose or log_configs
-    header_lines: list[str] = []
-    summary_line: str | None = None
-    stat_line: str | None = None
-    config_blocks: list[list[str]] = []
-
-    if need_recap:
-        header_lines = ["=" * 60, "RECAP", "=" * 60]
-
-        stat_cols = sorted({c[1] for c in df.columns if c[0] == "statistic"})
-        if stat_cols:
-            stat_line = f"Statistics: {stat_cols}"
-
-        if not hyp_cols or seed_col not in df.columns:
-            summary_line = f"Total rows: {len(df)}"
-        elif not varying_hyp:
-            seeds = sorted(df[seed_col].dropna().unique().tolist())
-            folders = sorted(df[cfg_dir_col].unique().tolist()) if cfg_dir_col in df.columns else []
-            folder_str = f"  [{', '.join(folders)}]" if folders else ""
-            summary_line = f"1 configuration{folder_str} — {len(seeds)} run(s), seeds: {seeds}"
-        else:
-            groupby_keys = [df[c].astype(str).rename(c[1]) for c in varying_hyp]
-            groups = df.groupby(groupby_keys)
-            summary_line = (
-                f"{len(groups)} unique configuration(s). "
-                f"Varying keys: {[c[1] for c in varying_hyp]}"
+        if not part_paths:
+            raise FileNotFoundError(
+                f"No .npz data found in the specified structure under '{data_dir}'."
             )
-            for i, (name, group) in enumerate(groups):
-                if not isinstance(name, tuple):
-                    name = (name,)
-                seeds = sorted(group[seed_col].dropna().unique().tolist())
-                folders = (
-                    sorted(group[cfg_dir_col].unique().tolist())
-                    if cfg_dir_col in group.columns
-                    else []
+
+        # One row per written row, with the columns the checks below need
+        index = pd.DataFrame(
+            [
+                (cfg_flats[d][CONFIG_ID_COL], seed, cfg_flats[d][CFG_DIR_COL])
+                for d, seeds in seeds_of.items()
+                for seed in seeds
+            ],
+            columns=["config_id", "seed", "cfg_dir"],
+        )
+        dups = index[index.duplicated(["config_id", "seed"], keep=False)]
+        report(
+            f"{len(dups)} row(s) share their config ID and seed with another row (rows kept)",
+            [
+                f"{config_id}, seed {seed}: {sorted(group['cfg_dir'])}"
+                for (config_id, seed), group in dups.groupby(["config_id", "seed"])
+            ],
+            verbose,
+        )
+
+        # The flat config of every config directory with a row
+        cfg_df = pd.DataFrame([cfg_flats[d] for d in seeds_of])
+
+        # --- Recap ---
+
+        need_recap = verbose or log_configs
+        header_lines: list[str] = []
+        summary_line: str | None = None
+        stat_line: str | None = None
+        config_blocks: list[list[str]] = []
+
+        if need_recap:
+            header_lines = ["=" * 60, "RECAP", "=" * 60]
+
+            stat_cols = sorted({c[1] for c in columns if c[0] == "statistic"})
+            if stat_cols:
+                stat_line = f"Statistics: {stat_cols}"
+
+            # Imported here, since src.utils.plot loads matplotlib and seaborn and
+            # only the recap uses it. value_str renders every null spelling alike
+            # and integral floats as ints, as the plotting scripts compare values.
+            from src.utils.plot import value_str
+
+            seeds_of_folder = {cfg_flats[d][CFG_DIR_COL]: set(s) for d, s in seeds_of.items()}
+            hyp_cols = [c for c in cfg_df.columns if c[0] == "hyperparameter"]
+            hyp_strs = {c: cfg_df[c].map(value_str) for c in hyp_cols}
+            varying_hyp = sorted(
+                [c for c in hyp_cols if hyp_strs[c].nunique() > 1],
+                key=lambda c: c[1],
+            )
+
+            if not hyp_cols:
+                summary_line = f"Total rows: {len(index)}"
+            elif not varying_hyp:
+                seeds = sorted(set(index["seed"]))
+                folders = sorted(cfg_df[CFG_DIR_COL].tolist())
+                folder_str = f"  [{', '.join(folders)}]"
+                summary_line = (
+                    f"1 configuration{folder_str} — {len(seeds)} run(s), seeds: {seeds}"
                 )
-                folder_str = f"  [{', '.join(folders)}]" if folders else ""
-                block = [f"Config {i + 1}{folder_str} — {len(seeds)} run(s), seeds {seeds}:"]
-                for col, val in zip(varying_hyp, name):
-                    block.append(f"  {col[1]} = {val}")
-                config_blocks.append(block)
+            else:
+                groupby_keys = [hyp_strs[c].rename(c[1]) for c in varying_hyp]
+                groups = cfg_df.groupby(groupby_keys)
+                summary_line = (
+                    f"{len(groups)} unique configuration(s). "
+                    f"Varying keys: {[c[1] for c in varying_hyp]}"
+                )
+                for i, (name, group) in enumerate(groups):
+                    if not isinstance(name, tuple):
+                        name = (name,)
+                    folders = sorted(group[CFG_DIR_COL].tolist())
+                    seeds = sorted(set().union(*(seeds_of_folder[f] for f in folders)))
+                    folder_str = f"  [{', '.join(folders)}]"
+                    block = [f"Config {i + 1}{folder_str} — {len(seeds)} run(s), seeds {seeds}:"]
+                    for col, val in zip(varying_hyp, name):
+                        block.append(f"  {col[1]} = {val}")
+                    config_blocks.append(block)
 
-    if verbose:
-        print()
-        for line in header_lines:
-            print(line)
-        if summary_line is not None:
-            print(summary_line)
-        if stat_line is not None:
+        if verbose:
             print()
-            print(stat_line)
-
-    if log_configs:
-        log_configs_path = os.path.join(data_dir, "configs_log.txt")
-        with open(log_configs_path, "w", encoding="utf-8") as f:
             for line in header_lines:
-                f.write(line + "\n")
+                print(line)
             if summary_line is not None:
-                f.write(summary_line + "\n")
+                print(summary_line)
             if stat_line is not None:
-                f.write("\n")
-                f.write(stat_line + "\n")
-            f.write("\n")
-            for block in config_blocks:
-                for line in block:
+                print()
+                print(stat_line)
+
+        if log_configs:
+            log_configs_path = os.path.join(data_dir, "configs_log.txt")
+            with open(log_configs_path, "w", encoding="utf-8") as f:
+                for line in header_lines:
                     f.write(line + "\n")
+                if summary_line is not None:
+                    f.write(summary_line + "\n")
+                if stat_line is not None:
+                    f.write("\n")
+                    f.write(stat_line + "\n")
                 f.write("\n")
-        print(f"\nConfigs log saved to {log_configs_path}")
+                for block in config_blocks:
+                    for line in block:
+                        f.write(line + "\n")
+                    f.write("\n")
+            print(f"\nConfigs log saved to {log_configs_path}")
 
-    # Drop internal metadata columns before returning
-    meta_cols = [c for c in df.columns if c[0] == "_meta"]
-    df = df.drop(columns=meta_cols)
-
-    return df
+        write_parquet(part_paths, list(columns), cfg_df, tmp_path)
+        os.replace(tmp_path, parquet_path)
+    except BaseException:
+        # The tasks not yet started are dropped, so the error is raised once the
+        # running ones finish, not once every task has run.
+        pool.shutdown(cancel_futures=True)
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+    finally:
+        manager.shutdown()
+        shutil.rmtree(parts_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
@@ -335,10 +575,21 @@ if __name__ == "__main__":
         action="store_true",
         help="Save configs_log.txt (with all configurations) in the parquet's directory.",
     )
+    parser.add_argument(
+        "-w",
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of processes reading the data folders. Defaults to the number of CPUs.",
+    )
     args = parser.parse_args()
 
-    df = process_data_folders(args.folder, verbose=args.verbose, log_configs=args.log_configs)
-
-    gzip_path = os.path.join(args.folder, "results.gzip")
-    df.to_parquet(gzip_path, index=False, compression="gzip")
-    print(f"\nDataFrame successfully saved to {gzip_path}")
+    parquet_path = os.path.join(args.folder, "results.parquet")
+    process_data_folders(
+        args.folder,
+        parquet_path,
+        verbose=args.verbose,
+        log_configs=args.log_configs,
+        workers=args.workers,
+    )
+    print(f"\nDataFrame successfully saved to {parquet_path}")

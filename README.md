@@ -291,7 +291,7 @@ After a sweep is complete (e.g., the example sweep above), run
 ```
 python process_data.py -f data_example/
 ```
-This converts all data to a Pandas DataFrame and saves it to `data_example/results.gzip` as
+This converts all data to a Pandas DataFrame and saves it to `data_example/results.parquet` as
 [a parquet file](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.to_parquet.html).
 Then, there are two default scripts to visualize the results (both save files under
 `data_example/plots/`).

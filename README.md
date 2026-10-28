@@ -1,6 +1,6 @@
 <p align="center">
-  <img src="assets/logo.jpg" width="270" alt="Logo"> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="assets/features.png" width="508" alt="Overview">
+  <img src="assets/logo.jpg" height="275" alt="Logo"> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="assets/features.png" height="275" alt="Overview">
 </p>
 
 A small customizable codebase to train, sweep, and benchmark RL agents on

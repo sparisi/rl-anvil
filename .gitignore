@@ -9,6 +9,7 @@
 *.mp4
 *.npz
 *.gzip
+*.parquet
 *.tex
 *.html
 *cfg.yaml

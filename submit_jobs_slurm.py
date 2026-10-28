@@ -202,7 +202,6 @@ import subprocess
 import submitit
 import cloudpickle
 import argparse
-import itertools
 
 from src.utils.slurm import (
     SLURM_CONFIG_DIR,
@@ -214,7 +213,7 @@ from src.utils.slurm import (
     load_cluster,
     slurm_setup,
 )
-from src.utils.sweep import load_sweep, format_override
+from src.utils.sweep import expand_sweep, format_override, load_sweep
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -490,8 +489,9 @@ def submit_jobs(
         config_id = job_config_id(config_hp, extra, defaults=base_overrides)
 
         # Drop the seeds an earlier entry of `jobs` already covers. Two entries
-        # can resolve to the same config_id (e.g., a config_sweep key replacing a
-        # global_sweep one), and would otherwise write to the same folder.
+        # can resolve to the same config_id (e.g., one config_sweep entry pinning
+        # a key to a value another one takes from global_sweep), and would
+        # otherwise write to the same folder.
         repeated = [seed for seed in seeds if (config_id, seed) in planned]
         seeds = [seed for seed in seeds if (config_id, seed) not in planned]
         skipped_repeated_seeds += len(repeated)
@@ -707,17 +707,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     seeds = parse_seeds(args.seeds)
-    global_sweep, sweep = load_sweep(args.sweep)
-    global_keys = list(global_sweep.keys())
-    global_combos = list(itertools.product(*global_sweep.values()))
-    jobs = []
-    for config in sweep:
-        config_keys = list(config.keys())
-        config_combos = list(itertools.product(*config.values()))
-        for global_combo, config_combo in itertools.product(global_combos, config_combos):
-            hp = dict(zip(global_keys, global_combo))
-            hp.update(zip(config_keys, config_combo))
-            jobs.append((hp, seeds))
+    jobs = [(hp, seeds) for hp in expand_sweep(*load_sweep(args.sweep))]
 
     submit_jobs(
         jobs,

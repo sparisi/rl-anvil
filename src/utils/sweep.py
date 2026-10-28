@@ -27,6 +27,7 @@ Example:
 Note: either section MUST define `environment` and `algorithm`.
 """
 
+import itertools
 import os
 import string
 import yaml
@@ -65,6 +66,20 @@ def load_sweep(name):
     if empty:
         raise SystemExit(f"Empty sweep values in {path} for: {empty}")
     return global_sweep, config_sweep
+
+
+def expand_sweep(global_sweep, config_sweep):
+    """Yield every configuration a sweep declares as a {key: value} dict: for
+    each entry of `config_sweep`, the cross-product of the values of the
+    `global_sweep` keys and of the entry's own keys, the entry's values taking
+    precedence for a key both declare. The keys come in `global_sweep` order,
+    followed by the entry's remaining keys."""
+
+    for entry in config_sweep:
+        keys = list(global_sweep) + [k for k in entry if k not in global_sweep]
+        declared = [entry.get(k, global_sweep.get(k)) for k in keys]
+        for combo in itertools.product(*declared):
+            yield dict(zip(keys, combo))
 
 
 def config_groups():

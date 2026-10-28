@@ -46,15 +46,16 @@ import yaml
 from pathlib import Path
 from tqdm import tqdm
 
+from src.utils.misc import make_vprint
 from src.utils.plot import (
-    assign_groups, composed_mask, ensure_font, entry_config,
+    add_config_group_args, assign_groups, composed_mask, ensure_font, entry_config,
     env_groups, flatten_cfg, ignored_cfg_keys, load_config_group,
     load_plot_configs, memory_fractions, plot_entries, plot_labels,
     split_config_label, tex_kwargs as _tex,
 )
 from src.utils.heatmaps import (
     CBAR_SUBPLOT_SIZE, add_colorbar, arr_range, auto_dpi, cbar_groups, cbar_hspace,
-    compute_maps_all_fractions, plot_map, pooled_range, scale_funcs, scale_key,
+    memory_maps, plot_map, pooled_range, scale_funcs, scale_key,
     viridis_black_bad, quiet_empty_maps,
 )
 
@@ -110,16 +111,7 @@ parser.add_argument(
          "<root>/heatmaps/<plot config>, so one data directory holds the output of "
          "every plotting script without one overwriting another.",
 )
-parser.add_argument(
-    "-a", "--algorithms",
-    default="configs/algorithm",
-    help="Directory of algorithm YAMLs.",
-)
-parser.add_argument(
-    "-e", "--environments",
-    default="configs/environment",
-    help="Directory of environment YAMLs.",
-)
+add_config_group_args(parser)
 parser.add_argument(
     "-p", "--plot_config",
     required=True,
@@ -190,12 +182,7 @@ _CMAP = viridis_black_bad()
 _FORWARD, _INVERSE = scale_funcs(log_scale=args.log_scale)
 
 
-def vprint(*a, **kw):
-    """Print only under --verbose."""
-
-    if args.verbose:
-        print(*a, **kw)
-
+vprint = make_vprint(args.verbose)
 
 # --- Naming ---
 
@@ -504,8 +491,10 @@ with tqdm(needed, desc="Loading memory", unit="run", disable=not args.verbose) a
 
         try:
             with quiet_empty_maps():
-                maps_per_frac = compute_maps_all_fractions(
-                    run_cfgs[name], mem, FRACTIONS
+                maps_per_frac = memory_maps(
+                    mem,
+                    env_cfg=run_cfgs[name]["environment"],
+                    fractions=FRACTIONS,
                 )
         except Exception as e:
             vprint(f"  WARNING: compute_maps failed for {name}: {e}")

@@ -17,7 +17,7 @@ from tqdm import tqdm
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import OmegaConfBaseException
 
-from src.utils.id import flatten_cfg, make_id, strip_config
+from src.utils.id import CONFIG_ID, SEED, flatten_cfg, make_id, strip_config
 
 # Minimum number of rows in each row group of the merged parquet file.
 PARQUET_CHUNK_ROWS = 10_000
@@ -29,8 +29,6 @@ CONFIG_DIRS_PER_PART = 8
 # ProcessPoolExecutor on Windows accepts at most this many workers.
 MAX_WINDOWS_WORKERS = 61
 
-SEED_COL = ("seed", "experiment.rng_seed")
-CONFIG_ID_COL = ("config", "config_id")
 CFG_DIR_COL = ("_meta", "cfg_dir")
 
 
@@ -133,7 +131,7 @@ def read_cfg(dirpath: str, data_dir: str) -> tuple:
 
     flat = flatten_cfg(cfg_dict, drop_interpolations=False)
     dict_cfg_flat = {("hyperparameter", k): v for k, v in flat.items()}
-    dict_cfg_flat[CONFIG_ID_COL] = config_id
+    dict_cfg_flat[CONFIG_ID] = config_id
     dict_cfg_flat[CFG_DIR_COL] = os.path.relpath(dirpath, data_dir)
     return dict_cfg_flat, None, expected_id
 
@@ -168,7 +166,7 @@ def load_seeds(dirpath: str, dict_cfg_flat: dict) -> tuple:
         row_dict = dict(dict_cfg_flat)
         # The seed is the name of the seed directory, since cfg.yaml is shared
         # by all seeds of a config.
-        row_dict[SEED_COL] = int(seed)
+        row_dict[SEED] = int(seed)
 
         try:
             with np.load(npz_file_path) as data:
@@ -204,7 +202,7 @@ def load_batch(index: int, items: list, parts_dir: str, progress) -> tuple:
         rows.extend(dir_rows)
         skipped.extend(dir_skipped)
         if dir_rows:
-            seeds_of[dirpath] = [row[SEED_COL] for row in dir_rows]
+            seeds_of[dirpath] = [row[SEED] for row in dir_rows]
         if dir_missing:
             missing_of[dirpath] = dir_missing
         progress.put(1)
@@ -231,7 +229,7 @@ def write_parquet(part_paths: list, columns: list, cfg_df: pd.DataFrame, path: s
     """
 
     proxy = cfg_df.drop(columns=[c for c in cfg_df.columns if c[0] == "_meta"])
-    proxy[SEED_COL] = 0
+    proxy[SEED] = 0
     for col in columns:
         if col[0] == "statistic":
             proxy[col] = ""
@@ -451,7 +449,7 @@ def process_data_folders(
         # One row per written row, with the columns the checks below need
         index = pd.DataFrame(
             [
-                (cfg_flats[d][CONFIG_ID_COL], seed, cfg_flats[d][CFG_DIR_COL])
+                (cfg_flats[d][CONFIG_ID], seed, cfg_flats[d][CFG_DIR_COL])
                 for d, seeds in seeds_of.items()
                 for seed in seeds
             ],

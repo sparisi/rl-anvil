@@ -49,6 +49,7 @@ from omegaconf import OmegaConf
 
 from src.utils.id import (
     DROPPED_CFG_KEYS,
+    SEED,
     compose_cfg,
     composed_config,
     decode_stat,
@@ -1756,10 +1757,10 @@ def vega_field_name(labels, key):
     return labels[key].replace(".", "_")
 
 
-# The columns a cell is decoded from: where a run's seed is recorded, how many
-# steps it trained for, and the training step each of its points was recorded at.
-SEED = ("seed", "experiment.rng_seed")
-STEPS = ("hyperparameter", "experiment.training_steps")
+# The columns a cell is decoded from: where a run's seed is recorded (SEED, from
+# src.utils.id), how many steps it trained for, and the training step each of
+# its points was recorded at.
+STEPS =("hyperparameter", "experiment.training_steps")
 STEPS_STAT = ("statistic", "steps")
 
 # The columns every script that reads a run needs by name. `environment` and

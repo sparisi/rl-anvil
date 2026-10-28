@@ -364,17 +364,6 @@ def memory_maps(memory, env=None, env_cfg=None, fractions=(1.0,)):
     return {fraction: maps[fraction] for fraction in fractions}
 
 
-def compute_maps_all_fractions(run_cfg, mem, fractions):
-    """Count what a saved run's replay memory holds and return
-    {fraction: {map name: map}}: `memory_maps` keyed off the run's own config.
-
-    `run_cfg` is a whole cfg.yaml, so the environment is rebuilt from its
-    `environment` section rather than passed in live. `mem` is the loaded
-    memory.npz. Returns None when that environment has no tabular counter."""
-
-    return memory_maps(mem, env_cfg=run_cfg["environment"], fractions=fractions)
-
-
 # ----- Colour scale -----------------------------------------------------------
 # A map with nothing in it raises RuntimeWarnings that are ordinary here: a map
 # no run visited is all NaN, and a nanmin or nanmax over it warns about an empty

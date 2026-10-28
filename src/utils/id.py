@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import json
 import os
 import tempfile
 from functools import lru_cache
@@ -18,6 +19,7 @@ DROPPED_CFG_KEYS = (
     "meta",
     "results",
     "experiment.rng_seed",
+    # "agent.critic.approximator.device",
 )
 
 # Characters of the md5 digest a config ID keeps.
@@ -118,10 +120,6 @@ def _composed_config(overrides: tuple) -> dict:
     DROPPED_CFG_KEYS. The result is cached: every call with the same
     `overrides` returns the same object."""
 
-    # Imported here rather than at module level: src.utils.plot pulls in
-    # matplotlib and seaborn, which the training path has no use for.
-    from src.utils.plot import flatten_cfg
-
     return flatten_cfg(strip_config(compose_cfg(overrides)), drop_interpolations=False)
 
 
@@ -140,19 +138,23 @@ def composed_config(overrides: tuple) -> dict:
     return copy.deepcopy(_composed_config(overrides))
 
 
-def compose_cfg(overrides) -> DictConfig:
-    """Return the DictConfig that Hydra composes from configs/default.yaml and
-    the `overrides`.
+def compose_cfg(overrides=(), config_name: str = "default") -> DictConfig:
+    """Return the DictConfig that Hydra composes from the config file
+    `config_name` (a path relative to CONFIG_DIR, without the suffix) and the
+    `overrides`.
 
     For example
         compose_cfg(("environment=gymnasium/lunar_lander", "++agent.critic.lr=0.001"))
 
     returns the DictConfig resulting from running
         python main.py environment=gymnasium/lunar_lander ++agent.critic.lr=0.001
+
+    and compose_cfg(config_name="environment/gymnasium/lunar_lander") composes
+    that file and its `defaults:` list alone, without configs/default.yaml.
     """
 
     with initialize_config_dir(version_base=None, config_dir=CONFIG_DIR):
-        return compose(config_name="default", overrides=list(overrides))
+        return compose(config_name=config_name, overrides=list(overrides))
 
 
 def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
@@ -267,3 +269,57 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
     if verbose:
         print(f":floppy_disk: Data will be saved at {run_dir}")
     return config_id
+
+
+def decode_stat(raw):
+    """
+    Decode one cell of a statistics table and return it as a Python value: a
+    string holding JSON is parsed (a list for a curve, a number or a string
+    for a scalar), a string that is not JSON is returned as it is, and
+    anything else is returned unchanged.
+    """
+
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except ValueError:
+            return raw
+    return raw
+
+
+def flatten_cfg(nested: dict, drop_interpolations=True) -> dict:
+    """Return `nested` flattened to {dotted_key: value}.
+
+    Nested mappings are flattened recursively, with keys joined by ".". An empty
+    mapping is kept as the value "{}", so a key holding one stays distinct from
+    an absent key. With `drop_interpolations`, string values holding "${" are
+    left out.
+    """
+
+    flat = {}
+    for key, value in nested.items():
+        if isinstance(value, dict) and value:
+            for sub_key, sub_value in flatten_cfg(value, drop_interpolations=False).items():
+                flat[f"{key}.{sub_key}"] = sub_value
+        else:
+            flat[str(key)] = "{}" if isinstance(value, dict) else value
+    if drop_interpolations:
+        flat = {k: v for k, v in flat.items() if not (isinstance(v, str) and "${" in v)}
+    return flat
+
+
+def dict_to_id(d: dict) -> str:
+    """
+    Parse a dictionary and generate a unique id.
+    The id will have the initials of every key followed by its value.
+    Entries are separated by underscore.
+    If a key's value is None, it will be skipped.
+
+    Example:
+        d = {"first_key": 0, "some_key": True, "another_key": None} -> fk0_skTrue
+    """
+
+    def make_prefix(key: str) -> str:
+        return "".join(w[0] for w in key.split("_"))
+
+    return "_".join([f"{make_prefix(k)}{v}" for k, v in d.items() if v is not None])

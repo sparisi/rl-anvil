@@ -45,7 +45,6 @@ Example:
 
 import os
 import sys
-import json
 import argparse
 import multiprocessing
 from ast import literal_eval
@@ -62,6 +61,8 @@ import numpy as np
 import pandas as pd
 import wandb
 from tqdm import tqdm
+
+from src.utils.id import decode_stat
 
 SEED = ("seed", "experiment.rng_seed")
 CONFIG_ID = ("config", "config_id")
@@ -106,15 +107,11 @@ def unflatten(flat: dict) -> dict:
 
 
 def decode(raw):
-    """Return `raw` parsed as JSON if it is a string holding valid JSON, the
-    string itself if it is not, and `raw` passed through to_python if it is not
-    a string."""
+    """Return `raw` decoded by decode_stat if it is a string, and passed through
+    to_python if it is not."""
 
     if isinstance(raw, str):
-        try:
-            return json.loads(raw)
-        except ValueError:
-            return raw
+        return decode_stat(raw)
     return to_python(raw)
 
 
@@ -222,9 +219,8 @@ def main():
         help="Data directory holding the parquet file.",
     )
     parser.add_argument(
-        "-g",
-        "--gzip",
-        default="results.gzip",
+        "--parquet",
+        default="results.parquet",
         help="Name of the parquet file inside the data directory.",
     )
     parser.add_argument("--project", required=True, help="W&B project.")
@@ -256,19 +252,19 @@ def main():
     )
     args = parser.parse_args()
 
-    gzip_path = os.path.join(args.folder, args.gzip)
-    df = pd.read_parquet(gzip_path)
-    print(f"Loaded gzip from: {gzip_path}")
+    parquet_path = os.path.join(args.folder, args.parquet)
+    df = pd.read_parquet(parquet_path)
+    print(f"Loaded parquet file from: {parquet_path}")
     if all(isinstance(c, str) and c.startswith("(") for c in df.columns):
         df.columns = pd.MultiIndex.from_tuples([literal_eval(c) for c in df.columns])
 
     hyp_cols = [c for c in df.columns if c[0] == "hyperparameter"]
     stat_cols = [c for c in df.columns if c[0] == "statistic"]
     if ("statistic", "steps") not in stat_cols:
-        raise KeyError(f"No 'steps' statistic in {gzip_path}.")
+        raise KeyError(f"No 'steps' statistic in {parquet_path}.")
     if CONFIG_ID not in df.columns:
         raise KeyError(
-            f"No {CONFIG_ID} column in {gzip_path}. Run process_data.py again "
+            f"No {CONFIG_ID} column in {parquet_path}. Run process_data.py again "
             f"to write it."
         )
 

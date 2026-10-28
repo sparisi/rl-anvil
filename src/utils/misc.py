@@ -8,16 +8,10 @@ def faster_choice(p: np.array, n: int, rng_generator: np.random.Generator):
 
     cdf = np.cumsum(p)
     u = rng_generator.random(n)
-    sampled_indices = np.searchsorted(cdf, u)
-    return sampled_indices
-
-
-# def faster_choice(p: np.array, n: int, rng_generator: np.random.Generator):
-#     """
-#     Faster (for small arrays) implementation of np.random.choice.
-#     """
-#
-#     return (1 - rng_generator.random(n)[None] > p.cumsum()[..., None]).sum(0)
+    # side="right" skips zero-probability entries, and scaling the draws by the
+    # last cumulative value keeps every index below len(p) when rounding leaves
+    # that value below 1.
+    return np.searchsorted(cdf, u * cdf[-1], side="right")
 
 
 # https://stackoverflow.com/a/47722393/754136
@@ -30,10 +24,18 @@ def random_choice(p: np.array, rng_generator: np.random.Generator, axis: int = -
     p = np.where(p.sum(axis, keepdims=True) == 0, 1.0, p)
     p = p / p.sum(axis, keepdims=True)
     r = np.expand_dims(rng_generator.random(np.delete(p.shape, axis)), axis=axis)
-    return (p.cumsum(axis=axis) > r).argmax(axis=axis)
+    cdf = p.cumsum(axis=axis)
+    # The draw is scaled by the last cumulative value, which rounding can leave
+    # below 1, so some entry always exceeds it.
+    return (cdf > r * np.take(cdf, [-1], axis=axis)).argmax(axis=axis)
 
 
-def random_argmax(x: np.array, rng_generator: np.random.Generator, axis: int = None, rtol: float = 0.0):
+def random_argmax(
+    x: np.array,
+    rng_generator: np.random.Generator,
+    axis: int = None,
+    rtol: float = 0.0,
+):
     """
     Random tiebreak for np.argmax() if there are multiple entries with the same
     max value.
@@ -44,16 +46,19 @@ def random_argmax(x: np.array, rng_generator: np.random.Generator, axis: int = N
     if axis is None:
         x_max = x.max()
         mask = x == x_max if rtol == 0.0 else x >= x_max - np.abs(x_max) * rtol
-        best = np.argwhere(mask)
-        i = rng_generator.choice(range(best.shape[0]))
-        return best[i]
+        return int(rng_generator.choice(np.flatnonzero(mask)))
 
     x_max = x.max(axis=axis, keepdims=True)
     mask = x == x_max if rtol == 0.0 else x >= x_max - np.abs(x_max) * rtol
     return random_choice(mask, rng_generator, axis)
 
 
-def random_argmin(x: np.array, rng_generator: np.random.Generator, axis: int = None, rtol: float = 0.0):
+def random_argmin(
+    x: np.array,
+    rng_generator: np.random.Generator,
+    axis: int = None,
+    rtol: float = 0.0,
+):
     """
     Random tiebreak for np.argmin() if there are multiple entries with the same
     min value.
@@ -61,16 +66,9 @@ def random_argmin(x: np.array, rng_generator: np.random.Generator, axis: int = N
     x <= min(x) + |min(x)| * rtol
     """
 
-    if axis is None:
-        x_min = x.min()
-        mask = x == x_min if rtol == 0.0 else x <= x_min + np.abs(x_min) * rtol
-        best = np.argwhere(mask)
-        i = rng_generator.choice(range(best.shape[0]))
-        return best[i]
-
-    x_min = x.min(axis=axis, keepdims=True)
-    mask = x == x_min if rtol == 0.0 else x <= x_min + np.abs(x_min) * rtol
-    return random_choice(mask, rng_generator, axis)
+    # Cast first: negation wraps around for unsigned integers and fails for
+    # booleans. float64 holds every float and every integer up to 2**53 exactly.
+    return random_argmax(-x.astype(np.float64), rng_generator, axis=axis, rtol=rtol)
 
 
 # https://en.wikipedia.org/wiki/Pairing_function
@@ -78,7 +76,6 @@ def cantor_pairing(x: int, y: int) -> int:
     """
     Cantor pairing function to uniquely encode two
     natural numbers into a single natural number.
-    Used for seeding.
 
     Args:
         x (int): first number,
@@ -88,7 +85,7 @@ def cantor_pairing(x: int, y: int) -> int:
         A unique integer computed from x and y.
     """
 
-    return int(0.5 * (x + y) * (x + y + 1) + y)
+    return (x + y) * (x + y + 1) // 2 + y
 
 
 def set_rng_seed(seed: int = None) -> None:
@@ -102,23 +99,6 @@ def set_rng_seed(seed: int = None) -> None:
 
     np.random.seed(seed)
     random.seed(seed)
-
-
-def dict_to_id(d: dict) -> str:
-    """
-    Parse a dictionary and generate a unique id.
-    The id will have the initials of every key followed by its value.
-    Entries are separated by underscore.
-    If a key's value is None, it will be skipped.
-
-    Example:
-        d = {"first_key": 0, "some_key": True, "another_key": None} -> fk0_skTrue
-    """
-
-    def make_prefix(key: str) -> str:
-        return "".join(w[0] for w in key.split("_"))
-
-    return "_".join([f"{make_prefix(k)}{v}" for k, v in d.items() if v is not None])
 
 
 def pprint_4d(arr):
@@ -184,7 +164,7 @@ def format_value(v) -> str:
 def format_dict_row(
     d: dict,
     print_keys: bool = False,
-    sorted: bool = False,
+    sort_keys: bool = False,
     col_width: int = None,
 ) -> tuple:
     """
@@ -195,7 +175,7 @@ def format_dict_row(
     Args:
         d (dict): dictionary of values,
         print_keys (bool): if True, return the header row as well,
-        sorted (bool): if True, sort keys alphabetically,
+        sort_keys (bool): if True, sort keys alphabetically,
         col_width (int): width of each column. If None, it is set to the minimum
             width possible,
 
@@ -208,7 +188,7 @@ def format_dict_row(
     ...      "updates": rng.integers(10),
     ...      "clipped": rng.random() < 0.5,
     ...    }
-    ...    (header_str, row_str) = format_dict_row(results, print_keys=(i==0), width=14)
+    ...    (header_str, row_str) = format_dict_row(results, print_keys=(i==0), col_width=14)
     ...    if header_str is not None:
     ...       print(header_str)  # colorize if you want
     ...    print(row_str)
@@ -221,7 +201,7 @@ def format_dict_row(
             0.8276 |              7 |          False
     """
 
-    keys = sorted(d.keys()) if sorted else list(d.keys())
+    keys = sorted(d.keys()) if sort_keys else list(d.keys())
     row = []
     col_width = [col_width] * len(keys)
     for i, k in enumerate(keys):
@@ -233,6 +213,31 @@ def format_dict_row(
     row_str = " | ".join(row)
     header = " | ".join(f"{k:>{w}}" for k, w in zip(keys, col_width)) if print_keys else None
     return (header, row_str)
+
+
+# The messages _warn_once has already printed, so that a sweep where every cell
+# holds runs of two training lengths says so once rather than once per cell per
+# statistic.
+_WARNED: set = set()
+
+
+def _warn_once(message):
+    """Print `message` the first time it is given and never again."""
+
+    if message not in _WARNED:
+        _WARNED.add(message)
+        print(message)
+
+
+def make_vprint(verbose):
+    """Return a function that prints its arguments as print does when `verbose`
+    is true, and does nothing otherwise."""
+
+    def vprint(*args, **kwargs):
+        if verbose:
+            print(*args, **kwargs)
+
+    return vprint
 
 
 class StatsTracker:
@@ -274,11 +279,12 @@ class StatsTracker:
 
 def sample_from_gym_space(space, n: int, rng_generator: np.random.Generator):
     """
-    Batched version of gymnasium.spaces.Box.sample(): draws `n` samples using
-    the same per-dimension distributions as the built-in sampler (uniform if
-    both-sided bounded, shifted exponential if one-sided, normal if unbounded).
-    Returns an array of shape (n,) + space.shape.
+    Batched version of gymnasium.spaces.Box.sample(): draws `n` samples, each
+    dimension uniform if both-sided bounded, shifted exponential if one-sided,
+    normal if unbounded. Returns a float64 array of shape (n,) + space.shape,
+    whatever the dtype of `space`; integer Boxes are not floored.
     """
+
     ub = ~space.bounded_below & ~space.bounded_above
     lb = space.bounded_below & ~space.bounded_above
     hb = ~space.bounded_below & space.bounded_above

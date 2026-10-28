@@ -62,10 +62,7 @@ import pandas as pd
 import wandb
 from tqdm import tqdm
 
-from src.utils.id import decode_stat
-
-SEED = ("seed", "experiment.rng_seed")
-CONFIG_ID = ("config", "config_id")
+from src.utils.id import CONFIG_ID, SEED, decode_stat
 
 
 def to_python(x):
@@ -122,10 +119,11 @@ def is_number(x) -> bool:
 
 
 def run_config(row: pd.Series, hyp_cols: list) -> tuple[str, str, dict]:
-    """Return the run name, config ID and nested config of a parquet row."""
+    """Return the run name, config ID and nested config of a parquet row. A
+    value "{}", which flatten_cfg stores for an empty mapping, becomes {}."""
 
     flat_cfg = {
-        c[1]: to_python(row[c])
+        c[1]: {} if isinstance(row[c], str) and row[c] == "{}" else to_python(row[c])
         for c in hyp_cols
         if not is_missing(row[c])
     }

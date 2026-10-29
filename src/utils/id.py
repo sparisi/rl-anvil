@@ -355,9 +355,9 @@ def load_yaml(path: str):
 
 
 def load_run_cfg(path) -> dict:
-    """Return the cfg.yaml at `path` as a nested dict, read as process_data
-    reads it: resolved (strip_config), without the keys in DROPPED_CFG_KEYS,
-    and with an escaped "${" read as the literal "${"."""
+    """Return the cfg.yaml at `path` as a resolved nested dict (strip_config),
+    without the keys in DROPPED_CFG_KEYS. An escaped "${" is read as the literal
+    "${"."""
 
     return strip_config(OmegaConf.load(path))
 

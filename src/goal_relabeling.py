@@ -71,7 +71,7 @@ def her_future(batch, replay_memory, rng_generator, K, *args, **kwargs):
       states at timestep:       0 1 2 3 4 5 6
       sample k_0 in [0, 6]: 2 → segment [0, 2] goal is 2
       sample k_1 in [3, 6]: 4 → segment [3, 4] goal is 4
-      sample k_2 in [5, 6]: 5 → segment [5, 6] goal is 6
+      sample k_2 in [5, 6]: 6 → segment [5, 6] goal is 6
       goals per timestep:       2 2 2 4 4 6 6
     Repeat K times.
 

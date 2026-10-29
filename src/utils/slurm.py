@@ -185,8 +185,9 @@ def cgroup_memory():
     # Find the cgroup this process is in, then walk up to the first ancestor
     # that actually sets a limit: SLURM puts the limit on the job cgroup while
     # the process sits in a step cgroup below it.
+    cgroup_lines = (_read_file("/proc/self/cgroup") or "").splitlines()
     rel = ""
-    for line in (_read_file("/proc/self/cgroup") or "").splitlines():
+    for line in cgroup_lines:
         fields = line.split(":", 2)
         if len(fields) == 3 and fields[1] == "":  # cgroup v2 line: "0::/some/path"
             rel = fields[2].strip().lstrip("/")
@@ -224,22 +225,41 @@ def cgroup_memory():
             "oom_kill": events["oom_kill"] or 0,
         }
 
-    # cgroup v1: the limit is "unlimited" as a huge number, `anon` is spelled
-    # `rss`, `file` is `cache`, and the reclaim counter is memory.failcnt.
+    # cgroup v1: the memory controller has a hierarchy of its own, named on the
+    # "memory" line of /proc/self/cgroup, and the same walk up to the first limit
+    # applies. The limit is "unlimited" as a huge number, the hierarchical
+    # `total_rss` and `total_cache` cover the step cgroups below as v2's `anon`
+    # and `file` do, and the reclaim counter is memory.failcnt.
+    rel_v1 = None
+    for line in cgroup_lines:
+        fields = line.split(":", 2)
+        if len(fields) == 3 and "memory" in fields[1].split(","):
+            rel_v1 = fields[2].strip().lstrip("/")
+            break
+    if rel_v1 is None:
+        return None
+
     v1 = "/sys/fs/cgroup/memory"
-    raw_limit = (_read_file(os.path.join(v1, "memory.limit_in_bytes")) or "").strip()
-    if raw_limit.isdigit() and int(raw_limit) < (1 << 60):
-        stat = _stat_fields(_read_file(os.path.join(v1, "memory.stat")), "rss", "cache")
-        if stat["rss"] is not None:
-            failcnt = (_read_file(os.path.join(v1, "memory.failcnt")) or "").strip()
-            return {
-                "anon": stat["rss"],
-                "file": stat["cache"] or 0,
-                "kernel": 0,
-                "limit": int(raw_limit),
-                "hit_max": int(failcnt) if failcnt.isdigit() else 0,
-                "oom_kill": 0,
-            }
+    path = os.path.normpath(os.path.join(v1, rel_v1))
+    while path.startswith(v1):
+        raw_limit = (_read_file(os.path.join(path, "memory.limit_in_bytes")) or "").strip()
+        if raw_limit.isdigit() and int(raw_limit) < (1 << 60):
+            stat = _stat_fields(
+                _read_file(os.path.join(path, "memory.stat")), "total_rss", "total_cache",
+            )
+            if stat["total_rss"] is not None:
+                failcnt = (_read_file(os.path.join(path, "memory.failcnt")) or "").strip()
+                return {
+                    "anon": stat["total_rss"],
+                    "file": stat["total_cache"] or 0,
+                    "kernel": 0,
+                    "limit": int(raw_limit),
+                    "hit_max": int(failcnt) if failcnt.isdigit() else 0,
+                    "oom_kill": 0,
+                }
+        if path == v1:
+            break
+        path = os.path.dirname(path)
 
     return None
 
@@ -412,12 +432,16 @@ def queued_runs():
 
 def load_cluster(name):
     """Reads SLURM_CONFIG_DIR/<name>.yaml. Stops if the modules, the scratch directory,
-    the virtual environment directory, or one of the output directory is missing."""
+    the virtual environment directory, or one of the output directory is missing.
+    Interpolations are resolved, and a single module may be given as a string."""
     path = os.path.join(SLURM_CONFIG_DIR, f"{name}.yaml")
     if not os.path.isfile(path):
         raise SystemExit(f"SLURM config not found: {path}")
     cfg = compose_cfg([f"+slurm={name}"])
-    settings = OmegaConf.to_container(cfg.get("slurm") or {})
+    section = cfg.get("slurm")
+    settings = OmegaConf.to_container(section, resolve=True) if section else {}
+    if isinstance(settings.get("modules"), str):
+        settings["modules"] = [settings["modules"]]
     missing = [
         key for key in (
             "scratch_dir",
@@ -436,10 +460,12 @@ def load_cluster(name):
 
 def slurm_setup(settings):
     """Shell lines run on the compute node before the job: the cluster's
-    modules, SCRATCH directory, and virtual environment directory."""
+    modules, SCRATCH directory, and virtual environment directory. The paths are
+    double-quoted, so they may hold spaces and still expand variables such as
+    $WRKDIR on the node."""
     setup = [
         f"module load {' '.join(settings['modules'])}",
-        f"export SCRATCH={settings['scratch_dir']}",
-        f"source {settings['venv_dir']}/bin/activate",
+        f'export SCRATCH="{settings["scratch_dir"]}"',
+        f'source "{settings["venv_dir"]}/bin/activate"',
     ]
     return setup

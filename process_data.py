@@ -1,16 +1,14 @@
 import os
 import re
 import shutil
-import threading
 import argparse
-import multiprocessing
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
 import json
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 from tqdm import tqdm
 
@@ -20,7 +18,7 @@ from omegaconf.errors import OmegaConfBaseException
 from src.utils.id import CONFIG_ID, SEED, flatten_cfg, make_id, strip_config
 
 # Minimum number of rows in each row group of the merged parquet file.
-PARQUET_CHUNK_ROWS = 10_000
+MIN_ROW_GROUP_ROWS = 10_000
 
 # Number of config directories a worker loads and writes to one part file. A
 # worker holds the rows of one batch at a time, so this bounds its memory.
@@ -184,12 +182,11 @@ def load_seeds(dirpath: str, dict_cfg_flat: dict) -> tuple:
     return rows, skipped, missing
 
 
-def load_batch(index: int, items: list, parts_dir: str, progress) -> tuple:
+def load_batch(index: int, items: list, parts_dir: str) -> tuple:
     """Load the rows of a batch of config directories (load_seeds) and write
     them to the parquet file part_<index>.parquet in `parts_dir`.
 
-    `items` are (config directory, flat config) pairs, and one item is put on
-    the queue `progress` after each directory is loaded. Return (part path,
+    `items` are (config directory, flat config) pairs. Return (part path,
     columns, seeds per directory, skipped folders, seeds lacking 'data.npz' per
     directory). The part path is None when the batch has no row, and the
     columns are those of the part, in order of first appearance in the rows.
@@ -205,11 +202,12 @@ def load_batch(index: int, items: list, parts_dir: str, progress) -> tuple:
             seeds_of[dirpath] = [row[SEED] for row in dir_rows]
         if dir_missing:
             missing_of[dirpath] = dir_missing
-        progress.put(1)
     if not rows:
         return None, [], seeds_of, skipped, missing_of
 
-    part = pd.DataFrame(rows)
+    # Object columns keep the ints of a key that some rows lack as ints, as in
+    # the schema write_parquet infers.
+    part = pd.DataFrame(rows, dtype=object)
     part = part.drop(columns=[c for c in part.columns if c[0] == "_meta"])
     part_path = os.path.join(parts_dir, f"part_{index:06d}.parquet")
     pq.write_table(pa.Table.from_pandas(part, preserve_index=False), part_path)
@@ -224,8 +222,9 @@ def write_parquet(part_paths: list, columns: list, cfg_df: pd.DataFrame, path: s
     hyperparameter and config columns are inferred from `cfg_df`, which holds
     the flat config of every config directory with a row, the seed column is
     int64, and every statistic column holds JSON strings. Each part is cast to
-    that schema, with a null column for every column it lacks, and the parts
-    are written in row groups of at least PARQUET_CHUNK_ROWS rows.
+    that schema, with a null column for every column it lacks and for every
+    column of null type (a key that is null or absent in every config), and
+    the parts are written in row groups of at least MIN_ROW_GROUP_ROWS rows.
     """
 
     proxy = cfg_df.drop(columns=[c for c in cfg_df.columns if c[0] == "_meta"])
@@ -244,7 +243,7 @@ def write_parquet(part_paths: list, columns: list, cfg_df: pd.DataFrame, path: s
                 pa.Table.from_arrays(
                     [
                         part[f.name].cast(f.type)
-                        if f.name in part.column_names
+                        if f.name in part.column_names and not pa.types.is_null(f.type)
                         else pa.chunked_array([pa.nulls(part.num_rows, f.type)])
                         for f in schema
                     ],
@@ -252,7 +251,7 @@ def write_parquet(part_paths: list, columns: list, cfg_df: pd.DataFrame, path: s
                 )
             )
             n_pending += part.num_rows
-            if n_pending >= PARQUET_CHUNK_ROWS:
+            if n_pending >= MIN_ROW_GROUP_ROWS:
                 writer.write_table(pa.concat_tables(pending))
                 pending, n_pending = [], 0
         if pending:
@@ -361,7 +360,6 @@ def process_data_folders(
 
     parts_dir = parquet_path + ".parts"
     tmp_path = parquet_path + ".tmp"
-    manager = multiprocessing.Manager()
     pool = ProcessPoolExecutor(max_workers=workers)
     shutil.rmtree(parts_dir, ignore_errors=True)
     os.makedirs(parts_dir)
@@ -394,28 +392,19 @@ def process_data_folders(
             for i in range(0, len(items), CONFIG_DIRS_PER_PART)
         ]
 
-        # The workers put one item on `progress` per config directory, and a
-        # thread advances the bar from it while the batch results come back.
-        progress = manager.Queue()
-        bar = tqdm(total=len(items), desc="Loading data.npz")
-
-        def track():
-            try:
-                for _ in range(len(items)):
-                    progress.get()
-                    bar.update()
-            except (EOFError, OSError):
-                # The manager is shut down before every directory reports when
-                # a batch fails.
-                pass
-
-        tracker = threading.Thread(target=track, daemon=True)
-        tracker.start()
-        results = pool.map(
-            partial(load_batch, parts_dir=parts_dir, progress=progress),
-            range(len(batches)),
-            batches,
-        )
+        # The bar advances by the directories of each batch as the batch
+        # finishes. The results are stored by batch index, so the parts are
+        # merged in the order of the directory walk.
+        futures = {
+            pool.submit(load_batch, i, batch, parts_dir): i
+            for i, batch in enumerate(batches)
+        }
+        results = [None] * len(batches)
+        with tqdm(total=len(items), desc="Loading data.npz") as bar:
+            for future in as_completed(futures):
+                i = futures[future]
+                results[i] = future.result()
+                bar.update(len(batches[i]))
         for part_path, part_columns, batch_seeds, skipped, batch_missing in results:
             if part_path is not None:
                 part_paths.append(part_path)
@@ -423,8 +412,6 @@ def process_data_folders(
             seeds_of.update(batch_seeds)
             skipped_folders.extend(skipped)
             missing_npz.update(batch_missing)
-        tracker.join()
-        bar.close()
         pool.shutdown()
 
         n_skipped = len(skipped_folders) + sum(len(seeds) for seeds in missing_npz.values())
@@ -465,8 +452,10 @@ def process_data_folders(
             verbose,
         )
 
-        # The flat config of every config directory with a row
-        cfg_df = pd.DataFrame([cfg_flats[d] for d in seeds_of])
+        # The flat config of every config directory with a row. Object columns
+        # keep the ints of a key that some configs lack as ints, so pyarrow
+        # infers int64 with nulls for that key, where pandas would make it float64.
+        cfg_df = pd.DataFrame([cfg_flats[d] for d in seeds_of], dtype=object)
 
         # --- Recap ---
 
@@ -560,7 +549,6 @@ def process_data_folders(
             os.remove(tmp_path)
         raise
     finally:
-        manager.shutdown()
         shutil.rmtree(parts_dir, ignore_errors=True)
 
 

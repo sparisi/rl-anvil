@@ -44,13 +44,15 @@ import yaml
 from pathlib import Path
 from tqdm import tqdm
 
+from omegaconf import DictConfig, OmegaConf
+from omegaconf.errors import OmegaConfBaseException
 from scipy.spatial import cKDTree
 from scipy.special import digamma, gammaln
 
 import src.pseudocount as pseudocount
 from src.pseudocount import BinnedCount
 
-from src.utils.id import load_run_cfg
+from src.utils.id import strip_config
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     ENV,
@@ -946,6 +948,7 @@ def resolve_runs(path):
 root = Path(args.folder)
 if not root.is_dir():
     raise SystemExit(f"Not a directory: {root}")
+single_run = (root / "memory.npz").is_file()
 run_dirs, no_memory_dirs, filtered_dirs = resolve_runs(root)
 
 if not run_dirs:
@@ -964,6 +967,7 @@ flat_cfgs:   dict = {}   # "<config_id>/<seed>" -> flat cfg
 run_cfgs:    dict = {}   # "<config_id>/<seed>" -> nested cfg
 mem_files:   dict = {}   # "<config_id>/<seed>" -> path to memory.npz
 no_cfg_dirs: list = []
+bad_cfg_dirs: list = []
 
 for seed_dir in run_dirs:
     # cfg.yaml lives one level up, shared by every seed of the configuration.
@@ -972,7 +976,26 @@ for seed_dir in run_dirs:
         no_cfg_dirs.append(seed_dir.parent.name)
         continue
 
-    run_cfg = load_run_cfg(cfg_file)
+    try:
+        cfg = OmegaConf.load(cfg_file)
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
+        vprint(f"  WARNING: {cfg_file} could not be read ({e}).")
+        bad_cfg_dirs.append(seed_dir.parent.name)
+        continue
+    if not isinstance(cfg, DictConfig) or not cfg:
+        vprint(
+            f"  WARNING: {cfg_file} is empty or not a mapping "
+            f"(parsed as {type(cfg).__name__})."
+        )
+        bad_cfg_dirs.append(seed_dir.parent.name)
+        continue
+    try:
+        run_cfg = strip_config(cfg)
+    except OmegaConfBaseException as e:
+        vprint(f"  WARNING: {cfg_file} could not be resolved ({e}).")
+        bad_cfg_dirs.append(seed_dir.parent.name)
+        continue
+
     name = f"{seed_dir.parent.name}/{seed_dir.name}"
     # Interpolations kept, as `composed_config` keeps them: the two configs are
     # compared key by key below, and a key dropped from one side and not the
@@ -983,8 +1006,9 @@ for seed_dir in run_dirs:
 
 if not flat_cfgs:
     raise SystemExit(
-        f"Found {len(run_dirs)} memory.npz, but no cfg.yaml in the directory above "
-        f"any of them. -f takes a data directory or a "
+        f"Found {len(run_dirs)} memory.npz, but no readable cfg.yaml in the "
+        f"directory above any of them ({len(bad_cfg_dirs)} could not be read or "
+        f"resolved; -v lists them). -f takes a data directory or a "
         f"<data_dir>/<config_id>/<rng_seed>."
     )
 
@@ -1104,6 +1128,24 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
         envs,
         {env: named_counters.get(env) for env in envs},
     )
+
+    # Over every environment the config declares, the ones with no run at all
+    # included. An entry naming another environment composes to nothing there.
+    # A seed directory given to -f is one run, and every other entry has none.
+    missing = [] if single_run else [
+        (li, env)
+        for group_envs in groups.values() for env in group_envs
+        for li, entry in enumerate(entries)
+        if not selected.get((li, env))
+        and entry_config(env, entry["selector"], entry["label"]) is not None
+    ]
+    if missing:
+        seeds = "" if args.rng_seeds is None else f" at seed(s) {args.rng_seeds}"
+        print(
+            f"WARNING: {config_name}: {len(missing)} configuration(s) have no "
+            f"run{seeds}: "
+            + ", ".join(f"'{entries[li]['label']}' in {env}" for li, env in missing)
+        )
 
 needed = sorted(
     {
@@ -1304,7 +1346,8 @@ if args.save:
 # exemptions that decide the matching are known.
 print(
     f"Runs found : {len(run_dirs)}"
-    f"  ({len(no_cfg_dirs)} without a cfg.yaml;"
+    f"  ({len(no_cfg_dirs)} without a cfg.yaml,"
+    f" {len(bad_cfg_dirs)} with an unreadable cfg.yaml;"
     f" {len(no_memory_dirs)} config(s) with no memory.npz,"
     f" {len(filtered_dirs)} with none of --rng_seeds)"
 )

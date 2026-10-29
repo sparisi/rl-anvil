@@ -681,7 +681,7 @@ with tqdm(
                     )
                 except Exception as e:
                     vprint(
-                        f"  WARNING: compute_maps failed for {name} "
+                        f"  WARNING: memory_maps failed for {name} "
                         f"({env_name}/{algo_name}): {e}"
                     )
                 else:

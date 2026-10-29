@@ -1,26 +1,16 @@
 import numpy as np
 import random
 
-def faster_choice(p: np.array, n: int, rng_generator: np.random.Generator):
-    """
-    Faster (for small arrays) implementation of np.random.choice.
-    """
-
-    cdf = np.cumsum(p)
-    u = rng_generator.random(n)
-    # side="right" skips zero-probability entries, and scaling the draws by the
-    # last cumulative value keeps every index below len(p) when rounding leaves
-    # that value below 1.
-    return np.searchsorted(cdf, u * cdf[-1], side="right")
-
-
 # https://stackoverflow.com/a/47722393/754136
 def random_choice(p: np.array, rng_generator: np.random.Generator, axis: int = -1):
     """
     Vectorized np.random.choice (can be slow for large sizes).
-    Slices that sum to 0 fall back to a uniform distribution.
+    Slices that sum to 0 fall back to a uniform distribution. A NaN in `p`
+    raises a ValueError.
     """
 
+    if np.isnan(p).any():
+        raise ValueError("random_choice: the probabilities hold NaN.")
     p = np.where(p.sum(axis, keepdims=True) == 0, 1.0, p)
     p = p / p.sum(axis, keepdims=True)
     r = np.expand_dims(rng_generator.random(np.delete(p.shape, axis)), axis=axis)
@@ -41,15 +31,16 @@ def random_argmax(
     max value.
     It is possible to consider the max within some relative tolerance rtol < 1:
     x >= max(x) - |max(x)| * rtol
+    A NaN in `x` raises a ValueError: the max of a slice holding NaN is NaN,
+    and no entry of the slice equals it.
     """
 
-    if axis is None:
-        x_max = x.max()
-        mask = x == x_max if rtol == 0.0 else x >= x_max - np.abs(x_max) * rtol
-        return int(rng_generator.choice(np.flatnonzero(mask)))
-
-    x_max = x.max(axis=axis, keepdims=True)
+    x_max = x.max(axis=axis, keepdims=axis is not None)
+    if np.isnan(x_max).any():
+        raise ValueError("random_argmax: the values hold NaN.")
     mask = x == x_max if rtol == 0.0 else x >= x_max - np.abs(x_max) * rtol
+    if axis is None:
+        return int(rng_generator.choice(np.flatnonzero(mask)))
     return random_choice(mask, rng_generator, axis)
 
 

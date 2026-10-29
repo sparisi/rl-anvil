@@ -116,7 +116,9 @@ def config_for_save(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> str:
     string and hashes to the same config ID."""
 
     return OmegaConf.to_yaml(
-        OmegaConf.create(escape_interpolations(strip_config(cfg, dropped))),
+        OmegaConf.create(
+            escape_interpolations(strip_config(cfg, dropped))
+        ),
         sort_keys=True,
     )
 
@@ -128,7 +130,9 @@ def config_identity(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> str:
     # The conversion applies to the hashed YAML only: the config written to disk
     # and the config the run is built from keep their original types.
     return OmegaConf.to_yaml(
-        OmegaConf.create(numbers_to_float(strip_config(cfg, dropped))),
+        OmegaConf.create(
+            escape_interpolations(numbers_to_float(strip_config(cfg, dropped)))
+        ),
         sort_keys=True,
     )
 
@@ -351,9 +355,9 @@ def load_yaml(path: str):
 
 
 def load_run_cfg(path) -> dict:
-    """Return the cfg.yaml at `path` as a nested dict, read as process_data
-    reads it: resolved (strip_config), without the keys in DROPPED_CFG_KEYS,
-    and with an escaped "${" read as the literal "${"."""
+    """Return the cfg.yaml at `path` as a resolved nested dict (strip_config),
+    without the keys in DROPPED_CFG_KEYS. An escaped "${" is read as the literal
+    "${"."""
 
     return strip_config(OmegaConf.load(path))
 

@@ -41,14 +41,25 @@ from src.utils.id import escape_interpolations, load_yaml
 from src.utils.paths import CONFIG_DIR, SWEEP_DIR
 
 
+def _tag_bools(v):
+    """Return `v` with every bool, also inside lists, replaced by the pair
+    (bool, v), so that a bool compares equal only to a bool."""
+
+    if isinstance(v, bool):
+        return (bool, v)
+    if isinstance(v, list):
+        return [_tag_bools(x) for x in v]
+    return v
+
+
 def unique_values(path, key, values):
     """Return `values` without the ones equal to an earlier value, printing a
-    warning for each one dropped. A bool equals only a bool, so True and 1 are
-    both kept."""
+    warning for each one dropped. A bool equals only a bool, also inside lists,
+    so True and 1 are both kept, and so are [True] and [1]."""
 
     kept = []
     for v in values:
-        if any(v == k and isinstance(v, bool) == isinstance(k, bool) for k in kept):
+        if any(_tag_bools(v) == _tag_bools(k) for k in kept):
             print(f"WARNING: {path}: {key}={v!r} equals an earlier value and is run once.")
         else:
             kept.append(v)

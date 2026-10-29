@@ -64,10 +64,10 @@ import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import yaml
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
+from src.utils.id import load_run_cfg
 from src.utils.plot import (
     GROUP_GAP_BAR,
     assign_groups,
@@ -650,7 +650,7 @@ for seed_dir in tqdm(
     if not cfg_file.is_file():
         no_cfg_dirs.append(seed_dir.parent.name)
         continue
-    run_cfg = yaml.safe_load(cfg_file.read_text(encoding="utf-8")) or {}
+    run_cfg = load_run_cfg(cfg_file)
     name = f"{seed_dir.parent.name}/{seed_dir.name}"
     # Interpolations kept, as `composed_config` keeps them: the two configs are
     # compared key by key below, and a key dropped from one side and not the

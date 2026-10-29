@@ -1,3 +1,6 @@
+import os
+import tempfile
+from contextlib import contextmanager
 import numpy as np
 import random
 
@@ -218,6 +221,24 @@ def _warn_once(message):
     if message not in _WARNED:
         _WARNED.add(message)
         print(message)
+
+
+@contextmanager
+def atomic_open(path: str, mode: str = "wb"):
+    """Open a temporary file beside `path`, yield it, and move it to `path` once
+    the block completes. If the block raises, the temporary file is removed and
+    `path` is left as it was."""
+
+    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".tmp-")
+    try:
+        with os.fdopen(fd, mode) as f:
+            yield f
+        os.chmod(tmp_path, 0o644)
+        os.replace(tmp_path, path)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
 
 
 def make_vprint(verbose):

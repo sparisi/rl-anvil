@@ -12,6 +12,7 @@ from functools import partial
 from tqdm import tqdm
 
 from src.utils.id import CONFIG_ID, SEED, flatten_cfg, make_id, read_run_cfg
+from src.utils.misc import atomic_open
 
 # Minimum number of rows in each row group of the merged parquet file.
 MIN_ROW_GROUP_ROWS = 10_000
@@ -200,9 +201,10 @@ def load_batch(index: int, items: list, parts_dir: str) -> tuple:
     return part_path, list(part.columns), seeds_of, skipped, missing_of
 
 
-def write_parquet(part_paths: list, columns: list, cfg_df: pd.DataFrame, path: str) -> None:
-    """Merge the parquet files `part_paths` into one parquet file at `path`, with
-    the columns `columns` in that order.
+def write_parquet(part_paths: list, columns: list, cfg_df: pd.DataFrame, where) -> None:
+    """Merge the parquet files `part_paths` into one parquet file written to
+    `where`, a path or a binary file object, with the columns `columns` in that
+    order.
 
     The schema is the one pyarrow infers for the whole table: the
     hyperparameter and config columns are inferred from `cfg_df`, which holds
@@ -222,7 +224,7 @@ def write_parquet(part_paths: list, columns: list, cfg_df: pd.DataFrame, path: s
 
     pending, n_pending = [], 0
     # Snappy compresses and decompresses faster than gzip and writes larger files.
-    with pq.ParquetWriter(path, schema, compression="snappy") as writer:
+    with pq.ParquetWriter(where, schema, compression="snappy") as writer:
         for part_path in tqdm(part_paths, desc="Writing parquet"):
             part = pq.read_table(part_path)
             pending.append(
@@ -275,9 +277,10 @@ def process_data_folders(
     processes. Each worker writes the rows of a batch of config directories to
     a part file in '<parquet_path>.parts', and the parts are merged into
     `parquet_path` in the order of the directory walk (write_parquet), so no
-    process holds every row at once. The merged file is written to
-    '<parquet_path>.tmp' and moved onto `parquet_path` once complete. The part
-    files and the temporary file are removed whether or not the write succeeds.
+    process holds every row at once. The merged file is written to a temporary
+    file beside `parquet_path` and moved onto it once complete (atomic_open).
+    The part files and the temporary file are removed whether or not the write
+    succeeds.
 
     The function expects the following folder structure:
 
@@ -347,7 +350,6 @@ def process_data_folders(
         workers = min(workers, MAX_WINDOWS_WORKERS)
 
     parts_dir = parquet_path + ".parts"
-    tmp_path = parquet_path + ".tmp"
     pool = ProcessPoolExecutor(max_workers=workers)
     shutil.rmtree(parts_dir, ignore_errors=True)
     os.makedirs(parts_dir)
@@ -528,14 +530,12 @@ def process_data_folders(
                     f.write("\n")
             print(f"\nConfigs log saved to {log_configs_path}")
 
-        write_parquet(part_paths, list(columns), cfg_df, tmp_path)
-        os.replace(tmp_path, parquet_path)
+        with atomic_open(parquet_path) as f:
+            write_parquet(part_paths, list(columns), cfg_df, f)
     except BaseException:
         # The tasks not yet started are dropped, so the error is raised once the
         # running ones finish, not once every task has run.
         pool.shutdown(cancel_futures=True)
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
         raise
     finally:
         shutil.rmtree(parts_dir, ignore_errors=True)

@@ -159,10 +159,13 @@ def load_config_group(config_dir: str) -> dict:
     experiment and are not part of a config's identity. Interpolations are left
     unresolved, and `flatten_cfg` drops the keys still holding one.
 
-    A YAML is composed from an empty primary config as `+<group>=<name>`. Every
-    group its `defaults:` list overrides (`override /agent: svf`) is added before
-    it, from the config root, so the override has a group to replace and the YAML
-    composes with the option it selects.
+    A YAML is composed from an empty primary config as `+<group>=<name>`, after
+    `+<group>=<option>` for every group its `defaults:` list overrides
+    (`override /agent: svf`), so the override has a group to replace. A key
+    holding the value it has in the option configs/default.yaml selects for an
+    overridden group is dropped, as the keys of configs/default.yaml are: what is
+    kept is what the YAML and its options change. A key the YAML itself sets to
+    that same value is dropped with them.
 
     The keys that do not define a configuration are dropped, as they are from a
     run's cfg.yaml: a YAML declaring one would be compared against a run that
@@ -179,39 +182,59 @@ def load_config_group(config_dir: str) -> dict:
         p.relative_to(config_dir).with_suffix("").as_posix()
         for p in Path(config_dir).rglob("*.yaml")
     ]
-    return {
-        name: compared_keys(
-            flatten_cfg(
-                OmegaConf.to_container(
-                    compose_cfg(
-                        (
-                            *overridden_groups(Path(config_dir) / f"{name}.yaml"),
-                            f"+{group.as_posix()}={name}",
-                        ),
-                        config_name=None,
+    configs = {}
+    for name in names:
+        overridden = overridden_groups(Path(config_dir) / f"{name}.yaml")
+        flat = flatten_cfg(
+            OmegaConf.to_container(
+                compose_cfg(
+                    (
+                        *(f"+{g}={option}" for g, option in overridden),
+                        f"+{group.as_posix()}={name}",
                     ),
-                    resolve=False,
-                )
-            ),
-            DROPPED_CFG_KEYS,
+                    config_name=None,
+                ),
+                resolve=False,
+            )
         )
-        for name in names
-    }
+        for g, _option in overridden:
+            base = default_group_config(g)
+            flat = {k: v for k, v in flat.items() if k not in base or base[k] != v}
+        configs[name] = compared_keys(flat, DROPPED_CFG_KEYS)
+    return configs
 
 
 def overridden_groups(path) -> list:
-    """Return `+<group>=<option>` for every `override /<group>: <option>` entry
-    in the `defaults:` list of the YAML `path`, in the order the list holds
-    them."""
+    """Return (group, option) for every `override /<group>: <option>` entry in
+    the `defaults:` list of the YAML `path`, in the order the list holds them."""
 
-    added = []
+    found = []
     for entry in (load_yaml(str(path)) or {}).get("defaults") or []:
         if not isinstance(entry, dict):
             continue
         for key, option in entry.items():
             if key.startswith("override "):
-                added.append(f"+{key.split(None, 1)[1].lstrip('/')}={option}")
-    return added
+                found.append((key.split(None, 1)[1].lstrip("/"), option))
+    return found
+
+
+@lru_cache(maxsize=None)
+def default_group_config(group: str) -> dict:
+    """Return the flat config of the option configs/default.yaml selects for the
+    Hydra group `group`, composed on its own, or {} when default.yaml selects
+    none. The result is cached: every call with the same `group` returns the
+    same object."""
+
+    defaults = (load_yaml(os.path.join(CONFIG_DIR, "default.yaml")) or {}).get("defaults")
+    for entry in defaults or []:
+        if isinstance(entry, dict) and group in entry:
+            return flatten_cfg(
+                OmegaConf.to_container(
+                    compose_cfg((f"+{group}={entry[group]}",), config_name=None),
+                    resolve=False,
+                )
+            )
+    return {}
 
 
 def ignored_cfg_keys(plot_cfg: dict) -> frozenset:

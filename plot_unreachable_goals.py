@@ -68,8 +68,10 @@ from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 from src.utils.id import load_run_cfg
+from src.utils.misc import make_vprint
 from src.utils.plot import (
     GROUP_GAP_BAR,
+    add_config_group_args,
     assign_groups,
     composed_mask,
     detect_precision,
@@ -160,16 +162,7 @@ parser.add_argument(
          "config>, so one data directory holds the output of every plotting script "
          "without one overwriting another.",
 )
-parser.add_argument(
-    "-a", "--algorithms",
-    default="configs/algorithm",
-    help="Directory of algorithm YAMLs.",
-)
-parser.add_argument(
-    "-e", "--environments",
-    default="configs/environment",
-    help="Directory of environment YAMLs.",
-)
+add_config_group_args(parser)
 parser.add_argument(
     "--points",
     type=int,
@@ -253,13 +246,7 @@ parser.add_argument(
 parser.add_argument("-v", "--verbose", action="store_true")
 args = parser.parse_args()
 
-
-def vprint(*a):
-    """Print only under --verbose."""
-
-    if args.verbose:
-        print(*a)
-
+vprint = make_vprint(args.verbose)
 
 # -----------------------------------------------------------------------------
 # ----- Reachability ----------------------------------------------------------

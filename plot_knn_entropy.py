@@ -51,9 +51,11 @@ import src.pseudocount as pseudocount
 from src.pseudocount import BinnedCount
 
 from src.utils.id import load_run_cfg
+from src.utils.misc import make_vprint
 from src.utils.plot import (
     ENV,
     GROUP_GAP_BAR,
+    add_config_group_args,
     assign_groups,
     ci_bounds,
     composed_mask,
@@ -186,18 +188,7 @@ parser.add_argument(
         "of every plotting script without one overwriting another."
     ),
 )
-parser.add_argument(
-    "-a",
-    "--algorithms",
-    default="configs/algorithm",
-    help="Directory of algorithm YAMLs.",
-)
-parser.add_argument(
-    "-e",
-    "--environments",
-    default="configs/environment",
-    help="Directory of environment YAMLs.",
-)
+add_config_group_args(parser)
 parser.add_argument(
     "--rng_seeds",
     type=int,
@@ -311,12 +302,7 @@ plt.rcParams["axes.axisbelow"] = False
 plt.rcParams["grid.linestyle"] = "--"
 
 
-def vprint(*a, **kw):
-    """Print only under --verbose."""
-
-    if args.verbose:
-        print(*a, **kw)
-
+vprint = make_vprint(args.verbose)
 
 # --- Binning ------------------------------------------------------------------
 # A counter owns the binning, and it is where the knowledge of how an environment

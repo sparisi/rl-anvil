@@ -51,14 +51,15 @@ from pathlib import Path
 from tqdm import tqdm
 
 from src.utils.id import load_run_cfg
+from src.utils.misc import make_vprint
 from src.utils.plot import (
-    assign_groups, ensure_font, env_groups, flatten_cfg, is_null,
+    add_config_group_args, assign_groups, ensure_font, env_groups, flatten_cfg, is_null,
     load_config_group, ignored_cfg_keys, load_plot_configs, memory_fractions,
     plot_entries, plot_labels, split_config_label, tex_kwargs as _tex, value_str,
 )
 from src.utils.heatmaps import (
     CBAR_SUBPLOT_SIZE, add_border, add_colorbar, arr_range as _arr_range, auto_dpi,
-    cbar_groups, cbar_hspace, compute_maps_all_fractions, env_context, orient,
+    cbar_groups, cbar_hspace, env_context, memory_maps, orient,
     pooled_range, scale_funcs, scale_key, viridis_black_bad,
 )
 from src.pseudocount import pseudocount_prefixes, robust_scale
@@ -363,8 +364,7 @@ parser.add_argument(
     help="Output root, under the data directory. Figures go in "
          "<root>/heatmaps/<config_stem>.",
 )
-parser.add_argument("-a", "--algorithms", default="configs/algorithm")
-parser.add_argument("-e", "--environments", default="configs/environment")
+add_config_group_args(parser)
 parser.add_argument(
     "-p", "--plot_config",
     required=True,
@@ -451,12 +451,7 @@ _FORWARD, _INVERSE = scale_funcs(
 )
 
 
-def vprint(*a, **kw):
-    """Print only under --verbose."""
-
-    if args.verbose:
-        print(*a, **kw)
-
+vprint = make_vprint(args.verbose)
 
 root        = Path(args.folder)
 output_root = root / args.output / "heatmaps"
@@ -654,7 +649,11 @@ with tqdm(
 
             if mem is not None:
                 try:
-                    maps_per_frac = compute_maps_all_fractions(run_cfg, mem, FRACTIONS)
+                    maps_per_frac = memory_maps(
+                        mem,
+                        env_cfg=run_cfg["environment"],
+                        fractions=FRACTIONS,
+                    )
                 except Exception as e:
                     vprint(
                         f"  WARNING: compute_maps failed for {name} "

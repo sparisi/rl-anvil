@@ -4,6 +4,7 @@ import json
 import os
 import re
 import tempfile
+import yaml
 from functools import lru_cache
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import OmegaConfBaseException
@@ -352,6 +353,24 @@ def load_yaml(path: str):
     are left unresolved, and an empty file returns {}."""
 
     return OmegaConf.to_container(OmegaConf.load(path), resolve=False)
+
+
+def read_run_cfg(path) -> tuple:
+    """Read the cfg.yaml at `path` and return (cfg, resolved dict, None), with
+    the dict being strip_config(cfg). When the file cannot be read, is empty or
+    not a mapping, or cannot be resolved, return (None, None, reason), with the
+    reason written to follow the file's name."""
+
+    try:
+        cfg = OmegaConf.load(path)
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
+        return None, None, f"could not be read ({e})"
+    if not isinstance(cfg, DictConfig) or not cfg:
+        return None, None, f"is empty or not a mapping (parsed as {type(cfg).__name__})"
+    try:
+        return cfg, strip_config(cfg), None
+    except OmegaConfBaseException as e:
+        return None, None, f"could not be resolved ({e})"
 
 
 def flatten_cfg(nested: dict, drop_interpolations=True) -> dict:

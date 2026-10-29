@@ -22,6 +22,6 @@ configs:
       plot.label: "Random"
 
 environments:
-  lunar_lander_full:
+  gymnasium/lunar_lander_full:
     label: "LunarLander(Full)"
     counter: "BinnedCountLunarLanderFull"

@@ -219,7 +219,7 @@ from src.utils.sweep import expand_sweep, format_override, load_sweep
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CPUS_PER_SEED = 1  # per task, i.e. per seed; increase if a run needs parallelism
 SLURM_SETUP = [
-    f"cd {SCRIPT_DIR}",
+    f"cd {shlex.quote(SCRIPT_DIR)}",
     f"export OMP_NUM_THREADS={CPUS_PER_SEED}",
     f"export NUMEXPR_NUM_THREADS={CPUS_PER_SEED}",
     f"export MKL_NUM_THREADS={CPUS_PER_SEED}",
@@ -250,8 +250,8 @@ SLURM_SETUP = [
 # Related: https://github.com/pytorch/pytorch/issues/165319
 
 # Applied to every run, but a sweep file can override them.
-# These are override literals, not YAML: `false` and `null` are what the grammar
-# reads, where Python's False and None would arrive as the strings "False" and "None".
+# These are override literals, not YAML: the grammar reads True and False in any
+# case as booleans and `null` as None, while None arrives as the string "None".
 DEFAULT_OVERRIDES = [
     "results.progress_report=dict",
     "results.slurm_debug=True",
@@ -425,7 +425,12 @@ def submit_jobs(
     `seeds_per_chunk` seeds; all chunks of a job go out as ONE array (one
     submission, one name), each chunk becoming one array element that runs
     each of its seeds as its own parallel srun task. `cluster` names the
-    settings file in SLURM_CONFIG_DIR.
+    settings file in SLURM_CONFIG_DIR. A seed listed twice in one job is
+    submitted once.
+
+    An array's name covers every seed of the array, so with `skip_duplicates`
+    a seed whose element failed counts as queued until every element of its
+    array has left the queue.
     """
 
     settings = load_cluster(cluster)
@@ -465,11 +470,12 @@ def submit_jobs(
                 "running seeds cannot be skipped."
             )
 
-    # Count the queued jobs once. Jobs this call submits are added through
+    # Count the queued jobs once, and only when max_submit_jobs is set, since
+    # nothing else reads the count. Jobs this call submits are added through
     # `submitted` rather than by querying squeue again, which may not list a job
     # right after its submission. Like the snapshot above, this does not prevent
     # races: jobs submitted by anything else after this point are not counted.
-    base_queued_jobs = queued_job_count()
+    base_queued_jobs = queued_job_count() if settings.get("max_submit_jobs") is not None else 0
 
     skipped_configs = 0
     skipped_queued_seeds = 0
@@ -480,6 +486,7 @@ def submit_jobs(
     for hp_overrides, seeds in jobs:
         if isinstance(seeds, int):
             seeds = list(range(seeds))
+        seeds = sorted({int(seed) for seed in seeds})
         if not seeds:
             print(f"WARNING: no seeds provided for {hp_overrides}, skipping")
             continue
@@ -589,8 +596,6 @@ def submit_jobs(
                 executor.update_parameters(
                     slurm_array_parallelism=settings["max_running_per_array"],
                 )
-            # With KillOnBadExit=1, the first task to exit non-zero would otherwise
-            # terminate every other task of the step.
 
             # gres is requested per job, so all tasks (seeds) of an element share it.
             if settings.get("gres") is not None:

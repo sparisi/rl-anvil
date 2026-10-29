@@ -17,8 +17,8 @@ from src.utils.slurm import parse_seeds
 from src.utils.sweep import format_override, load_sweep
 
 # Applied to every run, but a sweep file can override them.
-# These are override literals, not YAML: `false` and `null` are what the grammar
-# reads, where Python's False and None would arrive as the strings "False" and "None".
+# These are override literals, not YAML: the grammar reads True and False in any
+# case as booleans and `null` as None, while None arrives as the string "None".
 DEFAULT_OVERRIDES = [
     "results.force_run=false",
     "results.progress_report=history_table",
@@ -61,11 +61,12 @@ def commands(
     max_batch_size,
     passthrough,
 ):
-    """One `python main.py -m ...` argv per sweep entry."""
+    """One `python main.py -m ...` argv per sweep entry. `n_jobs` is passed only
+    to the joblib launcher, the only one whose config has it."""
 
     launcher = [
         f"hydra/launcher={launcher}",
-        f"hydra.launcher.n_jobs={n_jobs}",
+        *([f"hydra.launcher.n_jobs={n_jobs}"] if launcher == "joblib" else []),
         "hydra.sweeper.max_batch_size="
         + ("null" if max_batch_size is None else str(max_batch_size)),
     ]
@@ -93,8 +94,8 @@ parser.add_argument("--data_dir", required=True,
 parser.add_argument("--launcher", default="joblib",
     help="Hydra launcher plugin. Default: joblib.")
 parser.add_argument("--n_jobs", type=int, default=4,
-    help="Runs the launcher executes at once. -1 is one per CPU, but it may "
-         "cause OOM. Default: 4.")
+    help="Runs the joblib launcher executes at once; other launchers ignore it. "
+         "-1 is one per CPU, but it may cause OOM. Default: 4.")
 parser.add_argument("--max_batch_size", type=int, default=None,
     help="Runs Hydra hands the launcher per batch. Unset sends the whole sweep "
          "as one batch, which is what you want unless a batch has to fit in "

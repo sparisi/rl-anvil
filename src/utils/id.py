@@ -350,6 +350,14 @@ def load_yaml(path: str):
     return OmegaConf.to_container(OmegaConf.load(path), resolve=False)
 
 
+def load_run_cfg(path) -> dict:
+    """Return the cfg.yaml at `path` as a nested dict, read as process_data
+    reads it: resolved (strip_config), without the keys in DROPPED_CFG_KEYS,
+    and with an escaped "${" read as the literal "${"."""
+
+    return strip_config(OmegaConf.load(path))
+
+
 def flatten_cfg(nested: dict, drop_interpolations=True) -> dict:
     """Return `nested` flattened to {dotted_key: value}.
 

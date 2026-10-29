@@ -42,10 +42,10 @@ import numpy as np
 import pandas as pd
 import argparse
 import re
-import yaml
 from pathlib import Path
 from tqdm import tqdm
 
+from src.utils.id import load_run_cfg
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     add_config_group_args, assign_groups, composed_mask, ensure_font, entry_config,
@@ -340,7 +340,7 @@ for seed_dir in tqdm(
         no_cfg_dirs.append(seed_dir.parent.name)
         continue
 
-    run_cfg = yaml.safe_load(cfg_file.read_text(encoding="utf-8")) or {}
+    run_cfg = load_run_cfg(cfg_file)
     name = f"{seed_dir.parent.name}/{seed_dir.name}"
     # Interpolations kept, as src.utils.id.composed_config keeps them: the two
     # are compared key by key below, and a key dropped from one side and not the

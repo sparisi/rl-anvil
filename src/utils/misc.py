@@ -227,13 +227,18 @@ def _warn_once(message):
 def atomic_open(path: str, mode: str = "wb"):
     """Open a temporary file beside `path`, yield it, and move it to `path` once
     the block completes. If the block raises, the temporary file is removed and
-    `path` is left as it was."""
+    `path` is left as it was. The file gets the mode open() would give it,
+    0o666 masked by the process umask."""
 
     fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".tmp-")
     try:
         with os.fdopen(fd, mode) as f:
             yield f
-        os.chmod(tmp_path, 0o644)
+        # mkstemp creates the file with mode 0o600. os.umask both sets and
+        # returns the mask, so it is read by setting it and putting it back.
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp_path, 0o666 & ~umask)
         os.replace(tmp_path, path)
     except BaseException:
         if os.path.exists(tmp_path):

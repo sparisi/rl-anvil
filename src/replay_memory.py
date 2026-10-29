@@ -1,4 +1,5 @@
 import os
+import zipfile
 import numpy as np
 import src.parameter
 from omegaconf import DictConfig
@@ -29,11 +30,28 @@ def zeros_resident(shape, dtype):
     return arr
 
 
+def npy_header(npz, key: str) -> tuple:
+    """Return (shape, dtype) of the array `key` of the open npz file `npz`, read
+    from its .npy header without loading the array."""
+
+    with npz.zip.open(f"{key}.npy") as member:
+        version = np.lib.format.read_magic(member)
+        if version == (1, 0):
+            shape, _fortran_order, dtype = np.lib.format.read_array_header_1_0(member)
+        else:
+            shape, _fortran_order, dtype = np.lib.format.read_array_header_2_0(member)
+    return shape, dtype
+
+
 def merge_chunks(chunk_paths: list, path: str):
     """Concatenate the npz files `chunk_paths` key by key, in the order given,
-    into the npz file `path` (atomic_open), then delete the chunks. One key is
-    concatenated at a time, so the parts of only one key are held beside the
-    merged arrays. A single chunk is renamed to `path` (os.replace)."""
+    into the npz file `path` (atomic_open), then delete the chunks. A single
+    chunk is renamed to `path` (os.replace).
+
+    `path` is written as np.savez writes an npz, an uncompressed zip with one
+    .npy entry per key. Each entry gets a header for the total number of rows,
+    read from the chunks' headers, and the chunks' rows are appended one chunk
+    at a time, so one chunk's array of one key is the most held in memory."""
 
     if len(chunk_paths) == 1:
         os.replace(chunk_paths[0], path)
@@ -41,13 +59,23 @@ def merge_chunks(chunk_paths: list, path: str):
 
     files = [np.load(chunk) for chunk in chunk_paths]
     try:
-        keys = files[0].files if files else []
-        merged = {k: np.concatenate([f[k] for f in files]) for k in keys}
+        with atomic_open(path) as f:
+            with zipfile.ZipFile(f, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
+                for key in files[0].files if files else []:
+                    headers = [npy_header(npz, key) for npz in files]
+                    shape, dtype = headers[0]
+                    header = {
+                        "descr": np.lib.format.dtype_to_descr(dtype),
+                        "fortran_order": False,
+                        "shape": (sum(s[0] for s, _ in headers), *shape[1:]),
+                    }
+                    with zf.open(f"{key}.npy", "w", force_zip64=True) as out:
+                        np.lib.format.write_array_header_2_0(out, header)
+                        for npz in files:
+                            out.write(np.ascontiguousarray(npz[key]).data)
     finally:
-        for f in files:
-            f.close()
-    with atomic_open(path) as f:
-        np.savez(f, **merged)
+        for npz in files:
+            npz.close()
     for chunk in chunk_paths:
         os.remove(chunk)
 

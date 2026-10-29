@@ -47,13 +47,10 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import argparse
-import yaml
 from pathlib import Path
 from tqdm import tqdm
-from omegaconf import DictConfig, OmegaConf
-from omegaconf.errors import OmegaConfBaseException
 
-from src.utils.id import strip_config
+from src.utils.id import read_run_cfg
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     add_config_group_args, assign_groups, ensure_font, env_groups, flatten_cfg, is_null,
@@ -517,23 +514,9 @@ for cfg_dir in cfg_dirs:
     if not cfg_file.exists():
         no_cfg_dirs.append(cfg_dir.name)
         continue
-    try:
-        cfg = OmegaConf.load(cfg_file)
-    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
-        vprint(f"  WARNING: {cfg_file} could not be read ({e}).")
-        bad_cfg_dirs.append(cfg_dir.name)
-        continue
-    if not isinstance(cfg, DictConfig) or not cfg:
-        vprint(
-            f"  WARNING: {cfg_file} is empty or not a mapping "
-            f"(parsed as {type(cfg).__name__})."
-        )
-        bad_cfg_dirs.append(cfg_dir.name)
-        continue
-    try:
-        run_cfg = strip_config(cfg)
-    except OmegaConfBaseException as e:
-        vprint(f"  WARNING: {cfg_file} could not be resolved ({e}).")
+    _, run_cfg, reason = read_run_cfg(cfg_file)
+    if reason is not None:
+        vprint(f"  WARNING: {cfg_file} {reason}.")
         bad_cfg_dirs.append(cfg_dir.name)
         continue
     run_cfgs[cfg_dir.name]  = run_cfg

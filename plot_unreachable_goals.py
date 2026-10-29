@@ -64,13 +64,10 @@ import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import yaml
 from matplotlib import pyplot as plt
-from omegaconf import DictConfig, OmegaConf
-from omegaconf.errors import OmegaConfBaseException
 from tqdm import tqdm
 
-from src.utils.id import strip_config
+from src.utils.id import read_run_cfg
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     GROUP_GAP_BAR,
@@ -641,23 +638,9 @@ for seed_dir in tqdm(
     if not cfg_file.is_file():
         no_cfg_dirs.append(seed_dir.parent.name)
         continue
-    try:
-        run_yaml = OmegaConf.load(cfg_file)
-    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
-        vprint(f"  WARNING: {cfg_file} could not be read ({e}).")
-        bad_cfg_dirs.append(seed_dir.parent.name)
-        continue
-    if not isinstance(run_yaml, DictConfig) or not run_yaml:
-        vprint(
-            f"  WARNING: {cfg_file} is empty or not a mapping "
-            f"(parsed as {type(run_yaml).__name__})."
-        )
-        bad_cfg_dirs.append(seed_dir.parent.name)
-        continue
-    try:
-        run_cfg = strip_config(run_yaml)
-    except OmegaConfBaseException as e:
-        vprint(f"  WARNING: {cfg_file} could not be resolved ({e}).")
+    _, run_cfg, reason = read_run_cfg(cfg_file)
+    if reason is not None:
+        vprint(f"  WARNING: {cfg_file} {reason}.")
         bad_cfg_dirs.append(seed_dir.parent.name)
         continue
     name = f"{seed_dir.parent.name}/{seed_dir.name}"

@@ -159,6 +159,11 @@ def load_config_group(config_dir: str) -> dict:
     experiment and are not part of a config's identity. Interpolations are left
     unresolved, and `flatten_cfg` drops the keys still holding one.
 
+    A YAML is composed from an empty primary config as `+<group>=<name>`. Every
+    group its `defaults:` list overrides (`override /agent: svf`) is added before
+    it, from the config root, so the override has a group to replace and the YAML
+    composes with the option it selects.
+
     The keys that do not define a configuration are dropped, as they are from a
     run's cfg.yaml: a YAML declaring one would be compared against a run that
     cannot record it, and would match nothing."""
@@ -178,7 +183,13 @@ def load_config_group(config_dir: str) -> dict:
         name: compared_keys(
             flatten_cfg(
                 OmegaConf.to_container(
-                    compose_cfg(config_name=f"{group.as_posix()}/{name}"),
+                    compose_cfg(
+                        (
+                            *overridden_groups(Path(config_dir) / f"{name}.yaml"),
+                            f"+{group.as_posix()}={name}",
+                        ),
+                        config_name=None,
+                    ),
                     resolve=False,
                 )
             ),
@@ -186,6 +197,21 @@ def load_config_group(config_dir: str) -> dict:
         )
         for name in names
     }
+
+
+def overridden_groups(path) -> list:
+    """Return `+<group>=<option>` for every `override /<group>: <option>` entry
+    in the `defaults:` list of the YAML `path`, in the order the list holds
+    them."""
+
+    added = []
+    for entry in (load_yaml(str(path)) or {}).get("defaults") or []:
+        if not isinstance(entry, dict):
+            continue
+        for key, option in entry.items():
+            if key.startswith("override "):
+                added.append(f"+{key.split(None, 1)[1].lstrip('/')}={option}")
+    return added
 
 
 def ignored_cfg_keys(plot_cfg: dict) -> frozenset:

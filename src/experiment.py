@@ -207,7 +207,7 @@ class Experiment:
             data_dir (str): where to save npz history files,
             save_memory (bool): if True, all data collected is saved to memory.npz
                 in data_dir. Every time the replay memory is full (i.e., its
-                writing index wraps back to 0 and overrides old samples), data
+                writing index wraps back to 0 and overwrites old samples), data
                 collected so far is written to a memory_<i>.npz chunk. At the
                 end of training, the chunks are merged into memory.npz and
                 deleted,

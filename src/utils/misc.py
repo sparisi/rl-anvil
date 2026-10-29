@@ -4,6 +4,12 @@ from contextlib import contextmanager
 import numpy as np
 import random
 
+# The process umask, read once at import, before any thread starts: os.umask
+# both sets and returns the mask, so reading it sets it to 0 for a moment, and a
+# file another thread creates in that moment gets no masking.
+_UMASK = os.umask(0)
+os.umask(_UMASK)
+
 # https://stackoverflow.com/a/47722393/754136
 def random_choice(p: np.array, rng_generator: np.random.Generator, axis: int = -1):
     """
@@ -228,17 +234,14 @@ def atomic_open(path: str, mode: str = "wb"):
     """Open a temporary file beside `path`, yield it, and move it to `path` once
     the block completes. If the block raises, the temporary file is removed and
     `path` is left as it was. The file gets the mode open() would give it,
-    0o666 masked by the process umask."""
+    0o666 masked by the process umask (_UMASK)."""
 
     fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".tmp-")
     try:
         with os.fdopen(fd, mode) as f:
             yield f
-        # mkstemp creates the file with mode 0o600. os.umask both sets and
-        # returns the mask, so it is read by setting it and putting it back.
-        umask = os.umask(0)
-        os.umask(umask)
-        os.chmod(tmp_path, 0o666 & ~umask)
+        # mkstemp creates the file with mode 0o600.
+        os.chmod(tmp_path, 0o666 & ~_UMASK)
         os.replace(tmp_path, path)
     except BaseException:
         if os.path.exists(tmp_path):

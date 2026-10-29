@@ -42,10 +42,13 @@ import numpy as np
 import pandas as pd
 import argparse
 import re
+import yaml
 from pathlib import Path
 from tqdm import tqdm
+from omegaconf import DictConfig, OmegaConf
+from omegaconf.errors import OmegaConfBaseException
 
-from src.utils.id import load_run_cfg
+from src.utils.id import strip_config
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     add_config_group_args, assign_groups, composed_mask, ensure_font, entry_config,
@@ -330,6 +333,7 @@ flat_cfgs:   dict = {}   # "<config_id>/<seed>" -> flat cfg
 run_cfgs:    dict = {}   # "<config_id>/<seed>" -> nested cfg
 mem_files:   dict = {}   # "<config_id>/<seed>" -> path to memory.npz
 no_cfg_dirs: list = []
+bad_cfg_dirs: list = []
 
 for seed_dir in tqdm(
     run_dirs, desc="Reading configs", unit="cfg", disable=not args.verbose
@@ -340,7 +344,26 @@ for seed_dir in tqdm(
         no_cfg_dirs.append(seed_dir.parent.name)
         continue
 
-    run_cfg = load_run_cfg(cfg_file)
+    try:
+        cfg = OmegaConf.load(cfg_file)
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
+        vprint(f"  WARNING: {cfg_file} could not be read ({e}).")
+        bad_cfg_dirs.append(seed_dir.parent.name)
+        continue
+    if not isinstance(cfg, DictConfig) or not cfg:
+        vprint(
+            f"  WARNING: {cfg_file} is empty or not a mapping "
+            f"(parsed as {type(cfg).__name__})."
+        )
+        bad_cfg_dirs.append(seed_dir.parent.name)
+        continue
+    try:
+        run_cfg = strip_config(cfg)
+    except OmegaConfBaseException as e:
+        vprint(f"  WARNING: {cfg_file} could not be resolved ({e}).")
+        bad_cfg_dirs.append(seed_dir.parent.name)
+        continue
+
     name = f"{seed_dir.parent.name}/{seed_dir.name}"
     # Interpolations kept, as src.utils.id.composed_config keeps them: the two
     # are compared key by key below, and a key dropped from one side and not the
@@ -351,8 +374,9 @@ for seed_dir in tqdm(
 
 if not flat_cfgs:
     raise SystemExit(
-        f"Found {len(run_dirs)} memory.npz, but no cfg.yaml in the directory above any "
-        f"of them. -f takes a data directory or a <data_dir>/<config_id>/<rng_seed>."
+        f"Found {len(run_dirs)} memory.npz, but no readable cfg.yaml in the directory "
+        f"above any of them ({len(bad_cfg_dirs)} could not be read or resolved; -v "
+        f"lists them). -f takes a data directory or a <data_dir>/<config_id>/<rng_seed>."
     )
 
 df = pd.DataFrame.from_dict(flat_cfgs, orient="index")
@@ -510,6 +534,7 @@ print(f"Runs found  : {len(run_dirs)}  (seed {args.rng_seed})")
 print(
     f"Runs plotted: {len(collected)}"
     f"  ({len(no_cfg_dirs)} no cfg,"
+    f" {len(bad_cfg_dirs)} unreadable cfg,"
     f" {len(no_memory_dirs)} configs with no memory.npz,"
     f" {len(no_counter_dirs)} no tabular counter,"
     f" {len(corrupt_dirs)} unreadable)"

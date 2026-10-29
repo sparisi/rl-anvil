@@ -47,10 +47,10 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import argparse
-import yaml
 from pathlib import Path
 from tqdm import tqdm
 
+from src.utils.id import load_run_cfg
 from src.utils.plot import (
     assign_groups, ensure_font, env_groups, flatten_cfg, is_null,
     load_config_group, ignored_cfg_keys, load_plot_configs, memory_fractions,
@@ -518,7 +518,7 @@ for cfg_dir in cfg_dirs:
     if not cfg_file.exists():
         no_cfg_dirs.append(cfg_dir.name)
         continue
-    run_cfg = yaml.safe_load(cfg_file.read_text(encoding="utf-8")) or {}
+    run_cfg = load_run_cfg(cfg_file)
     run_cfgs[cfg_dir.name]  = run_cfg
     # Interpolations kept, as `composed_config` keeps them: a key dropped from
     # one side of the comparison and not the other is a key it reads as missing

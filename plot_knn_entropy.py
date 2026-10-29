@@ -50,6 +50,7 @@ from scipy.special import digamma, gammaln
 import src.pseudocount as pseudocount
 from src.pseudocount import BinnedCount
 
+from src.utils.id import load_run_cfg
 from src.utils.plot import (
     ENV,
     GROUP_GAP_BAR,
@@ -985,7 +986,7 @@ for seed_dir in run_dirs:
         no_cfg_dirs.append(seed_dir.parent.name)
         continue
 
-    run_cfg = yaml.safe_load(cfg_file.read_text(encoding="utf-8")) or {}
+    run_cfg = load_run_cfg(cfg_file)
     name = f"{seed_dir.parent.name}/{seed_dir.name}"
     # Interpolations kept, as `composed_config` keeps them: the two configs are
     # compared key by key below, and a key dropped from one side and not the

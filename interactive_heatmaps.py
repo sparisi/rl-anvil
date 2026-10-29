@@ -44,8 +44,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import yaml
+from omegaconf import DictConfig, OmegaConf
+from omegaconf.errors import OmegaConfBaseException
 
-from src.utils.id import load_run_cfg
+from src.utils.id import strip_config
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     ALGO,
@@ -136,11 +139,13 @@ try:
 except ValueError as err:
     parser.error(f"--progression_step {err}")
 
-# Configuration directories whose cfg.yaml is missing, and runs a cell already
-# holds a map for. Both are collected while reading and reported once: a cell
-# draws one map, so a second run of the same seed and dropdown values would be
-# painted over the first with nothing on the page to say so.
+# Configuration directories whose cfg.yaml is missing or cannot be read or
+# resolved, and runs a cell already holds a map for. All are collected while
+# reading and reported once: a cell draws one map, so a second run of the same
+# seed and dropdown values would be painted over the first with nothing on the
+# page to say so.
 missing_cfg = []
+bad_cfg = []
 duplicate_runs = []
 
 vprint = make_vprint(args.verbose)
@@ -661,7 +666,25 @@ def read_cfg(cfg_dir, name, mem_file, seed):
     if not cfg_file.is_file():
         missing_cfg.append(cfg_dir.name)
         return
-    run_cfg = load_run_cfg(cfg_file)
+    try:
+        cfg = OmegaConf.load(cfg_file)
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
+        vprint(f"  WARNING: {cfg_file} could not be read ({e}).")
+        bad_cfg.append(cfg_dir.name)
+        return
+    if not isinstance(cfg, DictConfig) or not cfg:
+        vprint(
+            f"  WARNING: {cfg_file} is empty or not a mapping "
+            f"(parsed as {type(cfg).__name__})."
+        )
+        bad_cfg.append(cfg_dir.name)
+        return
+    try:
+        run_cfg = strip_config(cfg)
+    except OmegaConfBaseException as e:
+        vprint(f"  WARNING: {cfg_file} could not be resolved ({e}).")
+        bad_cfg.append(cfg_dir.name)
+        return
     # Interpolations kept, as src.utils.id.composed_config keeps them: the two
     # are compared key by key below, and a key dropped from one side and not the
     # other is a key the comparison reads as missing from the run.
@@ -690,10 +713,17 @@ if missing_cfg:
         f"WARNING: {len(names)} configuration(s) have a memory but no cfg.yaml "
         f"and are not drawn: {names[:5]}{' ...' if len(names) > 5 else ''}."
     )
+if bad_cfg:
+    names = sorted(set(bad_cfg))
+    print(
+        f"WARNING: {len(names)} configuration(s) have a cfg.yaml that cannot be "
+        f"read or resolved and are not drawn: {names[:5]}"
+        f"{' ...' if len(names) > 5 else ''}. -v gives the reason for each."
+    )
 
 if not flat_cfgs:
     raise SystemExit(
-        f"Found {len(run_dirs)} memory.npz but no cfg.yaml beside any of them."
+        f"Found {len(run_dirs)} memory.npz but no readable cfg.yaml beside any of them."
     )
 
 df = pd.DataFrame.from_dict(flat_cfgs, orient="index")

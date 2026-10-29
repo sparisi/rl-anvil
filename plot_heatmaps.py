@@ -28,6 +28,9 @@ vmap.
 environment under --shared_vmap, one per panel when it is unset. Panels are drawn
 larger so the bar and its ticks stay legible.
 
+An entry with no run at --rng_seed in an environment is listed in a warning and
+drawn as empty panels.
+
 Output goes to <data_dir>/<output>/heatmaps/<plot config>/<memory key>/.
 
 Example
@@ -42,10 +45,13 @@ import numpy as np
 import pandas as pd
 import argparse
 import re
+import yaml
 from pathlib import Path
 from tqdm import tqdm
+from omegaconf import DictConfig, OmegaConf
+from omegaconf.errors import OmegaConfBaseException
 
-from src.utils.id import load_run_cfg
+from src.utils.id import strip_config
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     add_config_group_args, assign_groups, composed_mask, ensure_font, entry_config,
@@ -303,6 +309,7 @@ def resolve_runs(path):
 root = Path(args.folder)
 if not root.is_dir():
     raise SystemExit(f"Not a directory: {root}")
+single_run = (root / "memory.npz").is_file()
 run_dirs, no_memory_dirs = resolve_runs(root)
 
 if not run_dirs:
@@ -330,6 +337,7 @@ flat_cfgs:   dict = {}   # "<config_id>/<seed>" -> flat cfg
 run_cfgs:    dict = {}   # "<config_id>/<seed>" -> nested cfg
 mem_files:   dict = {}   # "<config_id>/<seed>" -> path to memory.npz
 no_cfg_dirs: list = []
+bad_cfg_dirs: list = []
 
 for seed_dir in tqdm(
     run_dirs, desc="Reading configs", unit="cfg", disable=not args.verbose
@@ -340,7 +348,26 @@ for seed_dir in tqdm(
         no_cfg_dirs.append(seed_dir.parent.name)
         continue
 
-    run_cfg = load_run_cfg(cfg_file)
+    try:
+        cfg = OmegaConf.load(cfg_file)
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
+        vprint(f"  WARNING: {cfg_file} could not be read ({e}).")
+        bad_cfg_dirs.append(seed_dir.parent.name)
+        continue
+    if not isinstance(cfg, DictConfig) or not cfg:
+        vprint(
+            f"  WARNING: {cfg_file} is empty or not a mapping "
+            f"(parsed as {type(cfg).__name__})."
+        )
+        bad_cfg_dirs.append(seed_dir.parent.name)
+        continue
+    try:
+        run_cfg = strip_config(cfg)
+    except OmegaConfBaseException as e:
+        vprint(f"  WARNING: {cfg_file} could not be resolved ({e}).")
+        bad_cfg_dirs.append(seed_dir.parent.name)
+        continue
+
     name = f"{seed_dir.parent.name}/{seed_dir.name}"
     # Interpolations kept, as src.utils.id.composed_config keeps them: the two
     # are compared key by key below, and a key dropped from one side and not the
@@ -351,8 +378,9 @@ for seed_dir in tqdm(
 
 if not flat_cfgs:
     raise SystemExit(
-        f"Found {len(run_dirs)} memory.npz, but no cfg.yaml in the directory above any "
-        f"of them. -f takes a data directory or a <data_dir>/<config_id>/<rng_seed>."
+        f"Found {len(run_dirs)} memory.npz, but no readable cfg.yaml in the directory "
+        f"above any of them ({len(bad_cfg_dirs)} could not be read or resolved; -v "
+        f"lists them). -f takes a data directory or a <data_dir>/<config_id>/<rng_seed>."
     )
 
 df = pd.DataFrame.from_dict(flat_cfgs, orient="index")
@@ -465,6 +493,23 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
         envs,
     )
 
+    # Over every environment the config declares, the ones with no run at all
+    # included. An entry naming another environment composes to nothing there.
+    # A seed directory given to -f is one run, and every other cell is empty.
+    missing = [] if single_run else [
+        (li, env)
+        for group_envs in groups.values() for env in group_envs
+        for li, (label, sel) in enumerate(entries)
+        if selected.get((li, env)) is None
+        and entry_config(env, sel, label) is not None
+    ]
+    if missing:
+        print(
+            f"WARNING: {config_name}: {len(missing)} configuration(s) have no run "
+            f"at seed {args.rng_seed}: "
+            + ", ".join(f"'{entries[li][0]}' in {env}" for li, env in missing)
+        )
+
 needed = sorted({n for _e, _g, sel, _v in layout.values() for n in sel.values()})
 if not needed:
     raise SystemExit("No run matches any configuration of the plot config(s).")
@@ -510,6 +555,7 @@ print(f"Runs found  : {len(run_dirs)}  (seed {args.rng_seed})")
 print(
     f"Runs plotted: {len(collected)}"
     f"  ({len(no_cfg_dirs)} no cfg,"
+    f" {len(bad_cfg_dirs)} unreadable cfg,"
     f" {len(no_memory_dirs)} configs with no memory.npz,"
     f" {len(no_counter_dirs)} no tabular counter,"
     f" {len(corrupt_dirs)} unreadable)"
@@ -705,12 +751,11 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
             if len(FRACTIONS) < 2:
                 continue
             for env in present:
-                names = [
-                    (li, run_at[(li, env)])
-                    for li in range(len(labels)) if (li, env) in run_at
-                ]
+                # A row per entry, as in the figures above: an entry with no run
+                # here is a row of empty panels.
+                names = [(li, run_at.get((li, env))) for li in range(len(labels))]
                 arrays = {
-                    (li, fi): collected[n][frac].get(key)
+                    (li, fi): None if n is None else collected[n][frac].get(key)
                     for li, n in names for fi, frac in enumerate(FRACTIONS)
                 }
                 if all(a is None for a in arrays.values()):
@@ -723,7 +768,8 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
                     with quiet_empty_maps():
                         fig_range = pooled_range([
                             collected[n][frac].get(k)
-                            for _li, n in names for frac in FRACTIONS for k in family
+                            for _li, n in names if n is not None
+                            for frac in FRACTIONS for k in family
                         ])
                 else:
                     fig_range = None

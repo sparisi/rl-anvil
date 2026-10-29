@@ -14,6 +14,10 @@ from src.utils.paths import CONFIG_DIR
 
 
 # Keys that do not define a configuration. See configs/full_config.yaml for details.
+# Every other key must resolve to the same value wherever it is composed: a value
+# read from the environment or the clock (${oc.env:...}, ${now:...}) gives a job
+# a different config ID at run time than at submission, and ${hydra:...} does not
+# resolve outside a Hydra run.
 DROPPED_CFG_KEYS = (
     "hydra",
     "wandb",
@@ -335,6 +339,15 @@ def decode_stat(raw):
         except ValueError:
             return raw
     return raw
+
+
+def load_yaml(path: str):
+    """Return the YAML file `path` as plain Python values, read the way Hydra
+    reads config files: with OmegaConf's loader, which reads an exponent float
+    such as 1e-3 as a float where PyYAML reads it as a string. Interpolations
+    are left unresolved, and an empty file returns {}."""
+
+    return OmegaConf.to_container(OmegaConf.load(path), resolve=False)
 
 
 def flatten_cfg(nested: dict, drop_interpolations=True) -> dict:

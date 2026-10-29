@@ -9,7 +9,7 @@ Example:
 
     global_sweep:
       agent.critic.approximator.dropout_p: [0.0, 0.1]
-      environment: [lunar_lander, travel_field_small]
+      environment: [gymnasium/lunar_lander, gym_gridworlds/travel_field_small]
       algorithm: [eps_greedy]
 
     config_sweep:
@@ -19,20 +19,40 @@ Example:
         agent.critic.approximator.encoder.hidden_size: [16, 64]
 
     Total configurations:
-    - global_sweep: 2
-    - first config_sweep: 1 -> 1 x 2 = 2
-    - second config_sweep: 2 -> 2 x 2 = 4
-    - total: 2 + 4 = 6
+    - global_sweep: 2 x 2 x 1 = 4
+    - first config_sweep: 1 -> 1 x 4 = 4
+    - second config_sweep: 2 -> 2 x 4 = 8
+    - total: 4 + 8 = 12
+
+A value listed twice for one key, or equal to an earlier one (1 and 1.0), is
+run once.
 
 Note: either section MUST define `environment` and `algorithm`.
 """
 
 import itertools
 import os
+import re
 import string
-import yaml
 
+from hydra.core.override_parser.overrides_parser import OverridesParser
+
+from src.utils.id import escape_interpolations, load_yaml
 from src.utils.paths import CONFIG_DIR, SWEEP_DIR
+
+
+def unique_values(path, key, values):
+    """Return `values` without the ones equal to an earlier value, printing a
+    warning for each one dropped. A bool equals only a bool, so True and 1 are
+    both kept."""
+
+    kept = []
+    for v in values:
+        if any(v == k and isinstance(v, bool) == isinstance(k, bool) for k in kept):
+            print(f"WARNING: {path}: {key}={v!r} equals an earlier value and is run once.")
+        else:
+            kept.append(v)
+    return kept
 
 
 def load_sweep(name):
@@ -40,13 +60,14 @@ def load_sweep(name):
 
     `name` can also be a path to a YAML file anywhere. Returns
     (global_sweep, config_sweep), with missing keys defaulting to "no extra
-    hyperparameters" (i.e., a single configuration with nothing swept).
+    hyperparameters" (i.e., a single configuration with nothing swept). The file
+    is read as Hydra reads config files (src.utils.id.load_yaml), and repeated
+    values of a key are dropped (unique_values).
     """
     path = name if os.path.isfile(name) else os.path.join(SWEEP_DIR, f"{name}.yaml")
     if not os.path.isfile(path):
         raise SystemExit(f"Sweep file not found: {path}")
-    with open(path) as f:
-        sweep = yaml.safe_load(f) or {}
+    sweep = load_yaml(path) or {}
     unknown = set(sweep) - {"global_sweep", "config_sweep"}
     if unknown:
         raise SystemExit(f"Unknown keys in {path}: {sorted(unknown)}")
@@ -54,9 +75,15 @@ def load_sweep(name):
     config_sweep = sweep.get("config_sweep") or [{}]
     # A bare scalar is a one-value sweep; accepting it keeps the YAML readable
     # for keys that are pinned rather than swept.
-    global_sweep = {k: v if isinstance(v, list) else [v] for k, v in global_sweep.items()}
+    global_sweep = {
+        k: unique_values(path, k, v if isinstance(v, list) else [v])
+        for k, v in global_sweep.items()
+    }
     config_sweep = [
-        {k: v if isinstance(v, list) else [v] for k, v in (entry or {}).items()}
+        {
+            k: unique_values(path, k, v if isinstance(v, list) else [v])
+            for k, v in (entry or {}).items()
+        }
         for entry in config_sweep
     ]
     # An empty list would make the product of the sweep empty, dropping every
@@ -99,6 +126,31 @@ CONFIG_GROUPS = config_groups()
 # Characters Hydra's override grammar accepts unquoted.
 _UNQUOTED_CHARS = frozenset(string.ascii_letters + string.digits + "_-./+@:")
 
+_PARSE_OVERRIDE = OverridesParser.create().parse_override
+
+
+def _reads_back(text):
+    """True if Hydra reads the unquoted override value `text` as that string."""
+
+    try:
+        return _PARSE_OVERRIDE(f"k={text}").value() == text
+    except Exception:
+        return False
+
+
+def _quote(text):
+    """`text` as a single-quoted override value that Hydra and OmegaConf read
+    back as `text`. "${" is escaped for OmegaConf (escape_interpolations), and
+    the backslashes Hydra unescapes, those right before a quote or at the end,
+    are doubled."""
+
+    text = escape_interpolations(text)
+
+    def escape(m):
+        return m.group(1) * 2 + ("\\'" if m.group(2) else "")
+
+    return "'" + re.sub(r"(\\*)('|$)", escape, text) + "'"
+
 
 def format_override(key, value):
     """Render one Hydra override as a single argv token.
@@ -108,8 +160,11 @@ def format_override(key, value):
 
     Hydra's override grammar reads a bare `None` as the string "None", not
     OmegaConf 'null' (that is then parsed to None). List values are rendered
-    without spaces, e.g., `[mean,max]`. Values holding characters the grammar
-    treats specially are single-quoted.
+    without spaces, e.g., `[mean,max]`. A string is rendered bare only if Hydra
+    reads it back as the same string, so "10", "null" or "true" stay strings,
+    and is single-quoted otherwise (_quote). A dict value raises a ValueError.
+    A sweep value cannot be an interpolation: '${' is escaped, so a value such
+    as "${agent.critic.lr}" reaches the config as that literal string.
 
     A null renders as `null` and reaches cfg.yaml as None. By the time the
     analysis side reads that back it is indistinguishable from a key the run
@@ -128,8 +183,11 @@ def format_override(key, value):
             return str(v)
         if isinstance(v, (list, tuple)):
             return "[" + ",".join(fmt(x) for x in v) + "]"
+        if isinstance(v, dict):
+            raise ValueError(f"{key}: a mapping cannot be rendered as an override ({v!r}).")
         text = str(v)
         if text and all(c in _UNQUOTED_CHARS for c in text):
-            return text
-        return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
+            if not isinstance(v, str) or _reads_back(text):
+                return text
+        return _quote(text)
     return f"{'' if key in CONFIG_GROUPS else '++'}{key}={fmt(value)}"

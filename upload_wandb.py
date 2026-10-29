@@ -4,15 +4,14 @@ Each row of the parquet (one seed of one configuration) becomes one W&B run:
 
 - The config is the row's 'hyperparameter' columns, unflattened into the
   nested structure main.py passes to wandb.init(), plus experiment.rng_seed.
-  It holds the keys of cfg.yaml, without the keys whose value is null. A key
-  whose column has missing values and only integral values is uploaded as an
-  integer, also where cfg.yaml held a float such as 1.0.
+  It holds the keys of cfg.yaml, without the keys whose value is null.
 - The run is named '<config_id>_<seed>', as in main.py, and grouped by
   '<config_id>'. The config ID is the name of the run's config folder, which
   process_data stores in the ('config', 'config_id') column.
 - Every 'statistic' column holding a list is logged as a time series, one
   wandb.log() call per checkpoint at step=steps[i]. Non-finite entries are not
-  logged. Every statistic that is not a list goes to the run summary. A row
+  logged, and a checkpoint with no finite entry is not logged at all. Every
+  statistic that is not a list goes to the run summary. A row
   fails if its 'steps' are not strictly increasing integers, or if one of its
   lists is not a list of numbers as long as 'steps'.
 
@@ -21,6 +20,9 @@ re-running the script only uploads the rows added to the parquet since. A run
 that exists but did not finish (e.g., an interrupted upload) is resumed: the
 checkpoints after the last step it holds are logged, and the summary is set.
 A run still in the 'running' state is skipped and reported.
+The project must not hold runs logged by main.py, which names its runs the
+same way: an unfinished training run would be resumed with the uploaded
+checkpoints after its last step.
 A row whose run name was already skipped or submitted for an earlier row is
 skipped and reported. Run names are matched across the whole project, so two
 configurations from different data directories that share a config ID and a
@@ -203,7 +205,8 @@ def upload(
                 for k, v in series.items()
                 if np.isfinite(v[i])
             }
-            run.log(values, step=step)
+            if values:
+                run.log(values, step=step)
         run.summary.update(summary)
 
 
@@ -251,7 +254,8 @@ def main():
     args = parser.parse_args()
 
     parquet_path = os.path.join(args.folder, args.parquet)
-    df = pd.read_parquet(parquet_path)
+    # Nullable dtypes keep an int column with missing values as ints
+    df = pd.read_parquet(parquet_path, dtype_backend="numpy_nullable")
     print(f"Loaded parquet file from: {parquet_path}")
     if all(isinstance(c, str) and c.startswith("(") for c in df.columns):
         df.columns = pd.MultiIndex.from_tuples([literal_eval(c) for c in df.columns])
@@ -265,18 +269,6 @@ def main():
             f"No {CONFIG_ID} column in {parquet_path}. Run process_data.py again "
             f"to write it."
         )
-
-    # A key absent from some rows turns an integer column into float64. Such a
-    # column, with missing values and only integral present values, is read
-    # back as integers.
-    for c in hyp_cols:
-        column = df[c]
-        if (
-            pd.api.types.is_float_dtype(column)
-            and column.isna().any()
-            and (column.dropna() % 1 == 0).all()
-        ):
-            df[c] = column.astype("Int64")
 
     # Runs already in the project, by name. If several runs share a name, a
     # finished one takes precedence.

@@ -47,10 +47,13 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import argparse
+import yaml
 from pathlib import Path
 from tqdm import tqdm
+from omegaconf import DictConfig, OmegaConf
+from omegaconf.errors import OmegaConfBaseException
 
-from src.utils.id import load_run_cfg
+from src.utils.id import strip_config
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     add_config_group_args, assign_groups, ensure_font, env_groups, flatten_cfg, is_null,
@@ -505,6 +508,7 @@ cfg_dirs = sorted(root.glob("*"))
 flat_cfgs:   dict = {}   # cfg_dir_name -> flat cfg
 run_cfgs:    dict = {}   # cfg_dir_name -> nested cfg
 no_cfg_dirs: list = []
+bad_cfg_dirs: list = []
 
 for cfg_dir in cfg_dirs:
     if not cfg_dir.is_dir():
@@ -513,7 +517,25 @@ for cfg_dir in cfg_dirs:
     if not cfg_file.exists():
         no_cfg_dirs.append(cfg_dir.name)
         continue
-    run_cfg = load_run_cfg(cfg_file)
+    try:
+        cfg = OmegaConf.load(cfg_file)
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
+        vprint(f"  WARNING: {cfg_file} could not be read ({e}).")
+        bad_cfg_dirs.append(cfg_dir.name)
+        continue
+    if not isinstance(cfg, DictConfig) or not cfg:
+        vprint(
+            f"  WARNING: {cfg_file} is empty or not a mapping "
+            f"(parsed as {type(cfg).__name__})."
+        )
+        bad_cfg_dirs.append(cfg_dir.name)
+        continue
+    try:
+        run_cfg = strip_config(cfg)
+    except OmegaConfBaseException as e:
+        vprint(f"  WARNING: {cfg_file} could not be resolved ({e}).")
+        bad_cfg_dirs.append(cfg_dir.name)
+        continue
     run_cfgs[cfg_dir.name]  = run_cfg
     # Interpolations kept, as `composed_config` keeps them: a key dropped from
     # one side of the comparison and not the other is a key it reads as missing
@@ -522,7 +544,10 @@ for cfg_dir in cfg_dirs:
     flat_cfgs[cfg_dir.name] = flatten_cfg(run_cfg, drop_interpolations=False)
 
 if not flat_cfgs:
-    raise SystemExit(f"No <cfg_dir>/cfg.yaml under {root}.")
+    raise SystemExit(
+        f"No readable <cfg_dir>/cfg.yaml under {root} ({len(bad_cfg_dirs)} could "
+        f"not be read or resolved; -v lists them)."
+    )
 
 df = pd.DataFrame.from_dict(flat_cfgs, orient="index")
 df.columns = pd.MultiIndex.from_tuples([("hyperparameter", c) for c in df.columns])
@@ -688,6 +713,7 @@ print(f"Scanned  cfg dirs : {len(cfg_dirs)}")
 print(
     f"Loaded    runs    : {len(scanned)}"
     f"  ({len(no_cfg_dirs)} no cfg,"
+    f" {len(bad_cfg_dirs)} unreadable cfg,"
     f" {len(no_memory_dirs)} no memory,"
     f" {len(unmatched)} unmatched,"
     f" {len(no_counter_dirs)} no tabular counter)"

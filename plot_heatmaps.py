@@ -542,7 +542,7 @@ with tqdm(needed, desc="Loading memory", unit="run", disable=not args.verbose) a
                     fractions=FRACTIONS,
                 )
         except Exception as e:
-            vprint(f"  WARNING: compute_maps failed for {name}: {e}")
+            vprint(f"  WARNING: memory_maps failed for {name}: {e}")
             continue
         if maps_per_frac is None:
             no_counter_dirs.append(name)

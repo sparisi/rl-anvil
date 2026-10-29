@@ -1,8 +1,10 @@
+import os
 import numpy as np
 import src.parameter
 from omegaconf import DictConfig
 
 from src.pseudocount import SCALE_EPS, is_neighbor, pseudocount, robust_scale
+from src.utils.misc import atomic_open
 
 # This implementation is in pure NumPy to make it compatible with any deep learning
 # library you'd like to use. The disadvantage is that you'll have to convert every
@@ -26,6 +28,29 @@ def zeros_resident(shape, dtype):
     arr = np.empty(shape, dtype=dtype)
     arr.fill(0)  # np.empty + fill, not np.zeros + fill, to memset only once
     return arr
+
+
+def merge_chunks(chunk_paths: list, path: str):
+    """Concatenate the npz files `chunk_paths` key by key, in the order given,
+    into the npz file `path` (atomic_open), then delete the chunks. One key is
+    concatenated at a time, so the parts of only one key are held beside the
+    merged arrays. A single chunk is renamed to `path` (os.replace)."""
+
+    if len(chunk_paths) == 1:
+        os.replace(chunk_paths[0], path)
+        return
+
+    files = [np.load(chunk) for chunk in chunk_paths]
+    try:
+        keys = files[0].files if files else []
+        merged = {k: np.concatenate([f[k] for f in files]) for k in keys}
+    finally:
+        for f in files:
+            f.close()
+    with atomic_open(path) as f:
+        np.savez(f, **merged)
+    for chunk in chunk_paths:
+        os.remove(chunk)
 
 
 class ReplayMemory(object):
@@ -121,11 +146,12 @@ class ReplayMemory(object):
         for k, v in kwargs.items():
             setattr(self, k, zeros_resident((self._max_size, *v.shape), v.dtype))
 
-    def export_data(self, filename: str):
-        np.savez(
-            filename,
-            **{k: getattr(self, k)[:self.size] for k in self.keys},
-        )
+    def save_chunk(self, path: str):
+        """Write the samples added since the memory last wrapped to the npz file
+        `path`, i.e., samples in [0, idx)."""
+
+        end = self._idx if self._idx > 0 else self.size
+        np.savez(path, **{k: getattr(self, k)[:end] for k in self.keys})
 
     def init_counting(self, n_actions: int, goal_idx, counter = None):
         assert not (self.rho is None and counter is None), (

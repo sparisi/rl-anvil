@@ -18,6 +18,7 @@ import src.replay_memory
 from src.utils.misc import (
     cantor_pairing,
     format_dict_row,
+    atomic_open,
     random_argmax,
     StatsTracker,
 )
@@ -204,8 +205,12 @@ class Experiment:
                 updates between checkpoints,
             rng_seed (int): to fix random seeds for reproducibility,
             data_dir (str): where to save npz history files,
-            save_memory (bool): if True, the whole replay memory will be saved in
-                data_dir,
+            save_memory (bool): if True, all data collected is saved to memory.npz
+                in data_dir. Every time the replay memory is full (i.e., its
+                writing index wraps back to 0 and overrides old samples), data
+                collected so far is written to a memory_<i>.npz chunk. At the
+                end of training, the chunks are merged into memory.npz and
+                deleted,
             save_videos (bool): if True, video recording of testing episodes
                 will be saved in data_dir,
             save_heatmaps (bool): if True, heatmaps of the Q-function will
@@ -258,6 +263,7 @@ class Experiment:
 
         self._data_dir = data_dir
         self._save_memory = save_memory
+        self._memory_chunks = []  # paths of the memory_<i>.npz written so far
         self._save_videos = save_videos
         self._save_heatmaps = save_heatmaps
 
@@ -368,32 +374,41 @@ class Experiment:
         self._steps_last_ckpt = 0
 
 
+    def save_memory_chunk(self):
+        """Write the samples added since the replay memory last wrapped to
+        memory_<i>.npz in the data directory, i counting the chunks written."""
+
+        os.makedirs(self._data_dir, exist_ok=True)
+        n_chunks = len(self._memory_chunks)
+        path = os.path.join(self._data_dir, f"memory_{n_chunks}.npz")
+        self._replay_memory.save_chunk(path)
+        self._memory_chunks.append(path)
+
+
     def savedata(self):
-        """Save statistics history and (optionally) the whole replay memory."""
+        """Save statistics history and (optionally) all data collected."""
 
         if self._data_dir is not None:
             training_time = time.time() - self._start_time
             os.makedirs(self._data_dir, exist_ok=True)
-            # Written to a temporary file and moved into place, so data.npz
-            # exists only once complete (prevents corrupted npz).
-            path = os.path.join(self._data_dir, "data.npz")
-            tmp_path = path + ".tmp"
-            try:
-                with open(tmp_path, "wb") as f:
-                    np.savez(
-                        f,
-                        time=training_time,
-                        **self._data,
-                        **self._run_meta,
-                    )
-                os.replace(tmp_path, path)
-            except BaseException:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-                raise
+            # The memory is written before data.npz, and both atomically
+            # (atomic_open): data.npz marks the seed as done, so it exists only
+            # once everything the run saves is complete.
             if self._save_memory:
-                self._replay_memory.export_data(
-                    os.path.join(self._data_dir, f"memory")
+                # First, save any unsaved data since the last memory wrap.
+                if self._replay_memory.tot_steps % self._replay_memory.max_size != 0:
+                    self.save_memory_chunk()
+                # Then, merge all memory chunks.
+                src.replay_memory.merge_chunks(
+                    self._memory_chunks,
+                    os.path.join(self._data_dir, "memory.npz"),
+                )
+            with atomic_open(os.path.join(self._data_dir, "data.npz")) as f:
+                np.savez(
+                    f,
+                    time=training_time,
+                    **self._data,
+                    **self._run_meta,
                 )
         # TODO save models as well, and call this in checkpoint
 
@@ -504,6 +519,16 @@ class Experiment:
 
                     self._replay_memory.add(**sample)
                     self._tot_steps += 1
+
+                    # A memory that has just wrapped is written out before its
+                    # rows are overwritten (and merged into memory.npz in savedata
+                    # at the end of training).
+                    if (
+                        self._save_memory
+                        and self._data_dir is not None
+                        and self._replay_memory.tot_steps % self._replay_memory.max_size == 0
+                    ):
+                        self.save_memory_chunk()
 
                     mem_ready = self._replay_memory.is_ready
                     time_to_update = self._tot_steps % self._update_frequency == 0

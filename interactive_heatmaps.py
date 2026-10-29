@@ -44,11 +44,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import yaml
-from omegaconf import DictConfig, OmegaConf
-from omegaconf.errors import OmegaConfBaseException
 
-from src.utils.id import strip_config
+from src.utils.id import read_run_cfg
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     ALGO,
@@ -666,23 +663,9 @@ def read_cfg(cfg_dir, name, mem_file, seed):
     if not cfg_file.is_file():
         missing_cfg.append(cfg_dir.name)
         return
-    try:
-        cfg = OmegaConf.load(cfg_file)
-    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
-        vprint(f"  WARNING: {cfg_file} could not be read ({e}).")
-        bad_cfg.append(cfg_dir.name)
-        return
-    if not isinstance(cfg, DictConfig) or not cfg:
-        vprint(
-            f"  WARNING: {cfg_file} is empty or not a mapping "
-            f"(parsed as {type(cfg).__name__})."
-        )
-        bad_cfg.append(cfg_dir.name)
-        return
-    try:
-        run_cfg = strip_config(cfg)
-    except OmegaConfBaseException as e:
-        vprint(f"  WARNING: {cfg_file} could not be resolved ({e}).")
+    _, run_cfg, reason = read_run_cfg(cfg_file)
+    if reason is not None:
+        vprint(f"  WARNING: {cfg_file} {reason}.")
         bad_cfg.append(cfg_dir.name)
         return
     # Interpolations kept, as src.utils.id.composed_config keeps them: the two

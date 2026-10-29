@@ -45,13 +45,10 @@ import numpy as np
 import pandas as pd
 import argparse
 import re
-import yaml
 from pathlib import Path
 from tqdm import tqdm
-from omegaconf import DictConfig, OmegaConf
-from omegaconf.errors import OmegaConfBaseException
 
-from src.utils.id import strip_config
+from src.utils.id import read_run_cfg
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     add_config_group_args, assign_groups, composed_mask, ensure_font, entry_config,
@@ -348,23 +345,9 @@ for seed_dir in tqdm(
         no_cfg_dirs.append(seed_dir.parent.name)
         continue
 
-    try:
-        cfg = OmegaConf.load(cfg_file)
-    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
-        vprint(f"  WARNING: {cfg_file} could not be read ({e}).")
-        bad_cfg_dirs.append(seed_dir.parent.name)
-        continue
-    if not isinstance(cfg, DictConfig) or not cfg:
-        vprint(
-            f"  WARNING: {cfg_file} is empty or not a mapping "
-            f"(parsed as {type(cfg).__name__})."
-        )
-        bad_cfg_dirs.append(seed_dir.parent.name)
-        continue
-    try:
-        run_cfg = strip_config(cfg)
-    except OmegaConfBaseException as e:
-        vprint(f"  WARNING: {cfg_file} could not be resolved ({e}).")
+    _, run_cfg, reason = read_run_cfg(cfg_file)
+    if reason is not None:
+        vprint(f"  WARNING: {cfg_file} {reason}.")
         bad_cfg_dirs.append(seed_dir.parent.name)
         continue
 

@@ -6,16 +6,12 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import yaml
 import json
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 from tqdm import tqdm
 
-from omegaconf import DictConfig, OmegaConf
-from omegaconf.errors import OmegaConfBaseException
-
-from src.utils.id import CONFIG_ID, SEED, flatten_cfg, make_id, strip_config
+from src.utils.id import CONFIG_ID, SEED, flatten_cfg, make_id, read_run_cfg
 
 # Minimum number of rows in each row group of the merged parquet file.
 MIN_ROW_GROUP_ROWS = 10_000
@@ -100,29 +96,16 @@ def read_cfg(dirpath: str, data_dir: str) -> tuple:
     DROPPED_CFG_KEYS, keyed by ("hyperparameter", key), the config ID taken
     from the name of `dirpath`, and the path of `dirpath` relative to
     `data_dir`. It is None when 'cfg.yaml' cannot be read, is empty, is not a
-    mapping, or cannot be resolved (src.utils.id.strip_config), and the skip
+    mapping, or cannot be resolved (src.utils.id.read_run_cfg), and the skip
     reason says why; the skip reason is None otherwise.
     The expected config ID is the one 'cfg.yaml' hashes to
     (src.utils.id.make_id) when it differs from the name of `dirpath`, and
     None when they match.
     """
 
-    cfg_file_path = os.path.join(dirpath, "cfg.yaml")
-    try:
-        cfg = OmegaConf.load(cfg_file_path)
-    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
-        return None, f"'cfg.yaml' could not be read ({e}).", None
-    if not isinstance(cfg, DictConfig) or not cfg:
-        return (
-            None,
-            f"'cfg.yaml' is empty or not a mapping (parsed as {type(cfg).__name__}).",
-            None,
-        )
-
-    try:
-        cfg_dict = strip_config(cfg)
-    except OmegaConfBaseException as e:
-        return None, f"'cfg.yaml' could not be resolved ({e}).", None
+    cfg, cfg_dict, reason = read_run_cfg(os.path.join(dirpath, "cfg.yaml"))
+    if reason is not None:
+        return None, f"'cfg.yaml' {reason}.", None
 
     # Check the folder name against the config ID that cfg.yaml hashes to
     config_id = os.path.basename(os.path.abspath(dirpath))

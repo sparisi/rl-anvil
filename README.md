@@ -60,7 +60,7 @@ pip install git+https://github.com/sparisi/gym_gridworlds.git
 ## Quick Demo
 ```
 python main.py environment=gymnasium/pendulum_discrete algorithm=eps_greedy results.data_dir=data_demo results.save_videos=True results.save_heatmaps=True results.save_memory=True experiment.training_steps=25000 experiment.testing_points=25
-python merge_media.py -f data_demo/aba2e7f3 -n 3 --resize_videos=0.5 --gif --frameskip_videos=1
+python merge_media.py -f data_demo/1b3bc0de -n 3 --resize_videos=0.5 --gif --frameskip_videos=1
 ```
 
 This will train Double DQN on the [Pendulum](https://gymnasium.farama.org/environments/classic_control/pendulum/)
@@ -68,12 +68,12 @@ environment, save heatmaps of the Q-function and (discretized) state visits,
 videos of the greedy policies at testing checkpoints, and the whole replay memory.  
 Here is what you will see printed on screen during training.
 
-> `aba2e7f3` is the ID the above configuration hashes to (see [`src/utils/id`](src/utils/id.py)).
+> `1b3bc0de` is the ID the above configuration hashes to (see [`src/utils/id`](src/utils/id.py)).
 
 
 ```shell
-💾 Data will be saved at data_demo/aba2e7f3/0
-🚀 Running configuration aba2e7f3 (seed 0)
+💾 Data will be saved at data_demo/1b3bc0de/0
+🚀 Running configuration 1b3bc0de (seed 0)
 💻 (Critic) Running PyTorch on CPU
 steps | train (γ) |      train |  test (γ) |       test |   sa_% |   sa_h |    s_% |    s_h | eps
 10000 | -512.8785 | -1190.6856 | -611.7217 | -1487.3069 | 0.4752 | 0.9079 | 0.7975 |  0.949 |   1

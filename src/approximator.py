@@ -498,7 +498,9 @@ class MSENetwork(FunctionApproximator, nn.Module):
         self._optimizer.zero_grad(set_to_none=True)
         ((loss * torch.asarray(stepsize, device=self.device)).mean()).backward()
         if self._max_grad_norm is None:
-            gradient_norm = torch.nn.utils.get_total_norm(self.parameters())
+            gradient_norm = torch.nn.utils.get_total_norm(
+                [p.grad for p in self.parameters() if p.grad is not None]
+            )
         else:
             gradient_norm = torch.nn.utils.clip_grad_norm_(self.parameters(), self._max_grad_norm).item()
         self._optimizer.step()

@@ -39,7 +39,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import yaml
 import matplotlib.colors as mc
 from matplotlib import font_manager
 from matplotlib import pyplot as plt
@@ -54,6 +53,7 @@ from src.utils.id import (
     composed_config,
     decode_stat,
     flatten_cfg,
+    load_yaml,
 )
 from src.utils.paths import CONFIG_DIR
 from src.utils.misc import _warn_once
@@ -108,8 +108,8 @@ def value_str(v) -> str:
     render element-wise, since a list hyperparameter comes back from parquet as
     an unhashable numpy array repr'd without commas; every null spelling
     collapses to `NULL_STR`, so an absent key and a recorded null read alike.
-    A string that parses as a number normalizes as that number, since PyYAML
-    reads an exponent float such as `1e-3` in a sweep file as a string."""
+    A string that parses as a number normalizes as that number, so a value a
+    PyYAML reader returned as a string, such as `1e-3`, matches the number."""
 
     if isinstance(v, (list, tuple, np.ndarray)):
         return "[" + ", ".join(value_str(x) for x in v) + "]"
@@ -577,7 +577,7 @@ def read_plot_config(path, seen=()):
     path = Path(path)
     if str(path) in seen:
         raise SystemExit(f"Plot config {path} inherits from itself.")
-    cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    cfg = load_yaml(str(path)) or {}
 
     # Both spellings are popped before either is read: `or` short-circuits, so
     # popping them inside one expression leaves the second key in `cfg` whenever

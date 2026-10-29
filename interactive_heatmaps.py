@@ -44,8 +44,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import yaml
 
+from src.utils.id import load_run_cfg
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     ALGO,
@@ -661,7 +661,7 @@ def read_cfg(cfg_dir, name, mem_file, seed):
     if not cfg_file.is_file():
         missing_cfg.append(cfg_dir.name)
         return
-    run_cfg = yaml.safe_load(cfg_file.read_text(encoding="utf-8")) or {}
+    run_cfg = load_run_cfg(cfg_file)
     # Interpolations kept, as src.utils.id.composed_config keeps them: the two
     # are compared key by key below, and a key dropped from one side and not the
     # other is a key the comparison reads as missing from the run.

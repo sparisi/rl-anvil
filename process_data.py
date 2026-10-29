@@ -20,8 +20,11 @@ from src.utils.id import CONFIG_ID, SEED, flatten_cfg, make_id, strip_config
 # Minimum number of rows in each row group of the merged parquet file.
 MIN_ROW_GROUP_ROWS = 10_000
 
-# Number of config directories a worker loads and writes to one part file. A
-# worker holds the rows of one batch at a time, so this bounds its memory.
+# Largest number of config directories a worker loads and writes to one part
+# file. A worker holds the rows of one batch at a time, so this bounds its
+# memory. With fewer directories per worker, a batch holds the number of config
+# directories divided by the number of workers, rounded down and at least 1, so
+# every worker gets a batch.
 CONFIG_DIRS_PER_PART = 8
 
 # ProcessPoolExecutor on Windows accepts at most this many workers.
@@ -387,9 +390,10 @@ def process_data_folders(
         check_column_types(cfg_flats.values())
 
         items = list(cfg_flats.items())
+        size = max(1, min(CONFIG_DIRS_PER_PART, len(items) // workers))
         batches = [
-            items[i:i + CONFIG_DIRS_PER_PART]
-            for i in range(0, len(items), CONFIG_DIRS_PER_PART)
+            items[i:i + size]
+            for i in range(0, len(items), size)
         ]
 
         # The bar advances by the directories of each batch as the batch

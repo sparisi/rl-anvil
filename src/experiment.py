@@ -3,7 +3,6 @@ import numpy as np
 from omegaconf import DictConfig
 from copy import deepcopy
 import builtins
-import traceback
 import warnings
 import os
 from rich.console import Console
@@ -356,12 +355,23 @@ class Experiment:
         if self._data_dir is not None:
             training_time = time.time() - self._start_time
             os.makedirs(self._data_dir, exist_ok=True)
-            np.savez(
-                os.path.join(self._data_dir, "data"),
-                time=training_time,
-                **self._data,
-                **self._run_meta,
-            )
+            # Written to a temporary file and moved into place, so data.npz
+            # exists only once complete (prevents corrupted npz).
+            path = os.path.join(self._data_dir, "data.npz")
+            tmp_path = path + ".tmp"
+            try:
+                with open(tmp_path, "wb") as f:
+                    np.savez(
+                        f,
+                        time=training_time,
+                        **self._data,
+                        **self._run_meta,
+                    )
+                os.replace(tmp_path, path)
+            except BaseException:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                raise
             if self._save_memory:
                 self._replay_memory.export_data(
                     os.path.join(self._data_dir, f"memory")
@@ -382,16 +392,10 @@ class Experiment:
             # TODO support intermediate saves and resume
             if self._data_dir is not None:
                 print("... saving data ...")
-                # Saving must not mask the error that reached this point: if
-                # training raised, a failure to save is reported and swallowed
-                # rather than re-raised, so the original traceback survives.
-                try:
-                    self.savedata()
-                    print(":thumbsup: Data saved")
-                except Exception:
-                    exit_code = 1
-                    print(":x: Failed to save data:")
-                    traceback.print_exc()
+                # A failure to save raises to the handler below, so the run
+                # exits non-zero and SLURM marks the task FAILED.
+                self.savedata()
+                print(":thumbsup: Data saved")
         except KeyboardInterrupt:
             # Deliberately swallowed: Ctrl+C is a clean stop, not a failure.
             print(":x: KeyboardInterrupt (Ctrl+C) detected. Cleaning up...")

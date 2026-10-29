@@ -22,9 +22,9 @@ MIN_ROW_GROUP_ROWS = 10_000
 
 # Largest number of config directories a worker loads and writes to one part
 # file. A worker holds the rows of one batch at a time, so this bounds its
-# memory. With fewer directories per worker, a batch holds the number of config
-# directories divided by the number of workers, rounded down and at least 1, so
-# every worker gets a batch.
+# memory. When there are fewer than this many directories per worker, a batch
+# holds the number of directories divided by the number of workers, rounded
+# down and at least 1.
 CONFIG_DIRS_PER_PART = 8
 
 # ProcessPoolExecutor on Windows accepts at most this many workers.
@@ -277,8 +277,10 @@ def process_data_folders(
     '<config_id>' directory, without the keys in DROPPED_CFG_KEYS; every entry
     of its 'data.npz' file as a JSON string; the seed taken from the name of
     the seed directory (e.g., 33 from <config_id>/33/); and the config ID taken
-    from the name of the '<config_id>' directory. The columns are MultiIndexed
-    and grouped into 'hyperparameter', 'statistic', 'seed', and 'config'.
+    from the name of the '<config_id>' directory. Each column is named by a
+    (group, key) tuple, with the groups 'hyperparameter', 'statistic', 'seed',
+    and 'config'. The parquet file stores each name as the string of its
+    tuple, "('<group>', '<key>')".
 
     A '<config_id>' directory whose name differs from the config ID of its
     'cfg.yaml' (src.utils.id.make_id) is reported. Its rows are kept. Rows that

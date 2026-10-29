@@ -28,6 +28,9 @@ vmap.
 environment under --shared_vmap, one per panel when it is unset. Panels are drawn
 larger so the bar and its ticks stay legible.
 
+An entry with no run at --rng_seed in an environment is listed in a warning and
+drawn as empty panels.
+
 Output goes to <data_dir>/<output>/heatmaps/<plot config>/<memory key>/.
 
 Example
@@ -306,6 +309,7 @@ def resolve_runs(path):
 root = Path(args.folder)
 if not root.is_dir():
     raise SystemExit(f"Not a directory: {root}")
+single_run = (root / "memory.npz").is_file()
 run_dirs, no_memory_dirs = resolve_runs(root)
 
 if not run_dirs:
@@ -488,6 +492,23 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
         {k: n for k, n in selected.items() if n is not None},
         envs,
     )
+
+    # Over every environment the config declares, the ones with no run at all
+    # included. An entry naming another environment composes to nothing there.
+    # A seed directory given to -f is one run, and every other cell is empty.
+    missing = [] if single_run else [
+        (li, env)
+        for group_envs in groups.values() for env in group_envs
+        for li, (label, sel) in enumerate(entries)
+        if selected.get((li, env)) is None
+        and entry_config(env, sel, label) is not None
+    ]
+    if missing:
+        print(
+            f"WARNING: {config_name}: {len(missing)} configuration(s) have no run "
+            f"at seed {args.rng_seed}: "
+            + ", ".join(f"'{entries[li][0]}' in {env}" for li, env in missing)
+        )
 
 needed = sorted({n for _e, _g, sel, _v in layout.values() for n in sel.values()})
 if not needed:
@@ -730,12 +751,11 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
             if len(FRACTIONS) < 2:
                 continue
             for env in present:
-                names = [
-                    (li, run_at[(li, env)])
-                    for li in range(len(labels)) if (li, env) in run_at
-                ]
+                # A row per entry, as in the figures above: an entry with no run
+                # here is a row of empty panels.
+                names = [(li, run_at.get((li, env))) for li in range(len(labels))]
                 arrays = {
-                    (li, fi): collected[n][frac].get(key)
+                    (li, fi): None if n is None else collected[n][frac].get(key)
                     for li, n in names for fi, frac in enumerate(FRACTIONS)
                 }
                 if all(a is None for a in arrays.values()):
@@ -748,7 +768,8 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
                     with quiet_empty_maps():
                         fig_range = pooled_range([
                             collected[n][frac].get(k)
-                            for _li, n in names for frac in FRACTIONS for k in family
+                            for _li, n in names if n is not None
+                            for frac in FRACTIONS for k in family
                         ])
                 else:
                     fig_range = None

@@ -724,17 +724,18 @@ def plot_map(ax, arr, vmin=None, vmax=None, cmap=CMAP, log_scale=False):
     uses `imshow` rather than a seaborn heatmap, since a cell a few pixels across
     fits no annotations or colour bar and a sweep draws hundreds of them.
 
-    `arr` of None leaves an empty bordered panel, which is how a configuration
-    with no run shows up. `vmin`/`vmax` default to the array's own range, so a
-    lone map fills the scale; pass a pooled range to make several maps
+    `arr` of None leaves an empty white bordered panel, which is how a
+    configuration with no run shows up. `vmin`/`vmax` default to the array's own
+    range, so a lone map fills the scale; pass a pooled range to make several maps
     comparable. `log_scale` compresses the colour scale (see scale_map)."""
 
     ax.set_xticks([])
     ax.set_yticks([])
-    ax.set_facecolor("black")
     if arr is None:
+        ax.set_facecolor("white")
         add_border(ax)
         return
+    ax.set_facecolor("black")
 
     if vmin is None or vmax is None:
         auto_min, auto_max = arr_range(arr)

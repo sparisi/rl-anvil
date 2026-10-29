@@ -14,18 +14,18 @@ configs:
 
 environments:
   gridworlds_and_control:
-    three_rooms_wall_mini_nonuniform: "ThreeRoom"
-    four_rooms_stuck_hard: "FourRoomStuck"
-    travel_field_small: "GridMaze"
-    mountain_car: "MountainCar"
-    pendulum_discrete: "Pendulum"
-    lunar_lander: "LunarLander"
-    acrobot: "Acrobot"
-    cart_pole: "CartPole"
+    gym_gridworlds/three_rooms_wall_mini_nonuniform: "ThreeRoom"
+    gym_gridworlds/four_rooms_stuck_hard: "FourRoomStuck"
+    gym_gridworlds/travel_field_small: "GridMaze"
+    gymnasium/mountain_car: "MountainCar"
+    gymnasium/pendulum_discrete: "Pendulum"
+    gymnasium/lunar_lander: "LunarLander"
+    gymnasium/acrobot: "Acrobot"
+    gymnasium/cart_pole: "CartPole"
   selection:
-    three_rooms_wall_mini_nonuniform: "ThreeRoom"
-    four_rooms_stuck_hard: "FourRoomStuck"
-    mountain_car: "MountainCar"
+    gym_gridworlds/three_rooms_wall_mini_nonuniform: "ThreeRoom"
+    gym_gridworlds/four_rooms_stuck_hard: "FourRoomStuck"
+    gymnasium/mountain_car: "MountainCar"
 
 statistics:
   sa_h: "Entropy"

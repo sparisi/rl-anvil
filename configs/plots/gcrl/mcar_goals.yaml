@@ -34,4 +34,4 @@ configs:
 statistics: null
 
 environments:
-  mountain_car: "Mountain Car"
+  gymnasium/mountain_car: "Mountain Car"

@@ -33,21 +33,12 @@ def sweep_override(key, values):
     path on nulls, lists and quoting. Several values are comma-joined, which is
     what makes a multirun sweep the key.
 
-    The left-hand side is taken from what `format_override` returned rather than
-    from `key`, since it may carry a prefix (`+`, `++`). Values whose overrides
-    disagree on it cannot be joined: a deletion (`~key`) and an assignment are
-    different overrides, and no comma list expresses both."""
+    The left-hand side is taken from what `format_override` returned, since it
+    may carry the `++` prefix."""
 
     formatted = [format_override(key, value) for value in values]
-    if len(formatted) == 1:
-        return formatted[0]
-    heads = {text.split("=", 1)[0] for text in formatted}
-    if len(heads) > 1 or "=" not in formatted[0]:
-        raise ValueError(
-            f"{key}: cannot sweep over {values} in one override -- {sorted(heads)} "
-            "are different kinds of override, so split the sweep entry."
-        )
-    return heads.pop() + "=" + ",".join(text.split("=", 1)[1] for text in formatted)
+    head = formatted[0].split("=", 1)[0]
+    return head + "=" + ",".join(text.split("=", 1)[1] for text in formatted)
 
 
 def commands(

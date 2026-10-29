@@ -30,11 +30,11 @@ configs:
 
 environments:
   control:
-    mountain_car: "MountainCar"
-    pendulum_discrete: "Pendulum"
-    lunar_lander: "LunarLander"
-    acrobot: "Acrobot"
-    cart_pole: "CartPole"
+    gymnasium/mountain_car: "MountainCar"
+    gymnasium/pendulum_discrete: "Pendulum"
+    gymnasium/lunar_lander: "LunarLander"
+    gymnasium/acrobot: "Acrobot"
+    gymnasium/cart_pole: "CartPole"
 
 statistics:
   sa_h: "Entropy"

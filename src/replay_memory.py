@@ -1,8 +1,11 @@
+import os
+import zipfile
 import numpy as np
 import src.parameter
 from omegaconf import DictConfig
 
 from src.pseudocount import SCALE_EPS, is_neighbor, pseudocount, robust_scale
+from src.utils.misc import atomic_open
 
 # This implementation is in pure NumPy to make it compatible with any deep learning
 # library you'd like to use. The disadvantage is that you'll have to convert every
@@ -26,6 +29,56 @@ def zeros_resident(shape, dtype):
     arr = np.empty(shape, dtype=dtype)
     arr.fill(0)  # np.empty + fill, not np.zeros + fill, to memset only once
     return arr
+
+
+def npy_header(npz, key: str) -> tuple:
+    """Return (shape, dtype) of the array `key` of the open npz file `npz`, read
+    from its .npy header without loading the array."""
+
+    with npz.zip.open(f"{key}.npy") as member:
+        version = np.lib.format.read_magic(member)
+        if version == (1, 0):
+            shape, _fortran_order, dtype = np.lib.format.read_array_header_1_0(member)
+        else:
+            shape, _fortran_order, dtype = np.lib.format.read_array_header_2_0(member)
+    return shape, dtype
+
+
+def merge_chunks(chunk_paths: list, path: str):
+    """Concatenate the npz files `chunk_paths` key by key, in the order given,
+    into the npz file `path` (atomic_open), then delete the chunks. A single
+    chunk is renamed to `path` (os.replace).
+
+    `path` is written as np.savez writes an npz, an uncompressed zip with one
+    .npy entry per key. Each entry gets a header for the total number of rows,
+    read from the chunks' headers, and the chunks' rows are appended one chunk
+    at a time, so one chunk's array of one key is the most held in memory."""
+
+    if len(chunk_paths) == 1:
+        os.replace(chunk_paths[0], path)
+        return
+
+    files = [np.load(chunk) for chunk in chunk_paths]
+    try:
+        with atomic_open(path) as f:
+            with zipfile.ZipFile(f, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
+                for key in files[0].files if files else []:
+                    headers = [npy_header(npz, key) for npz in files]
+                    shape, dtype = headers[0]
+                    header = {
+                        "descr": np.lib.format.dtype_to_descr(dtype),
+                        "fortran_order": False,
+                        "shape": (sum(s[0] for s, _ in headers), *shape[1:]),
+                    }
+                    with zf.open(f"{key}.npy", "w", force_zip64=True) as out:
+                        np.lib.format.write_array_header_2_0(out, header)
+                        for npz in files:
+                            out.write(np.ascontiguousarray(npz[key]).data)
+    finally:
+        for npz in files:
+            npz.close()
+    for chunk in chunk_paths:
+        os.remove(chunk)
 
 
 class ReplayMemory(object):
@@ -121,11 +174,12 @@ class ReplayMemory(object):
         for k, v in kwargs.items():
             setattr(self, k, zeros_resident((self._max_size, *v.shape), v.dtype))
 
-    def export_data(self, filename: str):
-        np.savez(
-            filename,
-            **{k: getattr(self, k)[:self.size] for k in self.keys},
-        )
+    def save_chunk(self, path: str):
+        """Write the samples added since the memory last wrapped to the npz file
+        `path`, i.e., samples in [0, idx)."""
+
+        end = self._idx if self._idx > 0 else self.size
+        np.savez(path, **{k: getattr(self, k)[:end] for k in self.keys})
 
     def init_counting(self, n_actions: int, goal_idx, counter = None):
         assert not (self.rho is None and counter is None), (

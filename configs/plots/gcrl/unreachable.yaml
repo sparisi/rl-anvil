@@ -40,5 +40,5 @@ configs:
 
 environments:
   gridworlds_and_control:
-    three_rooms_wall_mini_nonuniform: "ThreeRoom"
-    four_rooms_stuck_hard: "FourRoomStuck"
+    gym_gridworlds/three_rooms_wall_mini_nonuniform: "ThreeRoom"
+    gym_gridworlds/four_rooms_stuck_hard: "FourRoomStuck"

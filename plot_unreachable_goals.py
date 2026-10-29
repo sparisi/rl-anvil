@@ -67,9 +67,11 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
-from src.utils.id import load_run_cfg
+from src.utils.id import read_run_cfg
+from src.utils.misc import make_vprint
 from src.utils.plot import (
     GROUP_GAP_BAR,
+    add_config_group_args,
     assign_groups,
     composed_mask,
     detect_precision,
@@ -160,16 +162,7 @@ parser.add_argument(
          "config>, so one data directory holds the output of every plotting script "
          "without one overwriting another.",
 )
-parser.add_argument(
-    "-a", "--algorithms",
-    default="configs/algorithm",
-    help="Directory of algorithm YAMLs.",
-)
-parser.add_argument(
-    "-e", "--environments",
-    default="configs/environment",
-    help="Directory of environment YAMLs.",
-)
+add_config_group_args(parser)
 parser.add_argument(
     "--points",
     type=int,
@@ -253,13 +246,7 @@ parser.add_argument(
 parser.add_argument("-v", "--verbose", action="store_true")
 args = parser.parse_args()
 
-
-def vprint(*a):
-    """Print only under --verbose."""
-
-    if args.verbose:
-        print(*a)
-
+vprint = make_vprint(args.verbose)
 
 # -----------------------------------------------------------------------------
 # ----- Reachability ----------------------------------------------------------
@@ -641,6 +628,7 @@ flat_cfgs: dict = {}   # "<config_id>/<seed>" -> flat cfg
 run_cfgs: dict = {}    # "<config_id>/<seed>" -> nested cfg
 mem_files: dict = {}   # "<config_id>/<seed>" -> path to memory.npz
 no_cfg_dirs: list = []
+bad_cfg_dirs: list = []
 
 for seed_dir in tqdm(
     run_dirs, desc="Reading configs", unit="run", disable=not args.verbose
@@ -650,7 +638,11 @@ for seed_dir in tqdm(
     if not cfg_file.is_file():
         no_cfg_dirs.append(seed_dir.parent.name)
         continue
-    run_cfg = load_run_cfg(cfg_file)
+    _, run_cfg, reason = read_run_cfg(cfg_file)
+    if reason is not None:
+        vprint(f"  WARNING: {cfg_file} {reason}.")
+        bad_cfg_dirs.append(seed_dir.parent.name)
+        continue
     name = f"{seed_dir.parent.name}/{seed_dir.name}"
     # Interpolations kept, as `composed_config` keeps them: the two configs are
     # compared key by key below, and a key dropped from one side and not the
@@ -661,8 +653,9 @@ for seed_dir in tqdm(
 
 if not flat_cfgs:
     raise SystemExit(
-        f"Found {len(run_dirs)} memory.npz, but no cfg.yaml in the directory above "
-        f"any of them. -f takes a data directory."
+        f"Found {len(run_dirs)} memory.npz, but no readable cfg.yaml in the "
+        f"directory above any of them ({len(bad_cfg_dirs)} could not be read or "
+        f"resolved; -v lists them). -f takes a data directory."
     )
 
 df = pd.DataFrame.from_dict(flat_cfgs, orient="index")
@@ -762,6 +755,21 @@ for config_name, _path, cfg in plot_cfgs:
                 if names:
                     selected[(i, env)] = names
     layout[config_name] = (entries, groups, selected)
+
+    # Over every environment the config declares, the ones with no run at all
+    # included. An entry naming another environment composes to nothing there.
+    missing = [
+        (i, env)
+        for group_envs in groups.values() for env in group_envs
+        for i, entry in enumerate(entries)
+        if (i, env) not in selected
+        and entry_config(env, entry["selector"], entry["label"]) is not None
+    ]
+    if missing:
+        print(
+            f"WARNING: {config_name}: {len(missing)} configuration(s) have no run: "
+            + ", ".join(f"'{entries[i]['label']}' in {env}" for i, env in missing)
+        )
 
 needed = sorted({
     n for _e, _g, sel in layout.values() for ns in sel.values() for n in ns
@@ -864,7 +872,11 @@ with tqdm(
                     keep(name, result)
                 pbar.update(1)
 
-print(f"Runs found                 : {len(run_dirs)}")
+print(
+    f"Runs found                 : {len(run_dirs)}"
+    f"  ({len(no_cfg_dirs)} without a cfg.yaml,"
+    f" {len(bad_cfg_dirs)} with an unreadable cfg.yaml)"
+)
 print(
     f"Memory dumps               : {len(tasks)}"
     f"  ({cache_hits} from cache, {len(tasks) - cache_hits} read,"

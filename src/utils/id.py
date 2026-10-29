@@ -3,13 +3,14 @@ import hashlib
 import json
 import os
 import re
-import tempfile
+import yaml
 from functools import lru_cache
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import OmegaConfBaseException
 from hydra import compose, initialize_config_dir
 from rich import print
 
+from src.utils.misc import atomic_open
 from src.utils.paths import CONFIG_DIR
 
 
@@ -116,7 +117,9 @@ def config_for_save(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> str:
     string and hashes to the same config ID."""
 
     return OmegaConf.to_yaml(
-        OmegaConf.create(escape_interpolations(strip_config(cfg, dropped))),
+        OmegaConf.create(
+            escape_interpolations(strip_config(cfg, dropped))
+        ),
         sort_keys=True,
     )
 
@@ -128,7 +131,9 @@ def config_identity(cfg: DictConfig, dropped: tuple = DROPPED_CFG_KEYS) -> str:
     # The conversion applies to the hashed YAML only: the config written to disk
     # and the config the run is built from keep their original types.
     return OmegaConf.to_yaml(
-        OmegaConf.create(numbers_to_float(strip_config(cfg, dropped))),
+        OmegaConf.create(
+            escape_interpolations(numbers_to_float(strip_config(cfg, dropped)))
+        ),
         sort_keys=True,
     )
 
@@ -293,26 +298,13 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
         # Seeds of one config_id share this folder and may start within
         # milliseconds of each other, if launched in parallel (e.g., with SLURM jobs).
         # Thus, more than one can find the file missing and write at the same time.
-        # To prevent that, write to a temp file and rename: os.replace is atomic
-        # on POSIX, so a reader never sees a half-written cfg.yaml. Every seed
-        # writes the same configuration, so which one lands last does not change
-        # the config ID. The int or float types in cfg.yaml are those of the seed
-        # that lands last.
-        fd, tmp_path = tempfile.mkstemp(
-            dir=config_dir,
-            prefix=".cfg-",
-            suffix=".yaml",
-        )
-        os.close(fd)
-        try:
-            with open(tmp_path, "w") as f:
-                f.write(config_for_save(cfg))
-            os.chmod(tmp_path, 0o644)  # mkstemp creates with 0600
-            os.replace(tmp_path, yaml_path)
-        except BaseException:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-            raise
+        # To prevent that, write to a temp file and rename (atomic_open):
+        # os.replace is atomic on POSIX, so a reader never sees a half-written
+        # cfg.yaml. Every seed writes the same configuration, so which one lands
+        # last does not change the config ID. The int or float types in cfg.yaml
+        # are those of the seed that lands last.
+        with atomic_open(yaml_path, "w") as f:
+            f.write(config_for_save(cfg))
 
     # The seed folder is made only once cfg.yaml matches this configuration
     os.makedirs(run_dir, exist_ok=True)
@@ -350,12 +342,22 @@ def load_yaml(path: str):
     return OmegaConf.to_container(OmegaConf.load(path), resolve=False)
 
 
-def load_run_cfg(path) -> dict:
-    """Return the cfg.yaml at `path` as a nested dict, read as process_data
-    reads it: resolved (strip_config), without the keys in DROPPED_CFG_KEYS,
-    and with an escaped "${" read as the literal "${"."""
+def read_run_cfg(path) -> tuple:
+    """Read the cfg.yaml at `path` and return (cfg, resolved dict, None), with
+    the dict being strip_config(cfg). When the file cannot be read, is empty or
+    not a mapping, or cannot be resolved, return (None, None, reason), with the
+    reason written to follow the file's name."""
 
-    return strip_config(OmegaConf.load(path))
+    try:
+        cfg = OmegaConf.load(path)
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
+        return None, None, f"could not be read ({e})"
+    if not isinstance(cfg, DictConfig) or not cfg:
+        return None, None, f"is empty or not a mapping (parsed as {type(cfg).__name__})"
+    try:
+        return cfg, strip_config(cfg), None
+    except OmegaConfBaseException as e:
+        return None, None, f"could not be resolved ({e})"
 
 
 def flatten_cfg(nested: dict, drop_interpolations=True) -> dict:

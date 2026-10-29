@@ -6,25 +6,22 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import yaml
 import json
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 from tqdm import tqdm
 
-from omegaconf import DictConfig, OmegaConf
-from omegaconf.errors import OmegaConfBaseException
-
-from src.utils.id import CONFIG_ID, SEED, flatten_cfg, make_id, strip_config
+from src.utils.id import CONFIG_ID, SEED, flatten_cfg, make_id, read_run_cfg
+from src.utils.misc import atomic_open
 
 # Minimum number of rows in each row group of the merged parquet file.
 MIN_ROW_GROUP_ROWS = 10_000
 
 # Largest number of config directories a worker loads and writes to one part
 # file. A worker holds the rows of one batch at a time, so this bounds its
-# memory. With fewer directories per worker, a batch holds the number of config
-# directories divided by the number of workers, rounded down and at least 1, so
-# every worker gets a batch.
+# memory. When there are fewer than this many directories per worker, a batch
+# holds the number of directories divided by the number of workers, rounded
+# down and at least 1.
 CONFIG_DIRS_PER_PART = 8
 
 # ProcessPoolExecutor on Windows accepts at most this many workers.
@@ -100,29 +97,16 @@ def read_cfg(dirpath: str, data_dir: str) -> tuple:
     DROPPED_CFG_KEYS, keyed by ("hyperparameter", key), the config ID taken
     from the name of `dirpath`, and the path of `dirpath` relative to
     `data_dir`. It is None when 'cfg.yaml' cannot be read, is empty, is not a
-    mapping, or cannot be resolved (src.utils.id.strip_config), and the skip
+    mapping, or cannot be resolved (src.utils.id.read_run_cfg), and the skip
     reason says why; the skip reason is None otherwise.
     The expected config ID is the one 'cfg.yaml' hashes to
     (src.utils.id.make_id) when it differs from the name of `dirpath`, and
     None when they match.
     """
 
-    cfg_file_path = os.path.join(dirpath, "cfg.yaml")
-    try:
-        cfg = OmegaConf.load(cfg_file_path)
-    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
-        return None, f"'cfg.yaml' could not be read ({e}).", None
-    if not isinstance(cfg, DictConfig) or not cfg:
-        return (
-            None,
-            f"'cfg.yaml' is empty or not a mapping (parsed as {type(cfg).__name__}).",
-            None,
-        )
-
-    try:
-        cfg_dict = strip_config(cfg)
-    except OmegaConfBaseException as e:
-        return None, f"'cfg.yaml' could not be resolved ({e}).", None
+    cfg, cfg_dict, reason = read_run_cfg(os.path.join(dirpath, "cfg.yaml"))
+    if reason is not None:
+        return None, f"'cfg.yaml' {reason}.", None
 
     # Check the folder name against the config ID that cfg.yaml hashes to
     config_id = os.path.basename(os.path.abspath(dirpath))
@@ -217,9 +201,10 @@ def load_batch(index: int, items: list, parts_dir: str) -> tuple:
     return part_path, list(part.columns), seeds_of, skipped, missing_of
 
 
-def write_parquet(part_paths: list, columns: list, cfg_df: pd.DataFrame, path: str) -> None:
-    """Merge the parquet files `part_paths` into one parquet file at `path`, with
-    the columns `columns` in that order.
+def write_parquet(part_paths: list, columns: list, cfg_df: pd.DataFrame, where) -> None:
+    """Merge the parquet files `part_paths` into one parquet file written to
+    `where`, a path or a binary file object, with the columns `columns` in that
+    order.
 
     The schema is the one pyarrow infers for the whole table: the
     hyperparameter and config columns are inferred from `cfg_df`, which holds
@@ -239,7 +224,7 @@ def write_parquet(part_paths: list, columns: list, cfg_df: pd.DataFrame, path: s
 
     pending, n_pending = [], 0
     # Snappy compresses and decompresses faster than gzip and writes larger files.
-    with pq.ParquetWriter(path, schema, compression="snappy") as writer:
+    with pq.ParquetWriter(where, schema, compression="snappy") as writer:
         for part_path in tqdm(part_paths, desc="Writing parquet"):
             part = pq.read_table(part_path)
             pending.append(
@@ -277,8 +262,10 @@ def process_data_folders(
     '<config_id>' directory, without the keys in DROPPED_CFG_KEYS; every entry
     of its 'data.npz' file as a JSON string; the seed taken from the name of
     the seed directory (e.g., 33 from <config_id>/33/); and the config ID taken
-    from the name of the '<config_id>' directory. The columns are MultiIndexed
-    and grouped into 'hyperparameter', 'statistic', 'seed', and 'config'.
+    from the name of the '<config_id>' directory. Each column is named by a
+    (group, key) tuple, with the groups 'hyperparameter', 'statistic', 'seed',
+    and 'config'. The parquet file stores each name as the string of its
+    tuple, "('<group>', '<key>')".
 
     A '<config_id>' directory whose name differs from the config ID of its
     'cfg.yaml' (src.utils.id.make_id) is reported. Its rows are kept. Rows that
@@ -290,9 +277,10 @@ def process_data_folders(
     processes. Each worker writes the rows of a batch of config directories to
     a part file in '<parquet_path>.parts', and the parts are merged into
     `parquet_path` in the order of the directory walk (write_parquet), so no
-    process holds every row at once. The merged file is written to
-    '<parquet_path>.tmp' and moved onto `parquet_path` once complete. The part
-    files and the temporary file are removed whether or not the write succeeds.
+    process holds every row at once. The merged file is written to a temporary
+    file beside `parquet_path` and moved onto it once complete (atomic_open).
+    The part files and the temporary file are removed whether or not the write
+    succeeds.
 
     The function expects the following folder structure:
 
@@ -362,7 +350,6 @@ def process_data_folders(
         workers = min(workers, MAX_WINDOWS_WORKERS)
 
     parts_dir = parquet_path + ".parts"
-    tmp_path = parquet_path + ".tmp"
     pool = ProcessPoolExecutor(max_workers=workers)
     shutil.rmtree(parts_dir, ignore_errors=True)
     os.makedirs(parts_dir)
@@ -543,14 +530,12 @@ def process_data_folders(
                     f.write("\n")
             print(f"\nConfigs log saved to {log_configs_path}")
 
-        write_parquet(part_paths, list(columns), cfg_df, tmp_path)
-        os.replace(tmp_path, parquet_path)
+        with atomic_open(parquet_path) as f:
+            write_parquet(part_paths, list(columns), cfg_df, f)
     except BaseException:
         # The tasks not yet started are dropped, so the error is raised once the
         # running ones finish, not once every task has run.
         pool.shutdown(cancel_futures=True)
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
         raise
     finally:
         shutil.rmtree(parts_dir, ignore_errors=True)

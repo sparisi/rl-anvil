@@ -25,6 +25,6 @@ configs:
       plot.label: "$\\rho = 0.01$"
 
 environments:
-  lunar_lander_full:
+  gymnasium/lunar_lander_full:
     label: "LunarLander(Full)"
     counter: "BinnedCountLunarLanderFull"

@@ -357,9 +357,13 @@ def load_yaml(path: str):
 def load_run_cfg(path) -> dict:
     """Return the cfg.yaml at `path` as a resolved nested dict (strip_config),
     without the keys in DROPPED_CFG_KEYS. An escaped "${" is read as the literal
-    "${"."""
+    "${". A cfg.yaml that cannot be resolved raises a RuntimeError naming
+    `path`."""
 
-    return strip_config(OmegaConf.load(path))
+    try:
+        return strip_config(OmegaConf.load(path))
+    except OmegaConfBaseException as e:
+        raise RuntimeError(f"{path} cannot be resolved ({e}).") from e
 
 
 def flatten_cfg(nested: dict, drop_interpolations=True) -> dict:

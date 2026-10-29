@@ -3,7 +3,6 @@ import hashlib
 import json
 import os
 import re
-import tempfile
 import yaml
 from functools import lru_cache
 from omegaconf import DictConfig, OmegaConf
@@ -11,6 +10,7 @@ from omegaconf.errors import OmegaConfBaseException
 from hydra import compose, initialize_config_dir
 from rich import print
 
+from src.utils.misc import atomic_open
 from src.utils.paths import CONFIG_DIR
 
 
@@ -298,26 +298,13 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
         # Seeds of one config_id share this folder and may start within
         # milliseconds of each other, if launched in parallel (e.g., with SLURM jobs).
         # Thus, more than one can find the file missing and write at the same time.
-        # To prevent that, write to a temp file and rename: os.replace is atomic
-        # on POSIX, so a reader never sees a half-written cfg.yaml. Every seed
-        # writes the same configuration, so which one lands last does not change
-        # the config ID. The int or float types in cfg.yaml are those of the seed
-        # that lands last.
-        fd, tmp_path = tempfile.mkstemp(
-            dir=config_dir,
-            prefix=".cfg-",
-            suffix=".yaml",
-        )
-        os.close(fd)
-        try:
-            with open(tmp_path, "w") as f:
-                f.write(config_for_save(cfg))
-            os.chmod(tmp_path, 0o644)  # mkstemp creates with 0600
-            os.replace(tmp_path, yaml_path)
-        except BaseException:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-            raise
+        # To prevent that, write to a temp file and rename (atomic_open):
+        # os.replace is atomic on POSIX, so a reader never sees a half-written
+        # cfg.yaml. Every seed writes the same configuration, so which one lands
+        # last does not change the config ID. The int or float types in cfg.yaml
+        # are those of the seed that lands last.
+        with atomic_open(yaml_path, "w") as f:
+            f.write(config_for_save(cfg))
 
     # The seed folder is made only once cfg.yaml matches this configuration
     os.makedirs(run_dir, exist_ok=True)

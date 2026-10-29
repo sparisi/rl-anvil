@@ -18,6 +18,7 @@ import src.replay_memory
 from src.utils.misc import (
     cantor_pairing,
     format_dict_row,
+    atomic_open,
     random_argmax,
     StatsTracker,
 )
@@ -355,23 +356,15 @@ class Experiment:
         if self._data_dir is not None:
             training_time = time.time() - self._start_time
             os.makedirs(self._data_dir, exist_ok=True)
-            # Written to a temporary file and moved into place, so data.npz
-            # exists only once complete (prevents corrupted npz).
-            path = os.path.join(self._data_dir, "data.npz")
-            tmp_path = path + ".tmp"
-            try:
-                with open(tmp_path, "wb") as f:
-                    np.savez(
-                        f,
-                        time=training_time,
-                        **self._data,
-                        **self._run_meta,
-                    )
-                os.replace(tmp_path, path)
-            except BaseException:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-                raise
+            # Written to a temporary file and moved into place (atomic_open), so
+            # data.npz exists only once complete (prevents corrupted npz).
+            with atomic_open(os.path.join(self._data_dir, "data.npz")) as f:
+                np.savez(
+                    f,
+                    time=training_time,
+                    **self._data,
+                    **self._run_meta,
+                )
             if self._save_memory:
                 self._replay_memory.export_data(
                     os.path.join(self._data_dir, f"memory")

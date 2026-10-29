@@ -463,8 +463,8 @@ class QEnsemble(Critic):
             c.post_step(*args, **kwargs)
 
     def reset(self, seed=None):
-        for c in self.critics:
-            c.reset(seed=seed)
+        for i, c in enumerate(self.critics):
+            c.reset(seed=cantor_pairing(seed, i) if seed is not None else None)
 
     def copy_from(self, source):
         self.n_critics = source.n_critics

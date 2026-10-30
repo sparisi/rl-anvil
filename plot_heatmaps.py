@@ -97,7 +97,7 @@ NEEDED_MEM_KEYS = {"obs", "count", "goal_obs", "goal_valid", "act", "goal_act"}
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "-f", "--folder",
-    default="data_dir",
+    required=True,
     metavar="DIR",
     help="A data directory, or a single seed directory "
          "(<data_dir>/<config_id>/<rng_seed>) to draw one run.",
@@ -505,6 +505,7 @@ vprint(f"{len(needed)} run(s) to read, of {len(df)} found")
 collected:       dict = {}   # name -> {fraction: {key: 2D array}}
 no_counter_dirs: list = []
 corrupt_dirs:    list = []
+failed_dirs:     list = []
 
 with tqdm(needed, desc="Loading memory", unit="run", disable=not args.verbose) as pbar:
     for name in pbar:
@@ -529,6 +530,7 @@ with tqdm(needed, desc="Loading memory", unit="run", disable=not args.verbose) a
                 )
         except Exception as e:
             vprint(f"  WARNING: memory_maps failed for {name}: {e}")
+            failed_dirs.append(name)
             continue
         if maps_per_frac is None:
             no_counter_dirs.append(name)
@@ -544,7 +546,8 @@ print(
     f" {len(bad_cfg_dirs)} unreadable cfg,"
     f" {len(no_memory_dirs)} configs with no memory.npz,"
     f" {len(no_counter_dirs)} no tabular counter,"
-    f" {len(corrupt_dirs)} unreadable)"
+    f" {len(corrupt_dirs)} unreadable,"
+    f" {len(failed_dirs)} maps failed)"
 )
 
 if not collected:

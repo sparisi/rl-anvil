@@ -1,7 +1,8 @@
 """Training curves from a pre-built results.parquet, as one interactive page.
 
 Writes <folder>/plots/<sweep>_curves.html: a self-contained Vega-Lite page with a
-tab per environment and, inside a tab, a nested grid of subplots.
+tab per environment and, inside a tab, a nested grid of subplots. The page loads
+Vega, Vega-Lite and Vega-Embed from a CDN, so opening it needs internet access.
 
 Within a tab there is a dropdown per curve hyperparameter and per statistic, plus
 one for the seed -- "(all)" is the mean and its confidence band, a single seed is
@@ -50,6 +51,9 @@ rather than cut, and each is weighed the same whatever its run count, except in
 the IQM, which pools the runs. The tab shows the median, IQM, mean and
 optimality gap of each configuration, the probability of improvement of every
 pair of configurations within one sweep entry, and the performance profiles.
+The normalization is relative to the runs on the page, so the estimates change
+when a configuration is added or removed, and they are not comparable with
+plot_results.py's, which normalizes by fixed bounds.
 
 After the environment tabs comes "parameters", which regroups the same
 runs by one hyperparameter at a time, chosen from a dropdown. A row of its grid
@@ -83,7 +87,7 @@ goes through Hydra, so this script needs hydra installed and CONFIG_DIR readable
 due to failed jobs). They are checked against the sweep, so a configuration it
 declares that has no successful run is still detected -- including an environment
 that left no run at all, which is reported and written out in full against the
-highest seed found anywhere. The number of seed is always inferred from the
+highest seed found anywhere. The number of seeds is always inferred from the
 highest seed found.
 
 --stats to filter the statistics to plot. By default it plots ALL, potentially
@@ -115,7 +119,7 @@ from src.utils.aggregate import (
     probability_of_improvement,
     stack_runs,
 )
-from src.utils.id import decode_stat
+from src.utils.id import CONFIG_ID, decode_stat
 from src.utils.matching import (
     assign_configs,
     load_config_group,
@@ -339,10 +343,18 @@ def rows_of(frame, stat):
     ]
     if args.with_rliable:
         rows += iqm_rows(series, x)
+    # `_run` is the column a run came from: two configurations of one curve can
+    # share a seed number, and each run is drawn and smoothed as its own line.
     for j, seed in enumerate(seeds):
         seed_id = int(seed) if seed is not None and pd.notna(seed) else None
         rows += [
-            {"x": float(x[i]), "value": float(v), "seed": seed_id, "_kind": "seed"}
+            {
+                "x": float(x[i]),
+                "value": float(v),
+                "seed": seed_id,
+                "_run": j,
+                "_kind": "seed",
+            }
             for i, v in enumerate(series.iloc[:, j]) if pd.notna(v)
         ]
     # Scored once and used twice: the bar is the average of these, and the violin
@@ -494,9 +506,10 @@ def time_of(frame):
     if SEED in frame.columns:
         # Only among the rows that record one: drop_duplicates counts two NaNs
         # as the same value, so runs recording no seed would collapse into one.
+        run_key = [CONFIG_ID, SEED] if CONFIG_ID in frame.columns else [SEED]
         seeded = frame[SEED].notna()
         frame = pd.concat([
-            frame[seeded].drop_duplicates(subset=[SEED]),
+            frame[seeded].drop_duplicates(subset=run_key),
             frame[~seeded],
         ])
     minutes = []
@@ -578,10 +591,11 @@ def pooled_rows(rows):
     the rows already built for the cells.
 
     The average is over every configuration of the row and every curve under
-    them -- of the means, and of the bands. A band over the averages would say
-    how much the configurations differed, which is what the cells beside it
-    already show; the average of the bands carries through how much the seeds of
-    each disagreed.
+    them. The band is the interval of the mean of those independent estimates:
+    sqrt(sum(h_i ** 2)) / n for the n half-widths h_i, taken below and above the
+    mean separately, since the IQM bands are not symmetric. It carries through
+    how much the seeds of each curve disagreed; the spread between the
+    configurations is what the cells beside it already show.
 
     Only the fields the pooled layers draw come along. A copy of the cells' own
     rows would carry the curve, its index and its seed count into a cell that
@@ -596,28 +610,38 @@ def pooled_rows(rows):
         "agg": ("mean", "ci_lo", "ci_hi"),
         "iqm": ("iqm", "iqm_lo", "iqm_hi"),
     }
+    def add(acc, value, lo, hi):
+        acc[0] += value
+        acc[1] += (value - lo) ** 2
+        acc[2] += (hi - value) ** 2
+        acc[3] += 1
+
+    def interval(acc):
+        """(mean, low, high) of an accumulator: the mean of the values, and the
+        half-width of the mean of independent estimates, sqrt(sum(h_i ** 2)) / n,
+        below and above it separately."""
+
+        mean = acc[0] / acc[3]
+        return (
+            mean,
+            mean - np.sqrt(acc[1]) / acc[3],
+            mean + np.sqrt(acc[2]) / acc[3],
+        )
+
     curves, areas, times = {}, {}, {}
     for r in rows:
         if r["_kind"] in curve_fields:
             key = (r["_kind"], r["_block"], r["_row"], r["statistic"])
             acc = curves.setdefault(key, {}).setdefault(r["x"], [0.0, 0.0, 0.0, 0])
-            for k, f in enumerate(curve_fields[r["_kind"]]):
-                acc[k] += r[f]
-            acc[3] += 1
+            add(acc, *(r[f] for f in curve_fields[r["_kind"]]))
         elif r["_kind"] == "auc":
             key = (r["_block"], r["_row"], r["statistic"])
             acc = areas.setdefault(key, [0.0, 0.0, 0.0, 0])
-            acc[0] += r["auc"]
-            acc[1] += r["auc_lo"]
-            acc[2] += r["auc_hi"]
-            acc[3] += 1
+            add(acc, r["auc"], r["auc_lo"], r["auc_hi"])
         elif r["_kind"] == "time":
             # Keyed without the statistic, which a timing row does not carry.
             acc = times.setdefault((r["_block"], r["_row"]), [0.0, 0.0, 0.0, 0])
-            acc[0] += r["time"]
-            acc[1] += r["time_lo"]
-            acc[2] += r["time_hi"]
-            acc[3] += 1
+            add(acc, r["time"], r["time_lo"], r["time_hi"])
 
     out = []
     for (kind, block, row, stat), per_x in curves.items():
@@ -629,9 +653,7 @@ def pooled_rows(rows):
                 "statistic": stat,
                 "_kind": f"{kind}_all",
                 "x": x,
-                "mean": s[0] / s[3],
-                "ci_lo": s[1] / s[3],
-                "ci_hi": s[2] / s[3],
+                **dict(zip(("mean", "ci_lo", "ci_hi"), interval(s))),
                 # How many curves reached this x. The average is over the curves
                 # that HAVE a point here, not over every curve of the row, so
                 # where one of them ends the line steps to the average of the
@@ -648,9 +670,7 @@ def pooled_rows(rows):
             "_col": ALL_COL,
             "statistic": stat,
             "_kind": "auc_all",
-            "auc": s[0] / s[3],
-            "auc_lo": s[1] / s[3],
-            "auc_hi": s[2] / s[3],
+            **dict(zip(("auc", "auc_lo", "auc_hi"), interval(s))),
         }
         for (block, row, stat), s in areas.items()
     ]
@@ -660,9 +680,7 @@ def pooled_rows(rows):
             "_row": row,
             "_col": ALL_COL,
             "_kind": "time_all",
-            "time": s[0] / s[3],
-            "time_lo": s[1] / s[3],
-            "time_hi": s[2] / s[3],
+            **dict(zip(("time", "time_lo", "time_hi"), interval(s))),
         }
         for (block, row), s in times.items()
     ]
@@ -784,27 +802,35 @@ def build_avg_auc_spec(rows, block_labels, curve_domain):
     reports. The grid is the same, so a bar sits where its curve sat, in the same
     colour: only the environment dimension is gone, averaged away.
 
-    The interval is the average of the per-environment intervals, so it carries
-    how much the SEEDS disagreed, not how much the environments did -- two
-    environments of different difficulty would otherwise show as uncertainty
-    about a configuration that is behaving consistently in both."""
+    The interval is the interval of the mean of the independent per-environment
+    estimates, sqrt(sum(h_i ** 2)) / n for the n per-environment half-widths h_i,
+    taken below and above the mean separately. It carries how much the SEEDS
+    disagreed, not how much the environments did -- two environments of
+    different difficulty would otherwise show as uncertainty about a
+    configuration that is behaving consistently in both."""
 
     if not rows:
         return None
     frame = pd.DataFrame(rows)
+    frame["_below2"] = (frame["auc"] - frame["auc_lo"]) ** 2
+    frame["_above2"] = (frame["auc_hi"] - frame["auc"]) ** 2
     keys = ["statistic", "_block", "_row", "_col", "_curve", "_curve_i"]
     averaged = frame.groupby(keys, as_index=False).agg(
         auc=("auc", "mean"),
-        auc_lo=("auc_lo", "mean"),
-        auc_hi=("auc_hi", "mean"),
+        below2=("_below2", "sum"),
+        above2=("_above2", "sum"),
+        n=("auc", "size"),
         n_envs=("_env", "nunique"),
     )
+    averaged["auc_lo"] = averaged["auc"] - np.sqrt(averaged["below2"]) / averaged["n"]
+    averaged["auc_hi"] = averaged["auc"] + np.sqrt(averaged["above2"]) / averaged["n"]
+    averaged = averaged.drop(columns=["below2", "above2", "n"])
 
-    # The same floor the per-environment bars stand on, for the same reason: a
-    # negative average is a real result, and a bar hanging from zero beside one
-    # standing on it compares badly.
+    # The same floor the per-environment bars stand on: 0, or below the lowest
+    # interval when one reaches below 0, so a negative average stands beside its
+    # neighbours.
     lowest = averaged.groupby("statistic")["auc_lo"].transform("min")
-    averaged["auc_base"] = lowest - 0.1 * lowest.abs()
+    averaged["auc_base"] = np.minimum(0.0, lowest - 0.1 * lowest.abs())
 
     statistics = sorted(averaged["statistic"].unique())
     # The pooled column goes last, as it does on the environment tabs.
@@ -1953,14 +1979,14 @@ def build_spec(
             # The moving average, computed in the page over the points either side
             # rather than carried in the data. `as` writes back over the field, so
             # nothing downstream has to know whether it was smoothed. Grouping by
-            # curve and seed keeps one run's window off its neighbours.
+            # curve and run keeps one run's window off its neighbours.
             transforms.append({
                 "window": [
                     {"op": "mean", "field": f, "as": f} for f in fields
                 ],
                 "frame": [-window, window],
                 "sort": [{"field": "x"}],
-                "groupby": ["_curve", "seed"],
+                "groupby": ["_curve", "_run"],
             })
         calcs = list(calc)
         enc = {
@@ -2089,7 +2115,7 @@ def build_spec(
                 ),
                 window=span,
             ),
-            # detail: keep each seed's path separate instead of letting
+            # detail: keep each run's path separate instead of letting
             # Vega-Lite join runs that share a color.
             layer(
                 picked.format(seed_filter),
@@ -2102,7 +2128,7 @@ def build_spec(
                     ("value", "quantitative", {"format": ".3f"}),
                 ),
                 window=span,
-                detail={"field": "seed", "type": "nominal"},
+                detail={"field": "_run", "type": "nominal"},
             ),
         ]
 
@@ -3145,25 +3171,18 @@ for env in envs_present:
 
     long_df = pd.DataFrame(long_rows)
 
-    # The bars are drawn from a floor rather than from zero. A negative area is a
-    # real result but a bar hanging down from zero beside one standing up from it
+    # The area bars stand on 0, so a bar's length is its value, or below the
+    # lowest interval when one reaches below 0: a negative area is a real
+    # result, and a bar hanging down from zero beside one standing up from it
     # compares badly. One floor per statistic, shared by every cell of every block.
     areas = long_df["_kind"].isin(("auc", "auc_all"))
     if areas.any():
         lowest = long_df[areas].groupby("statistic")["auc_lo"].transform("min")
-        long_df.loc[areas, "auc_base"] = lowest - 0.1 * lowest.abs()
-    # The timing bars get the same floor -- runs differ by a few percent
-    # between configurations far more often than by a factor, and bars from zero
-    # would draw that as no difference at all. One floor for the panel rather
-    # than one per statistic: a timing row belongs to none of them.
-    # Never below zero, unlike the area floor: an interval wider than the mean
-    # puts `time_lo` under it, and no run took negative time -- a floor down
-    # there would stand every bar on the same distant line and draw the
-    # differences between them as nothing.
+        long_df.loc[areas, "auc_base"] = np.minimum(0.0, lowest - 0.1 * lowest.abs())
+    # No run takes negative time, so the timing bars stand on 0.
     timed = long_df["_kind"].isin(("time", "time_all"))
     if timed.any():
-        lowest = max(0.0, float(long_df.loc[timed, "time_lo"].min()))
-        long_df.loc[timed, "time_base"] = lowest - 0.1 * lowest
+        long_df.loc[timed, "time_base"] = 0.0
     avg_auc_fields = (
         "statistic", "_block", "_row", "_col",
         "_curve", "_curve_i", "auc", "auc_lo", "auc_hi",

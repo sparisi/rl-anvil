@@ -233,7 +233,7 @@ class Experiment:
             git_hash (str): commit the run was launched from, and
             slurm_job_id (str): the SLURM job that ran it. Both are recorded per
                 seed in the .npz rather than in cfg.yaml, which every seed of a
-                run_id shares -- see `self._run_meta`,
+                config_id shares -- see `self._run_meta`,
         """
 
         self._env_train = env_train
@@ -409,7 +409,9 @@ class Experiment:
                     f,
                     time=training_time,
                     **self._data,
-                    **self._run_meta,
+                    # np.savez stores None as an object array, which np.load
+                    # refuses without allow_pickle.
+                    **{k: v for k, v in self._run_meta.items() if v is not None},
                 )
         # TODO save models as well, and call this in checkpoint
 
@@ -780,7 +782,7 @@ class Experiment:
         ep_done.fill(False)
         ep_seed = self._seed_test
         test_rng = self._critic_test.rng_generator(seed=self._rng_seed)
-        obs, _ = self._env_test.reset(seed=ep_seed)  # ep_sees is fixed per experiment.rng_seed
+        obs, _ = self._env_test.reset(seed=ep_seed)  # ep_seed is fixed per experiment.rng_seed
 
         if self._save_videos and self._data_dir is not None:
             import cv2

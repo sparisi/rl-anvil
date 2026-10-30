@@ -23,7 +23,7 @@ def zeros_resident(shape, dtype):
     add() writes one sample per env step, allocated memory would grow over time,
     and a run may not cause OOM until the end.
     With this function, all memory is allocated immediately --- if a job does not
-    request enought memory it would crash immediately, not at the end.
+    request enough memory it would crash immediately, not at the end.
     """
 
     arr = np.empty(shape, dtype=dtype)
@@ -102,7 +102,7 @@ class ReplayMemory(object):
             )
 
     This creates a replay memory for states of shape (3,) and actions of shape (1,).
-    ReplayMemory uses the names of the argumets passed to init() to add and
+    ReplayMemory uses the names of the arguments passed to init() to add and
     retrieve data. For example, to add samples to the memory, do
 
         >>> action = policy(state)
@@ -674,7 +674,7 @@ class SumTree:
 class PrioritizedReplayMemory(ReplayMemory):
     """
     This memory supports Prioritized Experience Replay (PER), i.e., sampling is
-    not uniform but depends on "prioritites". All priorities are set to an initial
+    not uniform but depends on "priorities". All priorities are set to an initial
     default max value, and then updated after the sample is used for training.
     For example, in the original PER paper, priorities are proportional to the
     TD error of the sample.
@@ -712,14 +712,14 @@ class PrioritizedReplayMemory(ReplayMemory):
         >>> td_error = q.update(...)
         >>> mem.post_sampling(batch["idx"], td_error, "td_error")
 
-    Then, you can sample again using anothe priority, e.g.,
+    Then, you can sample again using another priority, e.g.,
 
         >>> batch = mem.get(
                 batch_size=32,
                 sequence_length=10,
                 priority_key="rarity",
             )
-        >>> n = visit_count(batch["obs"], batch"[act"])
+        >>> n = visit_count(batch["obs"], batch["act"])
         >>> mem.post_sampling(batch["idx"], 1.0 / n, "rarity")
 
     When sampling n-step sequences, priorities are used to sample the LAST step of

@@ -633,9 +633,9 @@ def fmt_tick(v):
 
 
 def cbar_groups(cell_keys, cell_ranges):
-    """{(row, col): key} and {(row, col): (vmin, vmax)} -> [((vmin, vmax), cells)],
-    one entry per set of cells that was drawn on a shared range -- that is, one
-    entry per colour bar.
+    """Group the cells drawn on a shared colour range, one group per colour bar,
+    and return [((vmin, vmax), cells)]. The inputs are {(row, col): key} and
+    {(row, col): (vmin, vmax)}.
 
     A cell with no range never held a map, so it joins no set, and a key whose
     every cell was empty drops out rather than captioning blank panels."""

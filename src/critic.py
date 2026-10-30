@@ -607,11 +607,11 @@ class QEnsemble(Critic):
         Qt_1 Qt_2 ...  Qt_K
 
     Each Qt_k is updated from its main Q_k.
-    Each main Q_k is update with a different mini-batch, and its TD target is
-    computed with a randomly assigned target network, i.e.,
+    Each call to update() trains one member Q_i, chosen at random, on its own
+    mini-batch. Its TD target is computed with a target network Qt_k chosen at
+    random from the ensemble, i.e.,
 
-        Q_1(s_t, a_t) target: r + γ max_a Qt_k(s_t, a) with k random
-        same for all Q_k
+        Q_i(s_t, a_t) target: r + γ max_a Qt_k(s_{t+1}, a) with i, k random
 
     The attribute "aggregation" determines how the ensemble aggregates the values
     of the critics:

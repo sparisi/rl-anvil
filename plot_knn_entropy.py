@@ -174,7 +174,7 @@ parser.add_argument(
         f"Plot config: which configurations become the bars, over which "
         f"environments, and what to call them. A name without .yaml is looked for "
         f"in {PLOT_CONFIG_DIR}, or give a path; a directory is a set of configs "
-        f"and every one of them is drawn."
+        f"and every one of them is drawn, bar those marked `# skip`."
     ),
 )
 parser.add_argument(
@@ -701,7 +701,10 @@ def plot_counters(config_name, plot_cfg):
 
 def knn_entropy(x, k=10):
     """Estimate the differential entropy of samples x with the
-    Kozachenko-Leonenko k-NN estimator and return it in nats."""
+    Kozachenko-Leonenko k-NN estimator and return it in nats.
+
+    The estimate is -inf when k + 1 samples coincide: the k-th neighbour of each
+    of them is at distance 0, and log(0) enters the mean."""
 
     x = np.asarray(x, dtype=float)
     if x.ndim == 1:

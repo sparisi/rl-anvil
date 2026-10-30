@@ -111,12 +111,29 @@ def add_config_group_args(parser):
     return parser
 
 
+def is_skipped_config(config_path) -> bool:
+    """Whether a plot config is marked to be left undrawn, that is, whether its
+    first non-empty line starts with `# skip` or `#skip`."""
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip().lower()
+                if not stripped:
+                    continue
+                return stripped.startswith("# skip") or stripped.startswith("#skip")
+    except OSError:
+        return False
+    return False
+
+
 def load_plot_configs(name: str):
     """Every plot config `-p name` asks for, as [(name, path, contents)].
 
     A directory is a set of figures that belong together -- one sweep's, say --
     with a file per set inside it, and every one of them is drawn: `-p example`
-    reads configs/plots/example/*.yaml. A single file is one such set.
+    reads configs/plots/example/*.yaml. A file in it whose first non-empty line
+    starts with `# skip` is left out. A single file is one such set.
 
     The name each comes back with is its path under PLOT_CONFIG_DIR without the
     extension, e.g. "example/default", which is what a caller writing one
@@ -138,6 +155,11 @@ def load_plot_configs(name: str):
             files = sorted(p for p in path.glob("*.yaml"))
             if not files:
                 raise SystemExit(f"No .yaml in {path}, so there is nothing to plot.")
+            files = [p for p in files if not is_skipped_config(p)]
+            if not files:
+                raise SystemExit(
+                    f"Every .yaml in {path} is marked `# skip`, so there is nothing to plot."
+                )
             break
     else:
         raise SystemExit(

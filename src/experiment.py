@@ -256,7 +256,7 @@ class Experiment:
             self._log_frequency = max(training_steps // max(testing_points, 1), 1)
 
         # Step at which the next checkpoint is due (first is step 0).
-        #A threshold, not an exact `% log_frequency`, which would only fire on
+        # A threshold, not an exact `% log_frequency`, which would only fire on
         # steps that are a multiple of both this and update_frequency -- sometimes never.
         self._next_checkpoint = 0
 
@@ -276,7 +276,9 @@ class Experiment:
             next_obs=self._env_train.observation_space.sample(),
         )
 
-        # Used for debugging
+        # The environment's tabular counters, None when it has none. The critic's
+        # gives the true counts for the exploration statistics and the heatmaps;
+        # an actor that selects goals gets two more, for goal selections and hits.
         self._critic.visit_count = tabular_count(self._env_train)
         if hasattr(self._actor, "goal_selected_count"):
             self._actor.goal_selected_count = tabular_count(self._env_train)
@@ -505,7 +507,7 @@ class Experiment:
                     mem_ready = self._replay_memory.is_ready
                     time_to_update = self._tot_steps % self._update_frequency == 0
 
-                    # Start the clock when the first time the memory is ready.
+                    # Start the clock the first time the memory is ready.
                     if mem_ready and self._t_last_ckpt is None:
                         self._t_last_ckpt = time.perf_counter()
                         self._steps_last_ckpt = self._tot_steps

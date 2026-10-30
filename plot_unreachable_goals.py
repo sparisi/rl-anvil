@@ -1,11 +1,10 @@
 """Unreachable goal selections over training, from the replay-memory dumps.
 
 For every goal SELECTION stored in a run's `memory.npz`, this checks whether the
-goal tile could still be reached from the tile the agent was standing on. Which
-steps are a selection follows the actor's own flags: `per_step_selection` without
-`goal_value_check` chooses again at every step; otherwise the choices are the
-first step of an episode and every step the goal changes. A goal pursued for
-50 steps is therefore one selection, not 50. Reachability is the forward closure of the
+goal tile could still be reached from the tile the agent was standing on. The
+selections are the steps the memory marks with `goal_selection`, the steps on
+which the actor selected a goal. A goal pursued for 50 steps is therefore one
+selection, not 50. Reachability is the forward closure of the
 environment's own transition graph, enumerated with `set_state` / `step` over every
 (state, action) pair, expanding only non-terminal transitions. Where the doorways
 of a gridworld are one-way, an agent that has dropped into a room it cannot leave
@@ -349,10 +348,8 @@ def goal_curves(
     n_points,
     gamma,
     score_mode,
-    per_step_selection,
-    goal_value_check,
 ):
-    """Two per-bin percentages of the goal SELECTIONS, and their totals.
+    """Return two per-bin percentages of the goal SELECTIONS, and their totals.
 
     unreachable  the goal tile could not be reached from the tile the agent was on
     perfect      the goal maximised `score_mode` among the tiles in reach
@@ -380,11 +377,11 @@ def goal_curves(
     and any of them is an equally good pick; an unreachable goal never is.
 
     Both metrics share the same denominator (every goal selection), so the two
-    read against each other. A choice counts once however long the agent then
-    acts on it, so an actor that picks a goal per episode and one that picks per
-    step are both measured on the decisions they made. `per_step_selection` and
-    `goal_value_check` are the actor's own flags and decide which steps those
-    are, and a change of goal tile or goal action is a new selection. Bins with
+    read against each other. The selections are the steps marked with
+    `goal_selection`, the ones on which the actor selected a goal, and the goal
+    stored on such a step is the one selected. A choice counts once however long
+    the agent then acts on it, so an actor that picks a goal per episode and one
+    that picks per step are both measured on the decisions they made. Bins with
     no selection stay NaN, leaving a gap rather than reading as 0%."""
 
     reach = np.isfinite(dist)
@@ -392,18 +389,9 @@ def goal_curves(
     act = mem.get("act")
     goal_obs = mem.get("goal_obs")
     goal_act = mem.get("goal_act")
-    goal_valid = mem.get("goal_valid")
-    if obs is None or act is None or goal_obs is None or goal_act is None or goal_valid is None:
+    goal_selection = mem.get("goal_selection")
+    if obs is None or act is None or goal_obs is None or goal_act is None or goal_selection is None:
         return None
-    # Where an episode ended, so the step after it is a fresh selection. A dump
-    # without them is read as one long episode, which only costs the selections
-    # that repeat a tile across a reset.
-    done = None
-    if mem.get("term") is not None and mem.get("trunc") is not None:
-        done = (
-            np.asarray(mem["term"]).reshape(len(obs)).astype(bool)
-            | np.asarray(mem["trunc"]).reshape(len(obs)).astype(bool)
-        )
     size = len(obs)
     if warmup >= size:
         return None
@@ -412,31 +400,7 @@ def goal_curves(
     goal = np.asarray(counter.bin_index(goal_obs)).reshape(size)
     act = np.asarray(act).reshape(size).astype(np.int64)
     goal_act = np.asarray(goal_act).reshape(size).astype(np.int64)
-    carried = np.asarray(goal_valid).reshape(size, -1).astype(bool).any(axis=-1)
-
-    # The steps that are a selection, which is what these rates are over: a
-    # choice counts once, however long the agent then acts on it.
-    #
-    # Which steps those are follows the actor's own two flags.
-    # `per_step_selection` without `goal_value_check` re-selects at every step, so
-    # every carrying step is a choice whether or not it lands on the same tile
-    # again. With the check, and without per-step selection, the actor keeps its
-    # goal until something drops it: the choices are the first step of an episode
-    # and every step the goal tile or goal action changes under it. A step whose
-    # predecessor carried no goal is a choice either way, and so is the first step
-    # of the dump.
-    if per_step_selection and not goal_value_check:
-        active = carried
-    else:
-        starts = np.zeros(size, dtype=bool)
-        starts[0] = True
-        if done is not None:
-            # A step after a terminated or truncated one begins an episode, and
-            # the goal is picked again there even where it is the same tile.
-            starts[1:] |= done[:-1]
-        changed = np.ones(size, dtype=bool)
-        changed[1:] = (goal[1:] != goal[:-1]) | (goal_act[1:] != goal_act[:-1]) | ~carried[:-1]
-        active = carried & (starts | changed)
+    active = np.asarray(goal_selection).reshape(size).astype(bool)
 
     unreachable = np.zeros(size, dtype=bool)
     idx = np.flatnonzero(active)
@@ -515,8 +479,6 @@ def cache_path(
     env_cfg,
     warmup,
     n_points,
-    per_step_selection,
-    goal_value_check,
 ):
     """Where one dump's reduced curves are kept, named by everything that decides
     what they hold."""
@@ -528,11 +490,9 @@ def cache_path(
         "size": st.st_size,
         "warmup": warmup,
         "points": n_points,
-        "per_step_selection": bool(per_step_selection),
-        "goal_value_check": bool(goal_value_check),
         # What a rate is over. Bumped when that changes, so curves reduced under
         # the old definition are missed rather than read back.
-        "denominator": "selections",
+        "denominator": "goal_selection",
         "counts": "state_action",
         "gamma": args.gamma,
         "score": args.goal_score,
@@ -574,11 +534,8 @@ def cache_write(path, result):
 def curves_for_file(task):
     """One dump's curves, from the cache when it is there. Returns (result, hit)."""
 
-    mem_file, env_cfg, dist, n_act, counter, warmup, n_points, per_step, value_check = task
-    path = (
-        cache_path(mem_file, env_cfg, warmup, n_points, per_step, value_check)
-        if cache_dir else None
-    )
+    mem_file, env_cfg, dist, n_act, counter, warmup, n_points = task
+    path = cache_path(mem_file, env_cfg, warmup, n_points) if cache_dir else None
     if path is not None:
         hit = cache_read(path)
         if hit is not None:
@@ -587,7 +544,7 @@ def curves_for_file(task):
         with np.load(mem_file) as data:
             mem = {
                 k: data[k] for k in data.files
-                if k in ("obs", "act", "goal_obs", "goal_act", "goal_valid", "term", "trunc")
+                if k in ("obs", "act", "goal_obs", "goal_act", "goal_selection")
             }
     except Exception as e:
         vprint(f"  WARNING: skipping unreadable {mem_file}: {e}")
@@ -601,8 +558,6 @@ def curves_for_file(task):
         n_points,
         args.gamma,
         args.goal_score,
-        per_step,
-        value_check,
     )
     if result is None:
         vprint(f"  WARNING: {mem_file} stores no goals, skipping")
@@ -809,12 +764,6 @@ for name in needed:
     warmup = int(replay.get("min_size") or 0)
     n_points = args.points or int(experiment.get("testing_points") or 100)
     warmup_of[name] = warmup
-    # How the actor was configured to choose, which decides what counts as a
-    # selection: every carrying step, or the first of an episode and every
-    # reselection after it.
-    actor = ((run_cfg.get("agent") or {}).get("actor") or {})
-    per_step = bool(actor.get("per_step_selection"))
-    value_check = bool(actor.get("goal_value_check"))
     tasks.append((
         name,
         (
@@ -825,8 +774,6 @@ for name in needed:
             counter,
             warmup,
             n_points,
-            per_step,
-            value_check,
         ),
     ))
 

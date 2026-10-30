@@ -28,16 +28,16 @@ def _random_goals(replay_memory, n, rng_generator):
     `n` goals drawn uniformly at random from the goals stored in the replay
     memory -- the ones the actor acted on -- as an (n, 1, d) array.
 
-    Steps acted without a goal (e.g., ε-greedy random action) are marked with
-    `goal_valid=False`; those draws are replaced by a random observation from
-    the whole memory.
+    Steps on which the actor held no goal are marked with `has_goal=False`, and
+    their `goal_obs` is a placeholder; those draws are replaced by a random
+    observation from the whole memory.
     """
 
     goals = replay_memory.get(
         batch_size=n,
         sequence_length=1,
         rng_generator=rng_generator,
-        keys=["goal_obs", "goal_valid"],
+        keys=["goal_obs", "has_goal"],
         priority_key=None,
     )
     random_obs = replay_memory.get(
@@ -47,7 +47,7 @@ def _random_goals(replay_memory, n, rng_generator):
         keys=["obs"],
         priority_key=None,
     )["obs"]
-    return np.where(goals["goal_valid"][..., None], goals["goal_obs"], random_obs)
+    return np.where(goals["has_goal"][..., None], goals["goal_obs"], random_obs)
 
 
 def her_future(batch, replay_memory, rng_generator, K, *args, **kwargs):

@@ -19,6 +19,7 @@ Cartesian while an image's are not.
 
 import contextlib
 import json
+import re
 import sys
 import warnings
 
@@ -59,6 +60,14 @@ def add_border(ax, lw=1.5):
         spine.set_visible(True)
         spine.set_color("black")
         spine.set_linewidth(lw)
+
+
+def safe_stem(name):
+    """Return `name` as a filename, with every run of characters other than
+    letters, digits, `_`, `.`, `=`, `+` and `-` replaced by one `_` and leading
+    and trailing `_` stripped. Return "unnamed" when nothing is left."""
+
+    return re.sub(r"[^\w.=+-]+", "_", str(name)).strip("_") or "unnamed"
 
 
 # ----- Counters ---------------------------------------------------------------

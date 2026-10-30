@@ -2,8 +2,6 @@ import numpy as np
 from abc import ABC, abstractmethod
 import torch
 from torch import nn
-import torch.nn.functional as F
-from torch.nn import Linear
 
 import src.utils.torch_nn
 from src.utils.torch_nn import (
@@ -137,7 +135,7 @@ class Table(FunctionApproximator):
         self._table = source._table.copy()
 
     def randomize(self, rng_generator, std: float = 1.0):
-        self._table += rng_generator.normal(*self._table.shape) * std
+        self._table += rng_generator.normal(size=self._table.shape) * std
 
 
 class CountTable(Table):
@@ -405,6 +403,9 @@ class MSENetwork(FunctionApproximator, nn.Module):
             lrate=0.001,
             optimizer_id="Adam",
             loss="mse_loss",
+            bias=False,
+            maxout_layers=4,
+            dropout_p=0.1,
             max_grad_norm=1.0,
             device="cpu",
             seed=42,

@@ -7,7 +7,6 @@ import os
 from functools import partial
 from rich import print
 import wandb
-import numpy as np
 
 from src.utils.id import prepare_run
 from src.wrappers import gym_wrappers
@@ -99,7 +98,7 @@ def _run(cfg: DictConfig) -> None:
     ).run()
 
 
-# Wrap _run() to raise only errors relevant the the run, and skip Hydra stacks.
+# Wrap _run() to raise only errors relevant to the run, and skip Hydra stacks.
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def run(cfg: DictConfig) -> None:
     try:

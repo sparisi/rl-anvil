@@ -1,5 +1,3 @@
-import numpy as np
-
 """
 Concatenates a list of frames in a grid-like manner.
 Useful to concatenate many videos and play them side-to-side.
@@ -41,19 +39,37 @@ Example:
 >>> out.release()
 """
 
+import math
+
+import numpy as np
+
+
 def reshape_frames_into_grid(n_frames, h, w, target_aspect_ratio=1.0):
+    # Find every (rows, cols) with rows * cols == n_frames, i.e., every way to
+    # arrange the frames.
+    grids = [
+        (rows, n_frames // rows)
+        for rows in range(1, n_frames + 1)
+        if n_frames % rows == 0
+    ]
+    # When the only exact grids are a single row and a single column (n_frames is
+    # a prime number), pad the last row with empty cells.
+    if len(grids) <= 2:
+        grids += [
+            (rows, math.ceil(n_frames / rows))
+            for rows in range(2, n_frames)
+            if (rows - 1) * math.ceil(n_frames / rows) < n_frames
+        ]
     best_rows, best_cols = 1, n_frames
     min_diff = np.inf
-    for rows in range(1, int(n_frames**0.5) + 1):
-        if n_frames % rows == 0:
-            cols = n_frames // rows
-            total_height = rows * h
-            total_width = cols * w
-            aspect = total_width / total_height
-            diff = abs(aspect - target_aspect_ratio)
-            if diff < min_diff:
-                min_diff = diff
-                best_rows, best_cols = rows, cols
+    for rows, cols in grids:
+        total_height = rows * h
+        total_width = cols * w
+        aspect = total_width / total_height
+        diff = abs(math.log(aspect / target_aspect_ratio))
+        if diff < min_diff:
+            min_diff = diff
+            best_rows, best_cols = rows, cols
     return best_rows, best_cols
 
 def frames_to_grid(frames, target_aspect_ratio=1.0):

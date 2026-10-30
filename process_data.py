@@ -421,6 +421,11 @@ def process_data_folders(
         )
 
         if not part_paths:
+            if n_skipped:
+                raise FileNotFoundError(
+                    f"No readable data.npz under '{data_dir}': {n_skipped} folder(s) "
+                    f"were skipped (listed above with -v)."
+                )
             raise FileNotFoundError(
                 f"No .npz data found in the specified structure under '{data_dir}'."
             )

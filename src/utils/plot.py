@@ -29,6 +29,7 @@ from matplotlib import pyplot as plt
 from pathvalidate import sanitize_filename
 
 from src.utils.id import (
+    CONFIG_ID,
     SEED,
     composed_config,
     decode_stat,
@@ -647,6 +648,10 @@ def write_missing_runs_script(
                 f'parser.add_argument("--{arg.arg}", type={type(default).__name__}, '
                 f"default={default!r})"
             )
+        elif isinstance(default, (list, tuple)):
+            options.append(
+                f'parser.add_argument("--{arg.arg}", nargs="*", default={list(default)!r})'
+            )
         else:
             options.append(f'parser.add_argument("--{arg.arg}", default={default!r})')
         passed.append(f"{arg.arg}=args.{arg.arg}")
@@ -981,8 +986,8 @@ CI_Z = 1.96
 #
 # Tabulated rather than computed: the inverse of the t distribution needs an
 # incomplete beta, which is more numerics than a plotting module should carry,
-# and the table is exact where it has an entry. Between the sparse entries at
-# the end, and beyond the last of them, see _t_quantile.
+# and the table holds each quantile rounded to three decimals. Between the
+# sparse entries at the end, and beyond the last of them, see _t_quantile.
 _T_95 = {
     1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
     6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228,
@@ -1159,7 +1164,11 @@ def draw_bars(
 def error_shade_plot(ax, data, x, smoothing_window=0, **kwargs):
     """Plot the mean across seeds with a shaded 95% confidence interval against
     `x`, the training step of each point. Takes standard pyplot.plot arguments
-    (color, linestyle, linewidth, label, ...)."""
+    (color, linestyle, linewidth, label, ...).
+
+    With `smoothing_window > 0`, the half-width is smoothed like the mean, as a
+    display choice; the smoothed band is not the confidence interval of the
+    smoothed mean."""
 
     y, error, _alive = ci_bounds(data)
     x = np.asarray(x, dtype=float)
@@ -1542,9 +1551,12 @@ def series_of(frame, stat):
         # the same value, so runs recording no seed would collapse into one --
         # which is a run dropped from the band rather than a duplicate removed
         # from it.
+        # A cell can hold several configurations that ran the same seeds, so a
+        # run is a (config ID, seed) pair.
+        run_key = [CONFIG_ID, SEED] if CONFIG_ID in frame.columns else [SEED]
         seeded = frame[SEED].notna()
         frame = pd.concat([
-            frame[seeded].drop_duplicates(subset=[SEED]),
+            frame[seeded].drop_duplicates(subset=run_key),
             frame[~seeded],
         ])
     valid = frame[stat_col].notna() & frame[STEPS_STAT].notna()
@@ -1751,7 +1763,15 @@ class SweepLayout:
                 [c for c, _ in axes]
                 + [("hyperparameter", k) for k in self.global_sweep]
             )
-            merged = [c[1] for c in hp_cols if c not in taken and varies(sub, c)]
+            # Keys that vary only together with a declared key put one run in
+            # each cell, so only variation within one combination of the
+            # declared keys is reported.
+            by = [sub[c].map(value_str) for c in taken if c in sub.columns]
+            groups = [g for _, g in sub.groupby(by)] if by else [sub]
+            merged = [
+                c[1] for c in hp_cols
+                if c not in taken and any(varies(g, c) for g in groups)
+            ]
             if merged:
                 becomes = (
                     "those runs are averaged into one curve" if self.curves
@@ -1959,7 +1979,8 @@ __RENDER__
 
 
 def html_page(title: str, panels: list, render_js: str) -> str:
-    """One interactive page, and return it as text.
+    """Build one interactive page and return it as text. The page loads Vega,
+    Vega-Lite and Vega-Embed from a CDN, so opening it needs internet access.
 
     `render_js` is the JavaScript that draws a panel: it must define
     `render(i, carry)`, which embeds panel `i` (see embedInto) carrying the

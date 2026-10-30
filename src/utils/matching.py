@@ -106,9 +106,8 @@ def value_str(v) -> str:
 
 
 def native(v):
-    """Strip numpy types recursively: np.int64 -> int, np.ndarray -> list. Used to
-    repr hyperparameters into the generated missing-runs script without it needing
-    numpy."""
+    """Return `v` with numpy arrays and tuples converted to lists and numpy
+    scalars to Python scalars, recursively through lists, tuples and dicts."""
 
     if isinstance(v, np.ndarray):
         return [native(x) for x in v.tolist()]

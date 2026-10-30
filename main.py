@@ -18,6 +18,11 @@ import src.replay_memory
 
 
 def _run(cfg: DictConfig) -> None:
+    # Checked before prepare_run writes the seed folder.
+    rng_seed = cfg.experiment.rng_seed
+    if rng_seed < 0:
+        raise ValueError(f"experiment.rng_seed must be a non-negative integer, got {rng_seed}")
+
     try:
         git_hash = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],

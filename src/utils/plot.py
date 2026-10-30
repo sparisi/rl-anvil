@@ -1095,15 +1095,15 @@ def draw_bars(
     A summary of None keeps its slot empty, so the same configuration is in the
     same place in every subplot.
 
-    `invert_y` turns the axis over, and the bars keep their lengths: a bar stays
-    proportional to its value, so on an inverted axis the shorter bar is still
-    the smaller value."""
+    `invert_y` turns the axis over, and the bars keep their lengths: a bar's
+    length is its value when every interval is non-negative, and on an inverted
+    axis the shorter bar is still the smaller value."""
 
     xs = bar_positions([entry for entry, _ in items], bar_width)
-    # Every bar stands from one floor, so a negative value stands beside its
-    # neighbours. The floor sits below the lowest interval.
+    # Bars stand on 0, or below the lowest interval when one reaches below 0,
+    # so a negative value stands beside its neighbours.
     lows = [m - e for _, v in items if v is not None for m, e in [v] if np.isfinite(m)]
-    floor = min(lows) - 0.1 * abs(min(lows)) if lows else 0.0
+    floor = min(0.0, min(lows) - 0.1 * abs(min(lows))) if lows else 0.0
 
     means, tops = [], []
     for x, (entry, value) in zip(xs, items):

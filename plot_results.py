@@ -1435,9 +1435,9 @@ def draw_config(config_name, cfg):
 
 
 def tex_escape(text):
-    """A display label as LaTeX: `_`, `&`, `%` and `#` outside `$...$` are
-    escaped unless a backslash already precedes them. Text between two
-    unescaped `$` is left as it is."""
+    """Return `text` as LaTeX, with `_`, `&`, `%` and `#` outside `$...$` escaped
+    unless a backslash already precedes them. Text between two unescaped `$` is
+    left as it is."""
 
     parts = re.split(r"(?<!\\)\$", str(text))
     for i in range(0, len(parts), 2):

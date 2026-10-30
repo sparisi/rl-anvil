@@ -44,7 +44,6 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import argparse
-import re
 from pathlib import Path
 from tqdm import tqdm
 
@@ -58,7 +57,7 @@ from src.utils.plot import (
 )
 from src.utils.heatmaps import (
     CBAR_SUBPLOT_SIZE, add_colorbar, arr_range, auto_dpi, cbar_groups, cbar_hspace,
-    memory_maps, plot_map, pooled_range, scale_funcs, scale_key,
+    memory_maps, plot_map, pooled_range, safe_stem, scale_funcs, scale_key,
     viridis_black_bad, quiet_empty_maps,
 )
 
@@ -199,13 +198,6 @@ def display_name(name, labels):
 
     stem, _ = split_config_label(str(name))
     return str(name).replace(stem, labels.get(stem, stem), 1)
-
-
-def safe_stem(name):
-    """A config label as a filename: an override suffix carries spaces, parens and
-    `=`, none of which belong in one."""
-
-    return re.sub(r"[^\w.=+-]+", "_", str(name)).strip("_") or "unnamed"
 
 
 # --- Drawing ---

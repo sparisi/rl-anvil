@@ -134,7 +134,7 @@ def load_seeds(dirpath: str, dict_cfg_flat: dict) -> tuple:
         (
             entry
             for entry in os.listdir(dirpath)
-            if re.fullmatch(r"-?\d+", entry)
+            if re.fullmatch(r"\d+", entry)
             and os.path.isdir(os.path.join(dirpath, entry))
         ),
         key=int,

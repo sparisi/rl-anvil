@@ -133,6 +133,7 @@ from src.utils.plot import (
     ENV,
     ENV_ID,
     SEED,
+    STEPS_STAT,
     TIME,
     SweepLayout,
     add_config_group_args,
@@ -3018,20 +3019,19 @@ for env in envs_present:
 
     # `time` is not among them: it has a mode of its own, and offering it here
     # would draw a run's duration a second time, in seconds, as a curve, as an
-    # AUC bar and as a violin on the parameters tab.
+    # AUC bar and as a violin on the parameters tab. Neither is `steps`, the x
+    # axis of every curve.
+    not_stats = (TIME, STEPS_STAT)
     stats_found = sorted(
-        {c[1] for c in df_env.columns if c[0] == "statistic" and c[1] != TIME[1]}
+        {c[1] for c in df_env.columns if c[0] == "statistic" and c not in not_stats}
     )
     if args.stats:
-        # `time` is ignored rather than reported absent -- it is drawn by its own
-        # mode rather than selected here -- but only where the data records it:
+        # `time` and `steps` are ignored rather than reported absent -- they are
+        # not statistics to select here -- but only where the data records them:
         # a name that is nowhere in the parquet file should still be reported,
         # whichever name it is.
-        records_time = TIME in df_env.columns
-        absent = [
-            s for s in args.stats
-            if s not in stats_found and not (records_time and s == TIME[1])
-        ]
+        recorded = {c[1] for c in not_stats if c in df_env.columns}
+        absent = [s for s in args.stats if s not in stats_found and s not in recorded]
         if absent:
             print(f"WARNING: --stats not found in the data for {env_name}: {absent}")
         stats = [s for s in args.stats if s in stats_found]

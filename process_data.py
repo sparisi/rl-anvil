@@ -464,10 +464,10 @@ def process_data_folders(
             if stat_cols:
                 stat_line = f"Statistics: {stat_cols}"
 
-            # value_str renders every null spelling alike and integral floats as
-            # ints, as the plotting scripts compare values.
             seeds_of_folder = {cfg_flats[d][CFG_DIR_COL]: set(s) for d, s in seeds_of.items()}
             hyp_cols = [c for c in cfg_df.columns if c[0] == "hyperparameter"]
+            # value_str renders every null spelling alike and integral floats as
+            # ints, as the plotting scripts compare values.
             hyp_strs = {c: cfg_df[c].map(value_str) for c in hyp_cols}
             varying_hyp = sorted(
                 [c for c in hyp_cols if hyp_strs[c].nunique() > 1],

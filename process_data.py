@@ -12,6 +12,7 @@ from functools import partial
 from tqdm import tqdm
 
 from src.utils.id import CONFIG_ID, SEED, flatten_cfg, make_id, read_run_cfg
+from src.utils.matching import value_str
 from src.utils.misc import atomic_open
 
 # Minimum number of rows in each row group of the merged parquet file.
@@ -463,11 +464,8 @@ def process_data_folders(
             if stat_cols:
                 stat_line = f"Statistics: {stat_cols}"
 
-            # Imported here, since src.utils.plot loads matplotlib and seaborn and
-            # only the recap uses it. value_str renders every null spelling alike
-            # and integral floats as ints, as the plotting scripts compare values.
-            from src.utils.plot import value_str
-
+            # value_str renders every null spelling alike and integral floats as
+            # ints, as the plotting scripts compare values.
             seeds_of_folder = {cfg_flats[d][CFG_DIR_COL]: set(s) for d, s in seeds_of.items()}
             hyp_cols = [c for c in cfg_df.columns if c[0] == "hyperparameter"]
             hyp_strs = {c: cfg_df[c].map(value_str) for c in hyp_cols}

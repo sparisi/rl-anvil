@@ -50,10 +50,12 @@ from scipy.special import digamma, gammaln
 import src.pseudocount as pseudocount
 from src.pseudocount import BinnedCount
 
-from src.utils.id import read_run_cfg
+from src.utils.id import flatten_cfg, read_run_cfg
+from src.utils.matching import ignored_cfg_keys, load_config_group
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     ENV,
+    ENV_ENTRY_KEYS,
     GROUP_GAP_BAR,
     add_config_group_args,
     assign_groups,
@@ -64,9 +66,6 @@ from src.utils.plot import (
     ensure_font,
     entry_config,
     env_groups,
-    flatten_cfg,
-    ignored_cfg_keys,
-    load_config_group,
     load_plot_configs,
     plot_labels,
     rows_cols,
@@ -676,7 +675,7 @@ def plot_counters(config_name, plot_cfg):
                     f"src/pseudocount.py as a string, and this one is "
                     f"{counter!r}."
                 )
-            beside = set(node) - {"label", "ylim"}
+            beside = set(node) - ENV_ENTRY_KEYS
             if not beside and env is not None:
                 found[env] = counter
             else:
@@ -1444,7 +1443,7 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
     if config_name not in layout:
         continue
     vprint(f"\n{'#' * 60}\nPlot config: {config_name}\n{'#' * 60}")
-    _stat_labels, env_labels, ylims = plot_labels(plot_cfg)
+    _stat_labels, env_labels, ylims, _score_bounds = plot_labels(plot_cfg)
     entries, groups, selected, envs, counter_of_env = layout[config_name]
 
     binned_stat_labels, stats = wanted_statistics(plot_cfg)

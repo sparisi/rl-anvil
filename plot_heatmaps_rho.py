@@ -50,12 +50,14 @@ import argparse
 from pathlib import Path
 from tqdm import tqdm
 
-from src.utils.id import read_run_cfg
+from src.utils.id import flatten_cfg, read_run_cfg
+from src.utils.matching import (
+    ignored_cfg_keys, is_null, load_config_group, split_config_label, value_str,
+)
 from src.utils.misc import make_vprint
 from src.utils.plot import (
-    add_config_group_args, assign_groups, ensure_font, env_groups, flatten_cfg, is_null,
-    load_config_group, ignored_cfg_keys, load_plot_configs, memory_fractions,
-    plot_entries, plot_labels, split_config_label, tex_kwargs as _tex, value_str,
+    add_config_group_args, assign_groups, ensure_font, env_groups, load_plot_configs,
+    memory_fractions, plot_entries, plot_labels, tex_kwargs as _tex,
 )
 from src.utils.heatmaps import (
     CBAR_SUBPLOT_SIZE, add_border, add_colorbar, arr_range as _arr_range, auto_dpi,
@@ -717,7 +719,7 @@ for config_name, config_path, plot_cfg in plot_cfgs:
     )
 
     groups = env_groups(plot_cfg)
-    _, flat_envs, _ = plot_labels(plot_cfg)
+    _, flat_envs, _, _ = plot_labels(plot_cfg)
 
     active_algos = ref_algos | abl_algos
 

@@ -52,7 +52,8 @@ def merge_chunks(chunk_paths: list, path: str):
     `path` is written as np.savez writes an npz, an uncompressed zip with one
     .npy entry per key. Each entry gets a header for the total number of rows,
     read from the chunks' headers, and the chunks' rows are appended one chunk
-    at a time, so one chunk's array of one key is the most held in memory."""
+    at a time, so one chunk's array of one key is the most held in memory.
+    Chunks that disagree on a key's dtype or trailing shape raise a ValueError."""
 
     if len(chunk_paths) == 1:
         os.replace(chunk_paths[0], path)
@@ -65,6 +66,11 @@ def merge_chunks(chunk_paths: list, path: str):
                 for key in files[0].files if files else []:
                     headers = [npy_header(npz, key) for npz in files]
                     shape, dtype = headers[0]
+                    if any((s[1:], d) != (shape[1:], dtype) for s, d in headers):
+                        raise ValueError(
+                            f"{key}: the chunks disagree on dtype or trailing shape "
+                            f"{headers}"
+                        )
                     header = {
                         "descr": np.lib.format.dtype_to_descr(dtype),
                         "fortran_order": False,

@@ -67,7 +67,8 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
-from src.utils.id import read_run_cfg
+from src.utils.id import flatten_cfg, read_run_cfg
+from src.utils.matching import ignored_cfg_keys, load_config_group
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     GROUP_GAP_BAR,
@@ -81,9 +82,6 @@ from src.utils.plot import (
     env_groups,
     error_shade_plot,
     fitted_rows_cols,
-    flatten_cfg,
-    ignored_cfg_keys,
-    load_config_group,
     load_plot_configs,
     plot_labels,
     rows_cols,
@@ -1376,7 +1374,7 @@ for config_name, _path, cfg in plot_cfgs:
         )
         continue
 
-    _stat_labels, env_labels, _ylims = plot_labels(cfg)
+    _stat_labels, env_labels, _ylims, _score_bounds = plot_labels(cfg)
     output_dir = os.path.join(args.folder, args.output, "goals", config_name)
     os.makedirs(output_dir, exist_ok=True)
 

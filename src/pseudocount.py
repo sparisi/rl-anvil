@@ -404,6 +404,28 @@ def robust_scale(batch, rel_floor: float = 0.01):
     return np.where(scale > SCALE_EPS, scale, 1.0)
 
 
+def scaled_dist2(x, batch, scale):
+    """Squared distances between every row of `x` and every row of `batch`, both
+    divided by `scale`, as a (len(x), len(batch)) float64 array.
+
+    Computed as |x|^2 + |b|^2 - 2 x.b in float64, with the negatives rounding
+    leaves clamped to 0. Every neighbor test and count over a pseudocount memory
+    goes through this function, so the incremental updates and the full rebuilds
+    compute each pair with the same formula at the same precision."""
+
+    scale = np.asarray(scale, dtype=np.float64)
+    x = np.asarray(x, dtype=np.float64) / scale
+    batch = np.asarray(batch, dtype=np.float64) / scale
+
+    x2 = np.sum(x**2, axis=1, keepdims=True)  # (Nx, 1)
+    b2 = np.sum(batch**2, axis=1)  # (Nb,)
+
+    # (Nx, Nb) using (a - b)^2 = a^2 + b^2 - 2ab
+    dist2 = x2 + b2 - 2 * x @ batch.T
+    np.maximum(dist2, 0, out=dist2)  # clamp floating-point negatives
+    return dist2
+
+
 def is_neighbor(x, batch, radius: float, scale = None):
     """Boolean mask, True where batch[i] falls within radius of x after normalization.
     scale is used directly if provided, otherwise computed from batch."""
@@ -413,14 +435,7 @@ def is_neighbor(x, batch, radius: float, scale = None):
         return np.zeros(0, dtype=bool)
     if scale is None:
         scale = robust_scale(batch)
-    scale = np.asarray(scale)
-    if batch.dtype.kind == "f" and scale.dtype != batch.dtype:
-        # Keep the temporaries at the observations' precision: scale comes back
-        # as float64 from np.percentile, which would otherwise promote every
-        # intermediate array in the expression below.
-        scale = scale.astype(batch.dtype)
-    dist2 = np.sum(((batch - x) / scale) ** 2, axis=-1)
-    return dist2 <= radius ** 2
+    return scaled_dist2(np.asarray(x).reshape(1, -1), batch, scale)[0] <= radius ** 2
 
 
 def is_neighbor_binned(x, batch, counter):
@@ -446,76 +461,8 @@ def pseudocount(x, batch, radius: float, scale=None):
 
     if scale is None:
         scale = robust_scale(batch)
-    x = x / scale
-    batch = batch / scale
-
-    x2 = np.sum(x**2, axis=1, keepdims=True)  # (Nx, 1)
-    b2 = np.sum(batch**2, axis=1)  # (Nb,)
-
-    # (Nx, Nb) using (a - b)^2 = a^2 + b^2 - 2ab
-    dist2 = x2 + b2 - 2 * x @ batch.T
-    np.maximum(dist2, 0, out=dist2)  # clamp floating-point negatives
+    dist2 = scaled_dist2(x, batch, scale)
 
     counts = (dist2 <= radius**2).sum(axis=1)
 
     return counts.reshape(orig_shape[:-1])
-
-
-def pseudocount_prefixes(x, batch, radii, prefixes, scale=None):
-    """Count the points of `batch` within each radius of each row of `x`, for
-    every prefix of `batch`, and return an array of shape
-    (len(radii), len(prefixes)) + x.shape[:-1].
-
-    `pseudocount` over every (radius, prefix) pair recomputes the pairwise
-    distances for each of them, and the distances depend on neither: a radius
-    only thresholds them, and a prefix only decides how many columns are summed.
-    Here they are computed once and reused, which is the whole saving -- the
-    matrix product is the cost, and thresholding and summing it are not.
-
-    `prefixes` is a number of rows of `batch`, not a fraction. They are walked in
-    increasing order and accumulated, so the mask of a radius is summed once
-    across all of them rather than once per prefix.
-
-    The memory is the same as `pseudocount`'s over the full batch, since the
-    distances to every point are held at once; feed `x` in chunks as before.
-    """
-
-    orig_shape = x.shape
-    d = orig_shape[-1]
-    out_shape = (len(radii), len(prefixes)) + orig_shape[:-1]
-
-    x = np.asarray(x, dtype=float).reshape(-1, d)
-    batch = np.asarray(batch, dtype=float)
-
-    if batch.shape[0] == 0:
-        return np.zeros(out_shape, dtype=np.int64)
-
-    if scale is None:
-        scale = robust_scale(batch)
-    x = x / scale
-    batch = batch / scale
-
-    x2 = np.sum(x**2, axis=1, keepdims=True)  # (Nx, 1)
-    b2 = np.sum(batch**2, axis=1)  # (Nb,)
-
-    # (Nx, Nb) using (a - b)^2 = a^2 + b^2 - 2ab
-    dist2 = x2 + b2 - 2 * x @ batch.T
-    np.maximum(dist2, 0, out=dist2)  # clamp floating-point negatives
-
-    bounds = [min(max(int(p), 0), batch.shape[0]) for p in prefixes]
-    order = sorted(range(len(bounds)), key=lambda j: bounds[j])
-
-    out = np.empty((len(radii), len(prefixes), x.shape[0]), dtype=np.int64)
-    for i, radius in enumerate(radii):
-        inside = dist2 <= radius**2
-        start = 0
-        running = np.zeros(x.shape[0], dtype=np.int64)
-        for j in order:
-            end = bounds[j]
-            if end > start:
-                # What this segment of the batch adds to the prefix before it.
-                running = running + inside[:, start:end].sum(axis=1)
-                start = end
-            out[i, j] = running
-
-    return out.reshape(out_shape)

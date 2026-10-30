@@ -28,9 +28,13 @@ coming from --rng_seed (default 0).
 
 Pseudocounts come from `pseudocount` in src/pseudocount.py.
 
-A run is the environment and the algorithm whose YAMLs it matches on every key
-they declare, apart from the plot config's `ignored_cfg_keys`. A run matching
-neither is "unknown" and is not drawn.
+A reference entry is a whole configuration: its keys are composed through Hydra
+with everything configs/default.yaml and the files it selects put under them,
+and the run drawn for it in an environment is the one whose WHOLE recorded
+configuration is the one that comes out, as in plot_heatmaps.py. The plot
+config's `ignored_cfg_keys` are exempt from that comparison and from the match
+against the environment YAMLs. The other entries need no run of their own: their
+rows are recomputed on the reference memory.
 
 Only `visit_count` is drawn.
 
@@ -52,19 +56,20 @@ from tqdm import tqdm
 
 from src.utils.id import flatten_cfg, read_run_cfg
 from src.utils.matching import (
-    ignored_cfg_keys, is_null, load_config_group, split_config_label, value_str,
+    ignored_cfg_keys, is_null, load_config_group, value_str,
 )
 from src.utils.misc import make_vprint
 from src.utils.plot import (
-    add_config_group_args, assign_groups, ensure_font, env_groups, load_plot_configs,
-    memory_fractions, plot_entries, plot_labels, tex_kwargs as _tex,
+    add_config_group_args, assign_groups, composed_mask, ensure_font, entry_config,
+    env_groups, load_plot_configs, memory_fractions, plot_entries, plot_labels,
+    tex_kwargs as _tex,
 )
 from src.utils.heatmaps import (
     CBAR_SUBPLOT_SIZE, add_border, add_colorbar, arr_range as _arr_range, auto_dpi,
     cbar_groups, cbar_hspace, env_context, memory_maps, orient,
     pooled_range, scale_funcs, scale_key, viridis_black_bad,
 )
-from src.pseudocount import pseudocount_prefixes, robust_scale
+from src.pseudocount import robust_scale, scaled_dist2
 
 ensure_font()
 font_size = 7
@@ -177,22 +182,6 @@ def add_colorbars(fig, axs, cell_keys, cell_ranges):
         )
 
 
-def is_skipped_config(config_path) -> bool:
-    """Whether a plot config is marked to be left undrawn, that is, whether its
-    first non-empty line starts with `# skip` or `#skip`."""
-
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            for line in f:
-                stripped = line.strip().lower()
-                if not stripped:
-                    continue
-                return stripped.startswith("# skip") or stripped.startswith("#skip")
-    except OSError:
-        return False
-    return False
-
-
 def _canon(v):
     """A hyperparameter value as the key its rows are bucketed by: None for a
     null, and what `value_str` makes of it otherwise.
@@ -259,6 +248,7 @@ def ablation_from_entries(plot_cfg, where=""):
                 "algo_id": algo,
                 "v_key": None,
                 "label": label,
+                "selector": selector,
                 "kind": "true",
             })
         else:
@@ -268,6 +258,7 @@ def ablation_from_entries(plot_cfg, where=""):
                 "v_key": _canon(raw),
                 "raw": raw,
                 "label": label,
+                "selector": selector,
                 "kind": "pseudo",
             })
 
@@ -284,7 +275,8 @@ def _build_ref_data(run_cfg, mem):
     """Extract the fields needed to recompute pseudocounts on this run's obs:
     (bin_centers, obs_goal, scale, n_bins, cartesian, reachable). Returns None
     for an environment whose counter is not binned and so has no bin centres to
-    score pseudocounts at."""
+    score pseudocounts at, and when the bin centres are not the size of the
+    goal columns of the observations."""
 
     if "obs" not in mem:
         return None
@@ -295,10 +287,15 @@ def _build_ref_data(run_cfg, mem):
         return None
     obs = np.asarray(mem["obs"]).astype(np.float64)
     obs_goal = obs[..., goal_idx]
+    bin_centers = counter.bin_centers_raw().astype(np.float64)
+    # Pseudocounts are scored at the bin centres against the goal columns, and a
+    # counter binning other columns has bin centres of another size.
+    if bin_centers.shape[-1] != obs_goal.shape[-1]:
+        return None
     return {
         "obs_goal":    obs_goal,
         "scale":       robust_scale(obs_goal),
-        "bin_centers": counter.bin_centers_raw().astype(np.float64),
+        "bin_centers": bin_centers,
         "n_bins":      tuple(counter.n_bins),
         "cartesian":   cartesian,
         "reachable":   reachable,
@@ -313,6 +310,58 @@ def _radius(v_key):
         return float(v_key)
     except (ValueError, TypeError):
         return None
+
+
+def pseudocount_prefixes(x, batch, radii, prefixes, scale=None):
+    """Count the points of `batch` within each radius of each row of `x`, for
+    every prefix of `batch`, and return an array of shape
+    (len(radii), len(prefixes)) + x.shape[:-1].
+
+    `pseudocount` over every (radius, prefix) pair recomputes the pairwise
+    distances for each of them, and the distances depend on neither: a radius
+    only thresholds them, and a prefix only decides how many columns are summed.
+    Here they are computed once and reused, which is the whole saving -- the
+    matrix product is the cost, and thresholding and summing it are not.
+
+    `prefixes` is a number of rows of `batch`, not a fraction. They are walked in
+    increasing order and accumulated, so the mask of a radius is summed once
+    across all of them rather than once per prefix.
+
+    The memory is the same as `pseudocount`'s over the full batch, since the
+    distances to every point are held at once; feed `x` in chunks as before.
+    """
+
+    orig_shape = x.shape
+    d = orig_shape[-1]
+    out_shape = (len(radii), len(prefixes)) + orig_shape[:-1]
+
+    x = np.asarray(x, dtype=float).reshape(-1, d)
+    batch = np.asarray(batch, dtype=float)
+
+    if batch.shape[0] == 0:
+        return np.zeros(out_shape, dtype=np.int64)
+
+    if scale is None:
+        scale = robust_scale(batch)
+    dist2 = scaled_dist2(x, batch, scale)
+
+    bounds = [min(max(int(p), 0), batch.shape[0]) for p in prefixes]
+    order = sorted(range(len(bounds)), key=lambda j: bounds[j])
+
+    out = np.empty((len(radii), len(prefixes), x.shape[0]), dtype=np.int64)
+    for i, radius in enumerate(radii):
+        inside = dist2 <= radius**2
+        start = 0
+        running = np.zeros(x.shape[0], dtype=np.int64)
+        for j in order:
+            end = bounds[j]
+            if end > start:
+                # What this segment of the batch adds to the prefix before it.
+                running = running + inside[:, start:end].sum(axis=1)
+                start = end
+            out[i, j] = running
+
+    return out.reshape(out_shape)
 
 
 def _pseudocounts(d, radii, fractions):
@@ -463,43 +512,8 @@ try:
 except ValueError as err:
     parser.error(f"--progression_step {err}")
 
-# --- Preflight: gather the set of reference and ablation algos across ALL
-# ablation configs. Only these runs need their memory loaded (avoids
-# decompressing ~10s of MB per run for algos no config draws).
-plot_cfgs = [
-    (name, Path(path), cfg)
-    for name, path, cfg in load_plot_configs(args.plot_config)
-    if not is_skipped_config(path)
-]
-if not plot_cfgs:
-    raise SystemExit(
-        f"No plot config to draw for '{args.plot_config}' "
-        f"(every one of them is marked `# skip`)."
-    )
+plot_cfgs = [(name, Path(path), cfg) for name, path, cfg in load_plot_configs(args.plot_config)]
 vprint(f"\n{len(plot_cfgs)} plot config(s): {[n for n, _, _ in plot_cfgs]}")
-
-# What each plot config asks of the scan: the keys it exempts, the algorithms
-# whose runs are its reference, and the hyperparameter it ablates. Kept per
-# config rather than merged into one table -- which algorithm a run is depends on
-# the keys that config exempts, so a merged answer is no config's.
-#
-# Only the reference runs' memory is read: the other rows are pseudocounts over
-# that same memory, so decompressing one per value would be reading megabytes
-# nothing is drawn from. The reference and the ablations may be the same
-# algorithm -- what tells them apart is the null value of the ablated key.
-_cfg_specs: list = []
-# The union over the plot configs, for deciding which runs are scanned at all.
-# Exempting more keys can only loosen the comparison, so a run no config can
-# match under the union matches under none of them on its own. Which
-# configuration a run then IS is not read off this -- see _ref_names below.
-_ignored_keys: frozenset = frozenset()
-for _name, _cp, _pc in plot_cfgs:
-    _ignored = ignored_cfg_keys(_pc)
-    _ignored_keys |= _ignored
-    _hp_key, _, _refs, _ = ablation_from_entries(_pc, where=str(_cp))
-    _cfg_specs.append((_ignored, set(_refs), _hp_key))
-if _ignored_keys:
-    vprint(f"Keys exempt while scanning: {sorted(_ignored_keys)}")
 
 
 # --- Read every run's configuration ---
@@ -522,10 +536,9 @@ for cfg_dir in cfg_dirs:
         bad_cfg_dirs.append(cfg_dir.name)
         continue
     run_cfgs[cfg_dir.name]  = run_cfg
-    # Interpolations kept, as `composed_config` keeps them: a key dropped from
-    # one side of the comparison and not the other is a key it reads as missing
-    # from the run, and a dropped value reads as null -- which is what tells a
-    # reference run from an ablation one below.
+    # Interpolations kept, as `composed_config` keeps them: the two are compared
+    # key by key below, and a key dropped from one side and not the other is a
+    # key the comparison reads as missing from the run.
     flat_cfgs[cfg_dir.name] = flatten_cfg(run_cfg, drop_interpolations=False)
 
 if not flat_cfgs:
@@ -538,11 +551,11 @@ df = pd.DataFrame.from_dict(flat_cfgs, orient="index")
 df.columns = pd.MultiIndex.from_tuples([("hyperparameter", c) for c in df.columns])
 
 
-# --- Identify environment and algorithm ---
-# Every key a YAML declares must equal what the run recorded, the swept one
-# included: two algorithms differing only in it would otherwise be one, and a
-# run of either could be assigned to whichever declares more keys. A run
-# matching no YAML is "unknown" and is not scanned.
+# --- Identify environment ---
+# Neither group is recorded by a run: both are matched back from their config
+# YAMLs. A run agreeing with no environment YAML is "unknown" there and is not
+# drawn. Which run a reference row draws is decided by the whole configuration
+# its entry composes, which already holds every key an algorithm YAML declares.
 #
 # `ignored_cfg_keys` from the plot configs is exempt: a key a launch set for
 # every run alike says nothing about which configuration a run is, and the YAML
@@ -555,324 +568,190 @@ algo_configs_all = load_config_group(args.algorithms)
 # compared against every YAML to arrive at it.
 _assigned: dict = {}
 
-# `labels_of`'s own answers, so the per-name dicts are built once per set of
-# exemptions as well.
-_labelled: dict = {}
 
+def reference_run(env, row, ignored, matched):
+    """The one run of `env` whose whole recorded configuration is the one the
+    reference entry `row` composes to there, or None.
 
-def labels_of(ignored):
-    """Return (environment, algorithm, overrides) of every run under `ignored`, as
-    three dicts keyed by cfg dir name.
+    `ignored` and `matched` are the pair `assign_groups` returned for this plot
+    config. A configuration matching several runs of one environment draws the
+    first, since a row holds one memory, and says which ones it passed over."""
 
-    The scan and the deduplication below index runs by name rather than by row, so
-    the shared `assign_groups` answer is read out as dicts here. What a run
-    overrode is read off its algorithm label, so it moves with the exemptions too:
-    a key exempt from the comparison is not something the run overrode."""
-
-    if ignored not in _labelled:
-        # Both groups are required: a row is named by an algorithm and a
-        # hyperparameter value, so a run this script cannot name in both is a run
-        # it cannot place. With no YAMLs for a group, every run is "unknown" there
-        # and the scan reports it unmatched.
-        env, algo, env_stem, _matched = assign_groups(
-            df,
-            env_configs_all,
-            algo_configs_all,
-            ignored,
-            env_id_fallback=False,
-            algo_optional=False,
-            cache=_assigned,
+    flat = entry_config(env, row["selector"], row["label"])
+    if flat is None:
+        return None
+    names = list(df.index[composed_mask(df, flat, ignore=ignored) & matched])
+    if not names:
+        return None
+    if len(names) > 1:
+        print(
+            f"WARNING: '{row['label']}' matches {len(names)} runs of {env} and a "
+            f"row holds one memory, so {names[0]} is drawn and {names[1:]} are not."
         )
-        _labelled[ignored] = (
-            env_stem.to_dict(),
-            algo.map(lambda v: split_config_label(str(v))[0]).to_dict(),
-            {
-                name: split_config_label(str(a))[1]
-                for name, a in zip(df.index, algo)
-            },
-        )
-    return _labelled[ignored]
+    return names[0]
 
 
-# The union of every plot config's exemptions, for deciding which runs are scanned
-# at all (see _ignored_keys above).
+# --- Which runs the plot configs ask for ---
+# Only the reference runs' memory is read: the other rows are pseudocounts over
+# that same memory, so they need no run of their own.
 #
-# `overrides_of` is empty: `assign_configs` labels a run with a config name alone,
-# so there is no parenthesised tail for `split_config_label` to return. The
-# off-ablation check that reads it therefore passes everything, and a run
-# overriding a key the ablation does not vary shares a row with the clean one.
-env_of, algo_of, overrides_of = labels_of(_ignored_keys)
-
-
-# Whose memory the scan reads: the runs some plot config would draw as its
-# reference. Asked once per config under that config's own exemptions, because
-# which algorithm a run is moves with them -- a run one config calls a reference
-# has to be read whatever another config calls it. The predicate is the one
-# `is_reference` applies below, so the scan reads exactly what the drawing loop
-# goes on to ask for.
-_ref_names: set = set()
-for _ignored, _refs, _hp_key in _cfg_specs:
-    _, _cfg_algo, _ = labels_of(_ignored)
-    _ref_names.update(
-        name for name, flat in flat_cfgs.items()
-        if _cfg_algo[name] in _refs and is_null(flat.get(_hp_key))
+# config name -> (hp_key, rows, {group: envs}, {(row index, env): run}).
+layout: dict = {}
+for config_name, config_path, plot_cfg in plot_cfgs:
+    hp_key, rows, _, _ = ablation_from_entries(plot_cfg, where=str(config_path))
+    rows = [{**row, "ri": ri} for ri, row in enumerate(rows)]
+    # This config's own exemptions, not every config's: one config's
+    # `ignored_cfg_keys` says nothing about the runs another one draws.
+    ignored = ignored_cfg_keys(plot_cfg)
+    if ignored:
+        vprint(f"{config_name} exempts from config matching: {sorted(ignored)}")
+    _env, _algo, env_stem, matched = assign_groups(
+        df,
+        env_configs_all,
+        algo_configs_all,
+        ignored,
+        env_id_fallback=False,
+        algo_optional=False,
+        algo_decides_usable=False,
+        cache=_assigned,
     )
+    envs = sorted(set(env_stem[matched]), key=str)
+    groups = env_groups(plot_cfg) or {"": envs}
+    selected = {
+        (row["ri"], env): reference_run(env, row, ignored, matched)
+        for row in rows if row["kind"] == "true"
+        for group_envs in groups.values() for env in group_envs if env in envs
+    }
+    layout[config_name] = (
+        hp_key,
+        rows,
+        groups,
+        {k: n for k, n in selected.items() if n is not None},
+    )
+
+needed = sorted({n for *_, sel in layout.values() for n in sel.values()})
 
 
 # --- Load memory of reference runs, compute maps ---
-# One entry per cfg dir (not per (env, algo) — an ablation sweep has multiple
-# runs per (env, algo), one per hp value). Deduplication into (env, algo, hp)
-# happens per plot config, since hp_key varies by config.
-scanned: dict = {}   # cfg_dir_name -> {"env", "algo", "flat", "maps", "ref_data"}
+loaded: dict = {}   # cfg_dir_name -> {"maps", "ref_data"}
 no_memory_dirs:  list = []
 no_counter_dirs: list = []
-unmatched:       list = []
 
-with tqdm(
-    list(flat_cfgs), desc="Scanning", unit="cfg", disable=not args.verbose
-) as pbar:
-    for name in pbar:
-        env_name  = env_of[name]
-        algo_name = algo_of[name]
-        if env_name == "unknown" or algo_name == "unknown":
-            unmatched.append(name)
-            continue
+for name in tqdm(needed, desc="Loading", unit="run", disable=not args.verbose):
+    run_cfg  = run_cfgs[name]
+    mem_file = root / name / str(args.rng_seed) / "memory.npz"
+    maps_per_frac = None
+    ref_data = None
 
-        pbar.set_postfix_str(f"{env_name}/{algo_name}")
+    mem = None
+    if not mem_file.exists():
+        no_memory_dirs.append(name)
+    else:
+        try:
+            with np.load(mem_file) as data:
+                mem = {k: data[k] for k in data.files if k in NEEDED_MEM_KEYS}
+        except Exception as e:
+            vprint(f"  WARNING: skipping corrupt {mem_file}: {e}")
 
-        run_cfg  = run_cfgs[name]
-        is_ref = name in _ref_names
-        mem_file = root / name / str(args.rng_seed) / "memory.npz"
-        maps_per_frac = None
-        ref_data = None
-
-        if is_ref:
-            mem = None
-            if not mem_file.exists():
-                no_memory_dirs.append(name)
+    if mem is not None:
+        try:
+            maps_per_frac = memory_maps(
+                mem,
+                env_cfg=run_cfg["environment"],
+                fractions=FRACTIONS,
+            )
+        except Exception as e:
+            vprint(f"  WARNING: memory_maps failed for {name}: {e}")
+        else:
+            if maps_per_frac is None:
+                no_counter_dirs.append(name)
             else:
-                try:
-                    with np.load(mem_file) as data:
-                        mem = {k: data[k] for k in data.files if k in NEEDED_MEM_KEYS}
-                except Exception as e:
-                    vprint(f"  WARNING: skipping corrupt {mem_file}: {e}")
+                ref_data = _build_ref_data(run_cfg, mem)
 
-            if mem is not None:
-                try:
-                    maps_per_frac = memory_maps(
-                        mem,
-                        env_cfg=run_cfg["environment"],
-                        fractions=FRACTIONS,
-                    )
-                except Exception as e:
-                    vprint(
-                        f"  WARNING: memory_maps failed for {name} "
-                        f"({env_name}/{algo_name}): {e}"
-                    )
-                else:
-                    if maps_per_frac is None:
-                        no_counter_dirs.append(name)
-                    else:
-                        ref_data = _build_ref_data(run_cfg, mem)
-
-        scanned[name] = {
-            "env":       env_name,
-            "algo":      algo_name,
-            "overrides": overrides_of[name],
-            "flat":      flat_cfgs[name],
-            "maps":     maps_per_frac,
-            "ref_data": ref_data,
-        }
+    loaded[name] = {"maps": maps_per_frac, "ref_data": ref_data}
 
 # --- Recap ---
-# Read off the union labelling by name, not off df[ENV]/df[ALGO]: `assign_groups`
-# writes those on every call, so by now they hold whichever exemption set was
-# labelled last. The recap is about the runs the scan kept, which is the union's
-# question.
-_union_env, _union_algo = _assigned[(_ignored_keys, False, False)]
-inexact = sorted({
-    str(c) for c in [*_union_env, *_union_algo] if split_config_label(str(c))[1]
-})
-
 print(f"Scanned  cfg dirs : {len(cfg_dirs)}")
 print(
-    f"Loaded    runs    : {len(scanned)}"
-    f"  ({len(no_cfg_dirs)} no cfg,"
+    f"Reference runs    : {len(needed)}"
+    f"  ({len(no_cfg_dirs)} dirs without cfg,"
     f" {len(bad_cfg_dirs)} unreadable cfg,"
     f" {len(no_memory_dirs)} no memory,"
-    f" {len(unmatched)} unmatched,"
     f" {len(no_counter_dirs)} no tabular counter)"
 )
-if inexact:
-    print("\nConfig matches carrying overrides:")
-    for label in inexact:
-        print(f"  {label}")
 
 
 # --- Iterate over ablation plot configs ---
 # Per-config `env_vmins`/`env_vmaxs` are rebuilt inside the loop so the count
 # pool includes both visit-count (reference) and pseudocount (ablation) values.
 for config_name, config_path, plot_cfg in plot_cfgs:
-    hp_key, rows, ref_algos, abl_algos = ablation_from_entries(
-        plot_cfg,
-        where=str(config_path),
-    )
-
-    groups = env_groups(plot_cfg)
+    hp_key, rows, groups, selected = layout[config_name]
     _, flat_envs, _, _ = plot_labels(plot_cfg)
 
-    active_algos = ref_algos | abl_algos
-
-    def is_reference(entry):
-        """Whether a scanned run is the one every row of this config is drawn
-        from: its visit counts are the reference row, and the pseudocounts are
-        recomputed on its memory."""
-
-        return (
-            entry["algo"] in ref_algos
-            and is_null(entry["flat"].get(hp_key))
+    # Over every environment the config declares, the ones with no run at all
+    # included. An entry naming another environment composes to nothing there.
+    missing = [
+        (row["label"], env)
+        for group_envs in groups.values() for env in group_envs
+        for row in rows
+        if row["kind"] == "true"
+        and (row["ri"], env) not in selected
+        and entry_config(env, row["selector"], row["label"]) is not None
+    ]
+    if missing:
+        print(
+            f"\n[{config_path.name}] {len(missing)} reference configuration(s) have "
+            f"no run: " + ", ".join(f"'{label}' in {env}" for label, env in missing)
         )
 
-    # This config's own exemptions, not every config's: exempting a key changes
-    # which YAML a run matches, and one config's `ignored_cfg_keys` says nothing
-    # about the runs another one draws. A run matching no YAML under them is not
-    # drawn here, whatever it matched under another config's.
-    cfg_ignored = ignored_cfg_keys(plot_cfg)
-    cfg_env, cfg_algo, cfg_overrides = labels_of(cfg_ignored)
-    config_runs: dict = {}
-    unknown_here, without_maps = 0, 0
-    for name, entry in scanned.items():
-        if cfg_env[name] == "unknown" or cfg_algo[name] == "unknown":
-            unknown_here += 1
-            continue
-        entry = {
-            **entry,
-            "env": cfg_env[name],
-            "algo": cfg_algo[name],
-            "overrides": cfg_overrides[name],
-        }
-        # A reference run without maps is dropped, and only this config can say
-        # which runs those are. An ablation run is kept without them: its hp
-        # value still names a row.
-        if is_reference(entry) and entry["maps"] is None:
-            without_maps += 1
-            continue
-        config_runs[name] = entry
-    if unknown_here:
-        vprint(
-            f"[{config_path.name}] {unknown_here} scanned run(s) match no YAML "
-            f"under its exemptions and are not drawn."
-        )
-    if without_maps:
-        vprint(
-            f"[{config_path.name}] {without_maps} reference run(s) have no maps "
-            f"and are not drawn."
-        )
+    # The maps of every reference row, by (row index, environment).
+    collected = {
+        key: loaded[name]["maps"]
+        for key, name in selected.items() if loaded[name]["maps"] is not None
+    }
 
-    # Reindex scanned runs by (env, algo, v_key): the reference keys on None,
-    # every other run on its canonical hp value.
-    collected: dict = {}          # (env, algo, v_key) -> {frac: {key: array}}
-    first_cfg_dir: dict = {}
-    duplicate_pairs: list = []
-    off_ablation: list = []       # runs overriding a key the ablation does not vary
-
-    for cfg_dir_name, entry in config_runs.items():
-        if entry["algo"] not in active_algos:
-            continue
-        # The ablated hyperparameter is the only key a run may differ from its
-        # config files in: a run overriding anything else is another
-        # configuration, and bucketing it here would draw it as this one, or
-        # report it as a duplicate of it.
-        other = {k: v for k, v in entry["overrides"].items() if k != hp_key}
-        if other:
-            off_ablation.append((cfg_dir_name, entry["env"], entry["algo"], other))
-            continue
-        if is_reference(entry):
-            v_key = None
-        else:
-            v_key = _canon(entry["flat"].get(hp_key))
-        key = (entry["env"], entry["algo"], v_key)
-        if key in collected:
-            duplicate_pairs.append(
-                (cfg_dir_name, entry["env"], entry["algo"], v_key, first_cfg_dir[key])
-            )
-            continue
-        collected[key] = entry["maps"]
-        first_cfg_dir[key] = cfg_dir_name
-
-    if not collected:
-        vprint(f"[{config_path.name}] No matching runs.")
-        continue
-
-    # First reference algo's memory per env → source of `obs`, `bin_centers`,
+    # First reference row's memory per env → source of `obs`, `bin_centers`,
     # `scale` for the pseudocount recomputation. Every row is drawn from this one
     # memory: the reference row is its visit count, and an ablation row is
     # `pseudocount(radius=v)` over the same data, so the figure compares the
     # radii on one set of samples rather than on whatever each run collected.
     ref_data_per_env: dict = {}
-    for entry in config_runs.values():
-        if (
-            is_reference(entry)
-            and entry["ref_data"] is not None
-            and entry["env"] not in ref_data_per_env
-        ):
-            ref_data_per_env[entry["env"]] = entry["ref_data"]
+    for (_ri, en), name in sorted(selected.items(), key=lambda item: item[0][0]):
+        d = loaded[name]["ref_data"]
+        if d is not None and en not in ref_data_per_env:
+            ref_data_per_env[en] = d
 
     if not ref_data_per_env:
         # Every row is drawn from the reference memory, so without one there is
         # nothing to draw at all -- including the pseudocount rows, whose own
         # runs are never read. Said here rather than left to the pruning below,
         # which reports each row missing without saying what they have in common.
-        candidates = [
-            (name, e) for name, e in config_runs.items()
-            if e["algo"] in ref_algos and is_null(e["flat"].get(hp_key))
-        ]
         print(
             f"\n[{config_path.name}] No reference memory: "
             f"nothing can be drawn, since every row comes from it."
         )
-        if not candidates:
-            seen = sorted({
-                str(_canon(e["flat"].get(hp_key)))
-                for e in config_runs.values() if e["algo"] in ref_algos
-            })
+        if not selected:
             print(
-                f"  No run of {sorted(ref_algos)} has {hp_key} null. "
-                f"Values of {hp_key} among those runs: {seen}."
+                "  No run has the whole configuration of a reference entry in any "
+                "environment."
             )
         else:
             print(
-                f"  {len(candidates)} run(s) qualify, none with a memory read "
-                f"at seed {args.rng_seed} (see --rng_seed):"
+                f"  {len(selected)} reference run(s), none whose memory at seed "
+                f"{args.rng_seed} gives pseudocounts (see --rng_seed):"
             )
-            for name, e in candidates[:10]:
+            for (_ri, en), name in list(selected.items())[:10]:
                 found = (root / name / str(args.rng_seed) / "memory.npz").exists()
                 print(
-                    f"    {name} ({e['env']}): memory "
+                    f"    {name} ({en}): memory "
                     f"{'found' if found else 'MISSING'}, "
-                    f"maps {'built' if e['maps'] is not None else 'none'}"
+                    f"maps {'built' if loaded[name]['maps'] is not None else 'none'}"
                 )
         continue
 
-    if duplicate_pairs:
-        print(f"\n[{config_path.name}] Duplicate cfg dirs (kept first):")
-        for d, en, al, v, primary in duplicate_pairs:
-            print(f"  {d}  →  {en}/{al}/{v}  (kept: {primary})")
-
-    if off_ablation:
-        print(
-            f"\n[{config_path.name}] {len(off_ablation)} run(s) override a key "
-            f"the ablation does not vary and are not drawn:"
-        )
-        for d, en, al, other in off_ablation:
-            shown = ", ".join(f"{k}={v}" for k, v in sorted(other.items()))
-            print(f"  {d}  →  {en}/{al}  ({shown})")
-
-    if not groups:
-        groups = {"": sorted({en for (en, _, _) in collected})}
     ordered_envs = (
         list(flat_envs.keys()) if flat_envs
-        else sorted({en for (en, _, _) in collected})
+        else sorted({en for group_envs in groups.values() for en in group_envs}, key=str)
     )
 
     # Precompute pseudocount arrays for ablation rows.
@@ -904,7 +783,7 @@ for config_name, config_path, plot_cfg in plot_cfgs:
 
         row = (rows if source is None else source)[ri]
         if row["kind"] == "true":
-            per_frac = collected.get((en, row["algo_id"], None), {})
+            per_frac = collected.get((row["ri"], en), {})
             return per_frac.get(frac, {}).get(key)
         return pseudo_cache.get((en, row["v_key"], frac))
 

@@ -213,7 +213,6 @@ from src.utils.slurm import (
     load_cluster,
     slurm_setup,
 )
-from src.utils.id import composed_config
 from src.utils.sweep import expand_sweep, format_override, load_sweep
 
 
@@ -499,11 +498,6 @@ def submit_jobs(
             "agent.critic.approximator.device": device,
             "agent.critic.approximator_visit.device": device,
         }
-        composed = composed_config(
-            (*base_overrides, *(format_override(k, v) for k, v in hp_overrides.items()), *extra)
-        )
-        if visit_device_key in composed:
-            config_hp[visit_device_key] = device
         config_overrides = [
             format_override(k, v)
             for k, v in config_hp.items()

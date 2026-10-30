@@ -462,10 +462,9 @@ def memory_maps(memory, env=None, env_cfg=None, fractions=(1.0,)):
 
     # The prefixes are nested, so each one is the one before it plus the entries
     # in between. Walked in increasing order and accumulated, every entry is
-    # counted once across all the fractions rather than once per fraction --
-    # the same saving pseudocount_prefixes makes over calling pseudocount per
-    # (radius, prefix). `np.maximum.at` is the slowest of the counts and gains
-    # the most: it runs over each entry once instead of over every prefix.
+    # counted once across all the fractions rather than once per fraction.
+    # `np.maximum.at` is the slowest of the counts and gains the most: it runs
+    # over each entry once instead of over every prefix.
     prefixes = [max(1, int(round(size * fraction))) for fraction in fractions]
     visit   = np.zeros(n_flat, dtype=np.int64)
     pseudo  = np.zeros(n_flat, dtype=float) if entry_count is not None else None

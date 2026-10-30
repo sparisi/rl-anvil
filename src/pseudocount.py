@@ -405,13 +405,11 @@ def robust_scale(batch, rel_floor: float = 0.01):
 
 
 def scaled_dist2(x, batch, scale):
-    """Squared distances between every row of `x` and every row of `batch`, both
-    divided by `scale`, as a (len(x), len(batch)) float64 array.
+    """Return the squared distances between every row of `x` and every row of
+    `batch`, both divided by `scale`, as a (len(x), len(batch)) float64 array.
 
     Computed as |x|^2 + |b|^2 - 2 x.b in float64, with the negatives rounding
-    leaves clamped to 0. Every neighbor test and count over a pseudocount memory
-    goes through this function, so the incremental updates and the full rebuilds
-    compute each pair with the same formula at the same precision."""
+    leaves clamped to 0."""
 
     scale = np.asarray(scale, dtype=np.float64)
     x = np.asarray(x, dtype=np.float64) / scale

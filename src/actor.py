@@ -261,6 +261,7 @@ class GoalConditioned(EpsilonGreedy):
         self._steps_to_goal_sum = source._steps_to_goal_sum
         self._goal_reached = source._goal_reached
         self._goal_selections = source._goal_selections
+        self._new_goal_selections = source._new_goal_selections
         self._goal_reselections = source._goal_reselections
         self._self_goal_selections = source._self_goal_selections
         self._policy_steps = source._policy_steps
@@ -276,7 +277,7 @@ class GoalConditioned(EpsilonGreedy):
 
     def info(self):
         return super().info() | {
-            "goal_success_%": np.nan if self._goal_selections == 0 else self._goal_reached / self._goal_selections,
+            "goal_success_%": np.nan if self._new_goal_selections == 0 else self._goal_reached / self._new_goal_selections,
             "self_goal_%": np.nan if self._goal_selections == 0 else self._self_goal_selections / self._goal_selections,
             "goal_reselections_%": np.nan if self._policy_steps == 0 else self._goal_reselections / self._policy_steps,
             "goal_selection_rate": np.nan if self._policy_steps == 0 else self._goal_selections / self._policy_steps,
@@ -336,6 +337,7 @@ class GoalConditioned(EpsilonGreedy):
         self._sel_obs = None
         self._episode_critic_idx = 0
         self._goal_selections = 0
+        self._new_goal_selections = 0
         self._goal_reselections = 0
         self._goal_reached = 0
         self._self_goal_selections = 0
@@ -348,23 +350,31 @@ class GoalConditioned(EpsilonGreedy):
         if self.goal_reached_count is not None:
             self.goal_reached_count.reset()
 
-    def _goal_reached_check(self, obs, act, replay_memory):
-        if self.goal is None:
-            return False
+    def _in_goal_bin(self, obs, goal_obs, replay_memory):
+        """Return whether `obs` is within one bin width of `goal_obs`."""
 
         if replay_memory.counter is None:
             raise ValueError(
-                "The goal-reached check needs the environment's binned counter, but "
-                "this environment has none."
+                "Goal checks need the environment's binned counter, but this "
+                "environment has none."
             )
 
         # The goal is reached if |s_t - g_t| < η, where η is the bin width of true counts.
         # this is equivalent to using an oracle, aligned with how GCRL environments are implemented.
-        is_reached = bool(is_neighbor_binned(
+        return bool(is_neighbor_binned(
             obs,
-            self.goal["obs"][None],
+            goal_obs[None],
             replay_memory.counter,
-        )[0]) and act == self.goal["act"]
+        )[0])
+
+    def _goal_reached_check(self, obs, act, replay_memory):
+        if self.goal is None:
+            return False
+
+        is_reached = (
+            self._in_goal_bin(obs, self.goal["obs"], replay_memory)
+            and act == self.goal["act"]
+        )
 
         if is_reached:
             self._goal_reached += 1
@@ -466,13 +476,18 @@ class GoalConditioned(EpsilonGreedy):
             if should_select:
                 self._select_goal(obs, rng_generator, replay_memory)
                 self._sel_obs = obs.copy()
-                if np.array_equal(self.goal["obs"], obs):
+                if self._in_goal_bin(obs, self.goal["obs"], replay_memory):
                     self._self_goal_selections += 1
-                if old_goal is not None and (
+                goal_changed = old_goal is not None and (
                     not np.array_equal(old_goal["obs"], self.goal["obs"])
                     or old_goal["act"] != self.goal["act"]
-                ):
+                )
+                if old_goal is None or goal_changed:
+                    self._new_goal_selections += 1
+                if goal_changed:
                     self._goal_reselections += 1
+                    # Steps to goal are counted from the selection of the goal now held.
+                    self._steps_to_goal_current = 0
 
                 if self.goal_selected_count is not None:
                     self.goal_selected_count.update(self.goal["obs"], self.goal["act"])

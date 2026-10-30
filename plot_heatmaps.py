@@ -48,13 +48,13 @@ import re
 from pathlib import Path
 from tqdm import tqdm
 
-from src.utils.id import read_run_cfg
+from src.utils.id import flatten_cfg, read_run_cfg
+from src.utils.matching import ignored_cfg_keys, load_config_group, split_config_label
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     add_config_group_args, assign_groups, composed_mask, ensure_font, entry_config,
-    env_groups, flatten_cfg, ignored_cfg_keys, load_config_group,
-    load_plot_configs, memory_fractions, plot_entries, plot_labels,
-    split_config_label, tex_kwargs as _tex,
+    env_groups, load_plot_configs, memory_fractions, plot_entries, plot_labels,
+    tex_kwargs as _tex,
 )
 from src.utils.heatmaps import (
     CBAR_SUBPLOT_SIZE, add_colorbar, arr_range, auto_dpi, cbar_groups, cbar_hspace,
@@ -588,7 +588,7 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
     if config_name not in layout:
         continue
     vprint(f"\n{'#' * 60}\nPlot config: {config_name}\n{'#' * 60}")
-    _, env_labels, _ = plot_labels(plot_cfg)
+    _, env_labels, _, _ = plot_labels(plot_cfg)
     entries, groups, selected, envs = layout[config_name]
 
     config_root = output_root / config_name

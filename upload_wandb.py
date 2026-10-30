@@ -65,21 +65,7 @@ import wandb
 from tqdm import tqdm
 
 from src.utils.id import CONFIG_ID, SEED, decode_stat
-
-
-def to_python(x):
-    """Return `x` with numpy arrays converted to lists and numpy scalars to
-    Python scalars, recursively through lists and dicts."""
-
-    if isinstance(x, np.ndarray):
-        return [to_python(v) for v in x.tolist()]
-    if isinstance(x, list):
-        return [to_python(v) for v in x]
-    if isinstance(x, dict):
-        return {k: to_python(v) for k, v in x.items()}
-    if isinstance(x, np.generic):
-        return x.item()
-    return x
+from src.utils.matching import native
 
 
 def is_missing(x) -> bool:
@@ -107,11 +93,11 @@ def unflatten(flat: dict) -> dict:
 
 def decode(raw):
     """Return `raw` decoded by decode_stat if it is a string, and passed through
-    to_python if it is not."""
+    native if it is not."""
 
     if isinstance(raw, str):
         return decode_stat(raw)
-    return to_python(raw)
+    return native(raw)
 
 
 def is_number(x) -> bool:
@@ -125,7 +111,7 @@ def run_config(row: pd.Series, hyp_cols: list) -> tuple[str, str, dict]:
     value "{}", which flatten_cfg stores for an empty mapping, becomes {}."""
 
     flat_cfg = {
-        c[1]: {} if isinstance(row[c], str) and row[c] == "{}" else to_python(row[c])
+        c[1]: {} if isinstance(row[c], str) and row[c] == "{}" else native(row[c])
         for c in hyp_cols
         if not is_missing(row[c])
     }

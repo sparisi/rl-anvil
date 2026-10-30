@@ -38,7 +38,9 @@ every pair (`rliable_<score>_poi`); the median, IQM, mean and optimality gap
 (`rliable_<score>_profile`). Every aggregate except the probability of
 improvement pools scores across environments, so each environment's scores are
 normalized by its `ylim` for that statistic, and a group with an environment that
-has none is left out of them. The same holds for --curves_iqm.
+has none is left out of them. The same holds for --curves_iqm. An environment's
+`score_bounds` for a statistic replace its `ylim` as the normalization bounds,
+and leave the axis limits unchanged.
 
 A LaTeX table of each entry's area under the curve is written beside the figures
 (table.tex), and with --rliable_final or --rliable_auc one of the IQM and the
@@ -80,7 +82,8 @@ from src.utils.aggregate import (
     stack_runs,
 )
 from src.utils.id import decode_stat
-from src.utils.misc import make_vprint
+from src.utils.matching import ignored_cfg_keys, load_config_group
+from src.utils.misc import make_vprint, warn_once
 from src.utils.plot import (
     PLOT_CONFIG_DIR,
     SEED,
@@ -88,6 +91,7 @@ from src.utils.plot import (
     add_config_group_args,
     area_over_span,
     assign_groups,
+    ci_bounds,
     composed_mask,
     detect_precision,
     draw_bars,
@@ -96,9 +100,7 @@ from src.utils.plot import (
     env_groups,
     error_shade_plot,
     fitted_rows_cols,
-    ignored_cfg_keys,
     launch_overrides,
-    load_config_group,
     load_plot_configs,
     plot_labels,
     record_missing,
@@ -106,6 +108,7 @@ from src.utils.plot import (
     save_figure,
     series_of,
     set_3_ticks,
+    smooth,
     style_entries,
     summarize,
     tex_kwargs,
@@ -329,24 +332,30 @@ def bar_values(decoded):
     """What the bars of one configuration are: its peak, the steps it took to
     reach that peak, and the area under its curve.
 
-    Each is taken per seed and then summarized, so the interval says how much the
-    seeds disagreed -- the same thing the band around the curve says. The area is
-    the one run_scores computes."""
+    The peak is the point where the drawn mean curve peaks: the mean over seeds,
+    smoothed by --smoothing_window as error_shade_plot smooths it. Each seed's
+    curve, smoothed the same way, is read at that point and summarized, so the
+    interval says how much the seeds disagreed there. The steps to the peak are
+    the step of that point, with no interval. The area is the one run_scores
+    computes."""
 
     series, x, _steps, _seeds = decoded
-    peaks, steps = [], []
-    for column in series.columns:
-        run = series[column].to_numpy(dtype=float)
-        finite = run[np.isfinite(run)]
-        if not finite.size:
-            continue
-        peaks.append(float(finite.max()))
-        # nanargmax raises on an all-NaN run, which the guard above has already
-        # dropped; -inf stands in for the NaNs so they can never be the peak.
-        steps.append(float(x[int(np.argmax(np.nan_to_num(run, nan=-np.inf)))]))
+    runs = series.to_numpy(dtype=float).T
+    mean, _, _ = ci_bounds(runs)
+    if args.smoothing_window > 0:
+        mean = smooth(mean, args.smoothing_window)
+        runs = np.array([smooth(run, args.smoothing_window) for run in runs])
+    finite = np.isfinite(mean)
+    if not finite.any():
+        peak, steps = None, None
+    else:
+        # -inf stands in for the NaNs so they can never be the peak.
+        k = int(np.argmax(np.where(finite, mean, -np.inf)))
+        peak = summarize(runs[:, k])
+        steps = (float(x[k]), 0.0)
     return {
-        "peak": summarize(peaks),
-        "steps": summarize(steps),
+        "peak": peak,
+        "steps": steps,
         "auc": summarize(run_scores(decoded, "auc")),
     }
 
@@ -375,10 +384,11 @@ def pooled(summaries, envs, stat, key, index):
     """One configuration's `key` averaged over the environments of a group, as
     (mean, interval).
 
-    The two are averaged separately: the interval is what the seeds of an
-    environment disagreed by, averaged over environments, and not the spread
-    between environments -- those differ in difficulty, not in what the
-    configuration did."""
+    The interval is the half-width of the mean of independent per-environment
+    estimates, sqrt(sum(h_i ** 2)) / n for the n per-environment half-widths
+    h_i. It says what the seeds of each environment disagreed by, and leaves out
+    the spread between environments -- those differ in difficulty, not in what
+    the configuration did."""
 
     values = [
         summaries[(env, stat, index)][key]
@@ -391,7 +401,7 @@ def pooled(summaries, envs, stat, key, index):
         return None
     return (
         float(np.mean([m for m, _ in values])),
-        float(np.mean([e for _, e in values])),
+        float(np.sqrt(np.sum([e**2 for _, e in values])) / len(values)),
     )
 
 
@@ -416,6 +426,7 @@ class Drawing:
     stat_labels: dict
     env_labels: dict
     stat_ylims: dict
+    score_bounds: dict
     # The pair `assign_groups` returned, kept together: a mask built under one
     # set of exemptions says nothing about a comparison made under another.
     # `matched` here is the runs placed in an environment, the algorithm label
@@ -457,10 +468,11 @@ def run_scores(decoded, kind):
 
 
 def norm_bounds(drawing, envs, stat):
-    """The `ylim` of each environment for `stat`, as (low, high) arrays, or None
-    when an environment has none or an empty one."""
+    """The `score_bounds` of each environment for `stat` (its `ylim` when it
+    declares none), as (low, high) arrays, or None when an environment has none
+    or an empty one."""
 
-    bounds = [drawing.stat_ylims.get((str(env), stat)) for env in envs]
+    bounds = [drawing.score_bounds.get((str(env), stat)) for env in envs]
     if any(b is None or b[1] == b[0] for b in bounds):
         return None
     return (
@@ -479,7 +491,7 @@ def complete_entries(drawing, present, stat, decoded_of, drawn):
         if all((env, i) in decoded_of for env in present):
             kept.append(i)
         else:
-            print(
+            warn_once(
                 f"WARNING: {drawing.entries[i]['label']} has no runs for {stat} "
                 f"in some environment of the group; it is left out of the rliable "
                 f"estimates."
@@ -501,7 +513,7 @@ def draw_iqm_curve(drawing, name, present, stat, decoded_of, drawn):
 
     bounds = norm_bounds(drawing, present, stat)
     if bounds is None:
-        vprint(f"  No ylim for {stat} in every environment, no IQM curve.")
+        vprint(f"  No score_bounds or ylim for {stat} in every environment, no IQM curve.")
         return 0
     low, high = bounds
     fractions = np.linspace(0.0, 1.0, args.iqm_points)
@@ -573,7 +585,7 @@ def draw_iqm_curve(drawing, name, present, stat, decoded_of, drawn):
     else:
         ax.set_xlabel("Fraction Of Training", fontsize=FONT_SIZE)
     ax.set_xlim(x[0], x[-1])
-    ax.set_xticks([x[0], x[-1] / 2, x[-1]])
+    ax.set_xticks([x[0], (x[0] + x[-1]) / 2, x[-1]])
     label = f"IQM Normalized {ylabel}"
     ax.set_ylabel(label, fontsize=FONT_SIZE, **tex_kwargs(label))
     set_3_ticks(ax, which="y")
@@ -606,7 +618,8 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
     and needs no normalization: it compares runs within an environment and
     averages over environments. The aggregate metrics and the performance
     profile pool runs across environments, so they are drawn only when every
-    environment has a `ylim` for `stat`, which the scores are normalized by."""
+    environment has score bounds for `stat` (see norm_bounds), which the scores
+    are normalized by."""
 
     scores = {}
     for i in complete_entries(drawing, present, stat, decoded_of, drawn):
@@ -683,8 +696,8 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
     bounds = norm_bounds(drawing, present, stat)
     if bounds is None:
         vprint(
-            f"  No ylim for {stat} in every environment, no rliable aggregates "
-            f"or profile."
+            f"  No score_bounds or ylim for {stat} in every environment, no "
+            f"rliable aggregates or profile."
         )
         return written
     low, high = bounds
@@ -757,7 +770,7 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
     plt.close(fig)
     written += 1
 
-    # Over the normalized range the `ylim` bounds map to.
+    # Over the normalized range the score bounds map to.
     taus = np.linspace(0.0, 1.0, 101)
     profiles = {
         i: interval_estimates(
@@ -835,7 +848,7 @@ def draw_config(config_name, cfg):
     if not groups:
         print(f"WARNING: {config_name} declares no environments to plot, skipping.")
         return 0
-    stat_labels, env_labels, stat_ylims = plot_labels(cfg)
+    stat_labels, env_labels, stat_ylims, score_bounds = plot_labels(cfg)
 
     # The config's `statistics` is both the list to plot and their labels, in the
     # order it writes them; --stats narrows that further. Without either,
@@ -887,6 +900,7 @@ def draw_config(config_name, cfg):
         stat_labels=stat_labels,
         env_labels=env_labels,
         stat_ylims=stat_ylims,
+        score_bounds=score_bounds,
         ignored_keys=ignored_keys,
         matched=matched,
         env_stem=env_stem,
@@ -1004,7 +1018,7 @@ def draw_config(config_name, cfg):
                     )
                     if x_hi > x_lo:
                         ax.set_xlim(x_lo, x_hi)
-                        ax.set_xticks([x_lo, x_hi / 2, x_hi])
+                        ax.set_xticks([x_lo, (x_lo + x_hi) / 2, x_hi])
                     bounds = drawing.stat_ylims.get((str(env), stat))
                     if bounds:
                         ax.set_ylim(*bounds)
@@ -1267,7 +1281,7 @@ def draw_config(config_name, cfg):
                         ax.xaxis.offsetText.set_visible(False)
                         if x_hi > x_lo:
                             ax.set_xlim(x_lo, x_hi)
-                            ax.set_xticks([x_lo, x_hi / 2, x_hi])
+                            ax.set_xticks([x_lo, (x_lo + x_hi) / 2, x_hi])
                         bounds = drawing.stat_ylims.get((str(env), stat))
                         if bounds:
                             ax.set_ylim(*bounds)
@@ -1417,9 +1431,13 @@ def draw_config(config_name, cfg):
 
 
 def tex_escape(text):
-    """A display label as LaTeX: an underscore in a name is a subscript."""
+    """A display label as LaTeX: `_`, `&`, `%` and `#` are escaped, and `$` is
+    left as it is."""
 
-    return str(text).replace("_", r"\_")
+    text = str(text)
+    for char in "_&%#":
+        text = text.replace(char, "\\" + char)
+    return text
 
 
 def write_table(drawing):

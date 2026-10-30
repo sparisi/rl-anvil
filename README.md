@@ -216,12 +216,16 @@ while total steps < experiment.training_steps
 ```
 
 To isolate testing, copies of the models and the environment are used. To ensure
-reproducibility, environment seeds are fixed via
-[Cantor pairing](https://en.wikipedia.org/wiki/Pairing_function#Cantor_pairing_function)
-over `experiment.rng_seed` and the training/testing episode.
+reproducibility, seeds are derived with
+[NumPy SeedSequence](https://numpy.org/doc/stable/reference/random/bit_generators/generated/numpy.random.SeedSequence.html)
+from `experiment.rng_seed` and the training/testing episode. Each training
+episode gives the environment, the actor and the critic (which also samples the
+replay memory) their own seed.
 For example, consider an experiment where the agent is tested against 50 episodes:
 these 50 episodes will have the **same** reset seed at every checkpoint throughout
-**all** training steps. This reduces noise within same-seed runs.
+**all** training steps, and they come from a separate stream from the training
+seeds. This reduces noise within same-seed runs, and correlation between
+training and testing.
 
 ### 3. The Agent
 

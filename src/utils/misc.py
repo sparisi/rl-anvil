@@ -215,13 +215,13 @@ def format_dict_row(
     return (header, row_str)
 
 
-# The messages _warn_once has already printed, so that a sweep where every cell
+# The messages warn_once has already printed, so that a sweep where every cell
 # holds runs of two training lengths says so once rather than once per cell per
 # statistic.
 _WARNED: set = set()
 
 
-def _warn_once(message):
+def warn_once(message):
     """Print `message` the first time it is given and never again."""
 
     if message not in _WARNED:

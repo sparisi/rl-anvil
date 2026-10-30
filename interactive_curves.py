@@ -116,6 +116,13 @@ from src.utils.aggregate import (
     stack_runs,
 )
 from src.utils.id import decode_stat
+from src.utils.matching import (
+    assign_configs,
+    load_config_group,
+    select_rows,
+    split_config_label,
+    value_str,
+)
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     ALGO,
@@ -127,7 +134,6 @@ from src.utils.plot import (
     add_config_group_args,
     apply_filters,
     area_over_span,
-    assign_configs,
     ci_bounds,
     declared_environments,
     html_page,
@@ -137,14 +143,10 @@ from src.utils.plot import (
     keep_declared_environments,
     label_of,
     launch_overrides,
-    load_config_group,
     mask_of,
     record_missing,
-    select_rows,
     series_of,
-    split_config_label,
     swept_keys,
-    value_str,
     vega_field_name,
     write_missing_runs_script,
 )

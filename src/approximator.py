@@ -111,7 +111,7 @@ class Table(FunctionApproximator):
         self._table = source._table.copy()
 
     def randomize(self, rng_generator, std: float = 1.0):
-        self._table += rng_generator.normal(*self._table.shape) * std
+        self._table += rng_generator.normal(size=self._table.shape) * std
 
 
 class CountTable(Table):

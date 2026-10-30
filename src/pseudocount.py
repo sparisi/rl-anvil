@@ -8,7 +8,6 @@ to [theta_1, theta_2] and DO NOT COUNT angular velocities.
 In LunarLander, we count only the agent's (x, y) position.
 """
 
-from abc import ABC
 import gymnasium as gym
 import numpy as np
 
@@ -78,7 +77,7 @@ class BinnedCount(CountTable):
     """
     Version of CountTable for continuous observations and discrete actions.
     Observations are discretized with bins, resulting in a table of shape
-    (obs_shape[0] * n_bins[0], obs_shape[1] * n_bins[1], ..., n_actions).
+    (n_bins[0], n_bins[1], ..., n_actions), one axis per observation dimension.
     It is possible to convert observations before binning.
 
     The attribute map_shape is used by plotting scripts to display heatmaps.
@@ -190,7 +189,7 @@ class BinnedCount(CountTable):
 
 class BinnedCountPendulum(BinnedCount):
     """
-    Convert [cos(theta), sin(theta)] to [theta].
+    Convert [cos(theta), sin(theta), theta_dot] to [theta, theta_dot].
     """
 
     def _convert_obs(self, obs):

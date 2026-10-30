@@ -369,9 +369,9 @@ def goal_curves(
     Whether V is `gamma ** d` or `gamma ** (d - 1)` makes no difference -- a
     constant factor across every candidate cannot move the argmax.
 
-    V does not depend on the goal action, so the best score over the pairs of a
-    tile is V over the count of its least-tried action. The best score is taken
-    over tiles visited more than CANDIDATE_MIN_COUNT times in total, since goal
+    Every (tile, action) pair whose tile is in reach is scored, as the actor
+    scores its candidates. The best score is taken over tiles visited more than
+    CANDIDATE_MIN_COUNT times in total, since goal
     candidates are drawn from the replay memory and a tile the agent has not put
     there cannot be picked. The goal itself is scored with the count of its own
     goal action, whatever its tile's count, so selecting a barely-seen tile still
@@ -465,7 +465,7 @@ def goal_curves(
             within = members[row_of[s]]
             within = within[counts[within].sum(1) > CANDIDATE_MIN_COUNT]
             if reach[s, g] and within.size:
-                scores = value[s, within] / np.maximum(counts[within].min(1), COUNT_FLOOR)
+                scores = value[s, within, None] / np.maximum(counts[within], COUNT_FLOOR)
                 best = scores.max()
                 score_g = value[s, g] / max(counts[g, goal_act[t]], COUNT_FLOOR)
                 perfect[t] = score_g >= best * (1.0 - 1e-12)

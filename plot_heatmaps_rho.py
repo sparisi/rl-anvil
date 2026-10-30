@@ -290,13 +290,12 @@ def _build_ref_data(run_cfg, mem):
     bin_centers = counter.bin_centers_raw().astype(np.float64)
     # Pseudocounts are scored at the bin centres against the goal columns. The raw
     # bin centres, placed in the goal columns of an otherwise zero observation,
-    # convert back to the counter's bin centres only when the counter bins exactly
-    # those columns.
+    # fall each in its own bin only when the counter bins exactly those columns.
     if bin_centers.shape[-1] != obs_goal.shape[-1]:
         return None
     probe = np.zeros((len(bin_centers), obs.shape[-1]))
     probe[:, goal_idx] = bin_centers
-    if not np.allclose(counter._convert_obs(probe), counter.bin_centers()):
+    if not np.array_equal(counter.bin_index(probe), np.arange(len(bin_centers))):
         return None
     return {
         "obs_goal":    obs_goal,

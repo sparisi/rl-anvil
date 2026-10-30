@@ -251,10 +251,10 @@ class BinnedCountCartPole(BinnedCount):
     """
     Counts only (pos, theta).
     High/low bounds of the observation space are actually wrong. Even though the
-    cart position in defined in [-4.8, 4.8], episodes end when the agent goes
+    cart position is defined in [-4.8, 4.8], episodes end when the agent goes
     outside of [-2.4, 2.4].
     Similarly, the angle is defined in [-24°, 24°], but episodes end when the
-    angles is outside of [-12°, 12°].
+    angle is outside of [-12°, 12°].
     https://gymnasium.farama.org/environments/classic_control/cart_pole/
     """
 

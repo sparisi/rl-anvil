@@ -370,7 +370,7 @@ class GridAggregationEncoder(nn.Module):
 
 class MSENetwork(FunctionApproximator, nn.Module):
     """
-    Its input are states and its output are Q-values for all actions.
+    Its inputs are states and its outputs are Q-values for all actions.
 
         >>> q_fun = MSENetwork(
             state_shape=(9,),
@@ -581,12 +581,18 @@ class MSENetwork(FunctionApproximator, nn.Module):
         if tau == 1.0:  # hard copy
             self.load_state_dict(source.state_dict())
         else:  # soft copy
+            # Floating-point buffers are averaged with the parameters, the others are copied.
             with torch.no_grad():
+                buffers = list(zip(self.buffers(), source.buffers()))
+                floats = [(t, s) for t, s in buffers if t.is_floating_point()]
                 torch._foreach_lerp_(
-                    list(self.parameters()),
-                    list(source.parameters()),
+                    list(self.parameters()) + [t for t, _ in floats],
+                    list(source.parameters()) + [s for _, s in floats],
                     tau,
                 )
+                for t, s in buffers:
+                    if not t.is_floating_point():
+                        t.copy_(s)
 
 
 class DuelingMSENetwork(MSENetwork):

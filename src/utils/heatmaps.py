@@ -287,8 +287,8 @@ def memory_maps(memory, env=None, env_cfg=None, fractions=(1.0,)):
 
     `memory` is anything with an "obs" array: a loaded memory.npz, or the live
     replay memory. What else it holds decides which maps come back: a "count"
-    array adds "pseudocount"; "goal_obs" and "goal_valid" add
-    "goal_selected_count"; "act" and "goal_act" beside them add
+    array adds "pseudocount"; "goal_obs" and "goal_selection" add
+    "goal_selected_count"; "has_goal", "act" and "goal_act" beside them add
     "goal_reached_count".
     Pass either a live `env` or the `env_cfg` a saved run was launched with.
     Returns None when the environment has no tabular counter."""
@@ -312,18 +312,18 @@ def memory_maps(memory, env=None, env_cfg=None, fractions=(1.0,)):
     if "count" in memory:
         entry_count = np.asarray(memory["count"]).sum(-1).astype(float)
 
-    goal_flat = goal_valid = goal_reached = None
-    if "goal_obs" in memory and "goal_valid" in memory:
-        goal_valid = np.asarray(memory["goal_valid"]).astype(bool)
+    goal_flat = goal_selection = goal_reached = None
+    if "goal_obs" in memory and "goal_selection" in memory:
+        goal_selection = np.asarray(memory["goal_selection"]).astype(bool)
         goal_flat = counter.bin_index(np.asarray(memory["goal_obs"]))
-        if "act" in memory and "goal_act" in memory:
+        if "has_goal" in memory and "act" in memory and "goal_act" in memory:
             from src.pseudocount import is_neighbor_binned
 
             # The rule the actor counts a goal reached by, in one call: the step
-            # is within a bin width of the goal and takes the action the goal
-            # names. `is_neighbor` compares element-wise, so passing the two
+            # holds a goal, is within a bin width of it and takes the action the
+            # goal names. `is_neighbor` compares element-wise, so passing the two
             # (n, obs_dim) arrays tests each step against its own goal.
-            goal_reached = is_neighbor_binned(
+            goal_reached = np.asarray(memory["has_goal"]).astype(bool) & is_neighbor_binned(
                 np.asarray(memory["obs"]), np.asarray(memory["goal_obs"]), counter
             ) & (
                 np.asarray(memory["act"]).ravel()
@@ -350,16 +350,15 @@ def memory_maps(memory, env=None, env_cfg=None, fractions=(1.0,)):
             if pseudo is not None:
                 np.maximum.at(pseudo, obs_flat[start:end], entry_count[start:end])
             if picked is not None:
-                valid = goal_valid[start:end]
                 picked += np.bincount(
-                    goal_flat[start:end][valid], minlength=n_flat
+                    goal_flat[start:end][goal_selection[start:end]], minlength=n_flat
                 )
                 if hit is not None:
                     # Counted in the goal's bin, like the selections above: the
                     # two maps answer how often a bin was aimed at and how often
                     # it was hit, so they have to count in the same place.
                     hit += np.bincount(
-                        goal_flat[start:end][valid & goal_reached[start:end]],
+                        goal_flat[start:end][goal_reached[start:end]],
                         minlength=n_flat,
                     )
             start = end

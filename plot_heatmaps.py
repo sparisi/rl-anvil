@@ -84,9 +84,9 @@ SCALE_FAMILY_KEYS = {
 # holds is left alone rather than decompressed on load.
 #
 # The goal maps are not stored and are derived: how often a bin was aimed at
-# comes from `goal_obs` and `goal_valid`, and how often it was then hit needs
-# `act` and `goal_act` beside them. Leaving any of the four out does not draw an
-# empty map, it draws no map at all.
+# comes from `goal_obs` and `goal_selection`, and how often it was then hit needs
+# `has_goal`, `act` and `goal_act` beside them. Leaving any of them out does not
+# draw an empty map, it draws no map at all.
 NEEDED_MEM_KEYS = {"obs", "act"}
 
 # --- CLI ---

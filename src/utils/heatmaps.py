@@ -321,9 +321,10 @@ def visit_value_map(critic, counter, env, nan_mask=None):
       - a network cannot be read out at once, so it is queried at every pair of
         bin centres, which only `counter` knows. Its goals are states already
         (`critic(obs, goal=...)` slices out what it needs), so only the action
-        taken is reduced away.
+        taken is reduced away. Bin centres that are not the size of `env`'s
+        observations leave no grid to plot.
 
-    `env` decides the orientation only.
+    `env` also decides the orientation.
 
     `nan_mask` is true for the bins to keep and false for the ones to set to
     NaN. A cell here is a (state, goal) pair, so it is kept only where both ends
@@ -360,6 +361,10 @@ def visit_value_map(critic, counter, env, nan_mask=None):
         if not hasattr(counter, "bin_centers_raw"):
             return None
         states = counter.bin_centers_raw()
+        # A counter that bins only some observation columns has bin centres
+        # smaller than the observations the critic takes.
+        if np.prod(states.shape[1:]) != np.prod(env.observation_space.shape):
+            return None
         n, dim = states.shape
         if hasattr(critic, "eval"):
             critic.eval()

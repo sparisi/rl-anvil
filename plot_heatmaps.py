@@ -122,7 +122,7 @@ parser.add_argument(
     help="Plot config: which configurations become the rows, over which "
          "environments, and what to call them. A name without .yaml is looked for "
          "in configs/plots, or give a path; a directory is a set of configs and "
-         "every one of them is drawn.",
+         "every one of them is drawn, bar those marked `# skip`.",
 )
 parser.add_argument(
     "--progression_step",

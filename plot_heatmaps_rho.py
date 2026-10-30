@@ -67,7 +67,7 @@ from src.utils.plot import (
 from src.utils.heatmaps import (
     CBAR_SUBPLOT_SIZE, add_border, add_colorbar, arr_range as _arr_range, auto_dpi,
     cbar_groups, cbar_hspace, env_context, memory_maps, orient,
-    pooled_range, scale_funcs, scale_key, viridis_black_bad,
+    pooled_range, safe_stem, scale_funcs, scale_key, viridis_black_bad,
 )
 from src.pseudocount import robust_scale, scaled_dist2
 
@@ -275,8 +275,8 @@ def _build_ref_data(run_cfg, mem):
     """Extract the fields needed to recompute pseudocounts on this run's obs:
     (bin_centers, obs_goal, scale, n_bins, cartesian, reachable). Returns None
     for an environment whose counter is not binned and so has no bin centres to
-    score pseudocounts at, and when the bin centres are not the size of the
-    goal columns of the observations."""
+    score pseudocounts at, and when the counter does not bin exactly the goal
+    columns of the observations."""
 
     if "obs" not in mem:
         return None
@@ -288,9 +288,15 @@ def _build_ref_data(run_cfg, mem):
     obs = np.asarray(mem["obs"]).astype(np.float64)
     obs_goal = obs[..., goal_idx]
     bin_centers = counter.bin_centers_raw().astype(np.float64)
-    # Pseudocounts are scored at the bin centres against the goal columns, and a
-    # counter binning other columns has bin centres of another size.
+    # Pseudocounts are scored at the bin centres against the goal columns. The raw
+    # bin centres, placed in the goal columns of an otherwise zero observation,
+    # convert back to the counter's bin centres only when the counter bins exactly
+    # those columns.
     if bin_centers.shape[-1] != obs_goal.shape[-1]:
+        return None
+    probe = np.zeros((len(bin_centers), obs.shape[-1]))
+    probe[:, goal_idx] = bin_centers
+    if not np.allclose(counter._convert_obs(probe), counter.bin_centers()):
         return None
     return {
         "obs_goal":    obs_goal,
@@ -868,7 +874,7 @@ for config_name, config_path, plot_cfg in plot_cfgs:
             group_envs = [e for e in group_envs if e in ordered_envs]
             if not group_envs:
                 continue
-            suffix = f"{group_name}" if group_name else ""
+            suffix = f"_{group_name}" if group_name else ""
 
             for frac in FRACTIONS:
                 pct_suffix = f"_{int(round(frac * 100))}"
@@ -949,7 +955,7 @@ for config_name, config_path, plot_cfg in plot_cfgs:
                 add_colorbars(fig, axs, cell_keys, cell_ranges)
 
                 rot_suffix = "_rotated" if args.rotate else ""
-                fname = key_out / f"{suffix}{pct_suffix}{rot_suffix}.png"
+                fname = key_out / f"all{suffix}{pct_suffix}{rot_suffix}.png"
                 dpi = auto_dpi(
                     list(last_arrays.values()),
                     args.max_dpi,
@@ -1045,7 +1051,7 @@ for config_name, config_path, plot_cfg in plot_cfgs:
                 add_colorbars(fig, axs, cell_keys, cell_ranges)
 
                 rot_suffix = "_rotated" if args.rotate else ""
-                fname = key_out / f"{en}{rot_suffix}.png"
+                fname = key_out / f"{safe_stem(en)}{rot_suffix}.png"
                 dpi = auto_dpi(
                     list(step_arrays.values()),
                     args.max_dpi,

@@ -19,10 +19,10 @@ A figure each for two metrics, both a percentage of the goal selections and
 binned over the memory (`--points` bins):
 
     Unreachable Goals  the goal could not be reached from where the agent stood
-    Perfect Goals      the goal was the best pick among the tiles within reach that
-                       the agent had already put in its replay memory. `--goal_score`
-                       chooses what best means: 1 / n, a least-visited tile
-                       (default), or the actor's own V / n
+    Perfect Goals      the goal was the best pick among the (tile, action) pairs
+                       whose tile is within reach and already in the replay memory.
+                       `--goal_score` chooses what best means: 1 / n, a least-tried
+                       action of a tile (default), or the actor's own V / n
 
 Which configurations are drawn, what they are called and which environments they
 are drawn over comes from a plot config, read exactly as plot_results.py reads it,
@@ -255,13 +255,15 @@ _dist_cache: dict = {}
 
 
 def build_distances(env_cfg):
-    """(n_states, n_states) float matrix: `dist[s, g]` is the fewest steps from
-    state `s` to state `g`, and `inf` when `g` cannot be got to from `s` at all.
+    """Return `(dist, n_act)`, where `dist` is an (n_states, n_states) float
+    matrix holding in `dist[s, g]` the fewest steps from state `s` to state `g`,
+    `inf` when `g` cannot be got to from `s` at all, and `n_act` is the number of
+    actions.
 
     The transition graph is read off the environment itself -- `set_state(s)`, step
     every action, record `get_state()` -- so one-way doorways, absorbing tiles and
     any other layout quirk are captured without hard-coding the geometry. Returns
-    None for environments without a tabular `set_state` / `get_state` interface,
+    (None, None) for environments without a tabular `set_state` / `get_state` interface,
     which is what makes this metric a gridworld one.
 
     Building an environment costs seconds and many runs share one, so the result is
@@ -277,8 +279,8 @@ def build_distances(env_cfg):
     u = env.unwrapped
     try:
         if not all(hasattr(u, k) for k in ("set_state", "get_state", "grid_reachable")):
-            _dist_cache[key] = None
-            return None
+            _dist_cache[key] = (None, None)
+            return None, None
         # Action noise would make the enumeration below random. It cannot change
         # which states are reachable (a noisy action is resampled from the same
         # action set), so zeroing it out gives the same graph, deterministically.
@@ -330,8 +332,8 @@ def build_distances(env_cfg):
                     queue.append(y)
         dist[s] = d
 
-    _dist_cache[key] = dist
-    return dist
+    _dist_cache[key] = (dist, n_act)
+    return dist, n_act
 
 
 # -----------------------------------------------------------------------------
@@ -340,6 +342,7 @@ def build_distances(env_cfg):
 
 def goal_curves(
     dist,
+    n_act,
     counter,
     mem,
     warmup,
@@ -354,38 +357,43 @@ def goal_curves(
     unreachable  the goal tile could not be reached from the tile the agent was on
     perfect      the goal maximised `score_mode` among the tiles in reach
 
-    Both scores divide by `n`, how often a tile appears in `obs` strictly before the
+    A goal is a (tile, action) pair, as in the actor (src/actor.py). Both scores
+    divide by `n`, how often the pair appears in (`obs`, `act`) strictly before the
     step -- the true count these runs select on, as it stood then rather than at the
     end -- and differ in the numerator:
 
-        novelty  1 / n, so the best goal is simply a least-visited tile in reach
-        ratio    the actor's own `V / n` (src/actor.py), where V is discounted
-                 reachability: a goal `d` steps away is worth `gamma ** d`
+        novelty  1 / n, so the best goal is a least-tried action of a tile in reach
+        ratio    the actor's own `V / n`, where V is discounted reachability: a
+                 goal `d` steps away is worth `gamma ** d`
 
     Whether V is `gamma ** d` or `gamma ** (d - 1)` makes no difference -- a
     constant factor across every candidate cannot move the argmax.
 
-    The best score is taken over tiles visited more than CANDIDATE_MIN_COUNT times,
-    since goal candidates are drawn from the replay memory and a tile the agent has
-    not put there cannot be picked. The goal itself is scored whatever its own
-    count, so selecting a barely-seen tile still gets credit. `n` is floored at
-    COUNT_FLOOR the way the actor floors it. A goal is perfect when it ties the best
-    score available, since tiles often share it and any of them is an equally good
-    pick; an unreachable goal never is.
+    V does not depend on the goal action, so the best score over the pairs of a
+    tile is V over the count of its least-tried action. The best score is taken
+    over tiles visited more than CANDIDATE_MIN_COUNT times in total, since goal
+    candidates are drawn from the replay memory and a tile the agent has not put
+    there cannot be picked. The goal itself is scored with the count of its own
+    goal action, whatever its tile's count, so selecting a barely-seen tile still
+    gets credit. `n` is floored at COUNT_FLOOR the way the actor floors it. A goal
+    is perfect when it ties the best score available, since pairs often share it
+    and any of them is an equally good pick; an unreachable goal never is.
 
     Both metrics share the same denominator (every goal selection), so the two
     read against each other. A choice counts once however long the agent then
     acts on it, so an actor that picks a goal per episode and one that picks per
     step are both measured on the decisions they made. `per_step_selection` and
     `goal_value_check` are the actor's own flags and decide which steps those
-    are. Bins with no selection stay NaN, leaving a gap rather than reading as
-    0%."""
+    are, and a change of goal tile or goal action is a new selection. Bins with
+    no selection stay NaN, leaving a gap rather than reading as 0%."""
 
     reach = np.isfinite(dist)
     obs = mem.get("obs")
+    act = mem.get("act")
     goal_obs = mem.get("goal_obs")
+    goal_act = mem.get("goal_act")
     goal_valid = mem.get("goal_valid")
-    if obs is None or goal_obs is None or goal_valid is None:
+    if obs is None or act is None or goal_obs is None or goal_act is None or goal_valid is None:
         return None
     # Where an episode ended, so the step after it is a fresh selection. A dump
     # without them is read as one long episode, which only costs the selections
@@ -402,6 +410,8 @@ def goal_curves(
 
     state = np.asarray(counter.bin_index(obs)).reshape(size)
     goal = np.asarray(counter.bin_index(goal_obs)).reshape(size)
+    act = np.asarray(act).reshape(size).astype(np.int64)
+    goal_act = np.asarray(goal_act).reshape(size).astype(np.int64)
     carried = np.asarray(goal_valid).reshape(size, -1).astype(bool).any(axis=-1)
 
     # The steps that are a selection, which is what these rates are over: a
@@ -412,8 +422,9 @@ def goal_curves(
     # every carrying step is a choice whether or not it lands on the same tile
     # again. With the check, and without per-step selection, the actor keeps its
     # goal until something drops it: the choices are the first step of an episode
-    # and every step the goal changes under it. A step whose predecessor carried
-    # no goal is a choice either way, and so is the first step of the dump.
+    # and every step the goal tile or goal action changes under it. A step whose
+    # predecessor carried no goal is a choice either way, and so is the first step
+    # of the dump.
     if per_step_selection and not goal_value_check:
         active = carried
     else:
@@ -424,7 +435,7 @@ def goal_curves(
             # the goal is picked again there even where it is the same tile.
             starts[1:] |= done[:-1]
         changed = np.ones(size, dtype=bool)
-        changed[1:] = (goal[1:] != goal[:-1]) | ~carried[:-1]
+        changed[1:] = (goal[1:] != goal[:-1]) | (goal_act[1:] != goal_act[:-1]) | ~carried[:-1]
         active = carried & (starts | changed)
 
     unreachable = np.zeros(size, dtype=bool)
@@ -446,19 +457,19 @@ def goal_curves(
         value = reach.astype(np.float64)
 
     perfect = np.zeros(size, dtype=bool)
-    counts = np.zeros(reach.shape[0], dtype=np.float64)
+    counts = np.zeros((reach.shape[0], n_act), dtype=np.float64)
     for t in range(size):
         s = int(state[t])
         if active[t]:
             g = int(goal[t])
             within = members[row_of[s]]
-            within = within[counts[within] > CANDIDATE_MIN_COUNT]
+            within = within[counts[within].sum(1) > CANDIDATE_MIN_COUNT]
             if reach[s, g] and within.size:
-                scores = value[s, within] / np.maximum(counts[within], COUNT_FLOOR)
+                scores = value[s, within] / np.maximum(counts[within].min(1), COUNT_FLOOR)
                 best = scores.max()
-                score_g = value[s, g] / max(counts[g], COUNT_FLOOR)
+                score_g = value[s, g] / max(counts[g, goal_act[t]], COUNT_FLOOR)
                 perfect[t] = score_g >= best * (1.0 - 1e-12)
-        counts[s] += 1.0
+        counts[s, act[t]] += 1.0
 
     edges = np.linspace(warmup, size, n_points + 1).astype(int)
     flags = {"unreachable": unreachable, "perfect": perfect}
@@ -522,6 +533,7 @@ def cache_path(
         # What a rate is over. Bumped when that changes, so curves reduced under
         # the old definition are missed rather than read back.
         "denominator": "selections",
+        "counts": "state_action",
         "gamma": args.gamma,
         "score": args.goal_score,
         "min_count": CANDIDATE_MIN_COUNT,
@@ -562,7 +574,7 @@ def cache_write(path, result):
 def curves_for_file(task):
     """One dump's curves, from the cache when it is there. Returns (result, hit)."""
 
-    mem_file, env_cfg, dist, counter, warmup, n_points, per_step, value_check = task
+    mem_file, env_cfg, dist, n_act, counter, warmup, n_points, per_step, value_check = task
     path = (
         cache_path(mem_file, env_cfg, warmup, n_points, per_step, value_check)
         if cache_dir else None
@@ -575,13 +587,14 @@ def curves_for_file(task):
         with np.load(mem_file) as data:
             mem = {
                 k: data[k] for k in data.files
-                if k in ("obs", "goal_obs", "goal_valid", "term", "trunc")
+                if k in ("obs", "act", "goal_obs", "goal_act", "goal_valid", "term", "trunc")
             }
     except Exception as e:
         vprint(f"  WARNING: skipping unreadable {mem_file}: {e}")
         return None, False
     result = goal_curves(
         dist,
+        n_act,
         counter,
         mem,
         warmup,
@@ -785,7 +798,7 @@ no_counter: list = []     # runs whose environment has no transition graph to cl
 for name in needed:
     run_cfg = run_cfgs[name]
     env_cfg = run_cfg.get("environment") or {}
-    dist = build_distances(env_cfg)
+    dist, n_act = build_distances(env_cfg)
     counter = env_context(env_cfg)[0] if dist is not None else None
     if dist is None or counter is None:
         no_counter.append(name)
@@ -808,6 +821,7 @@ for name in needed:
             mem_files[name],
             env_cfg,
             dist,
+            n_act,
             counter,
             warmup,
             n_points,

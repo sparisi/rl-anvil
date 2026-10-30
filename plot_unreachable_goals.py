@@ -151,7 +151,8 @@ parser.add_argument(
     metavar="NAME",
     help="Plot config: which configurations to draw, and over which environments. "
          "A name without .yaml is looked for in configs/plots, or give a path; a "
-         "directory is a set of configs and every one of them is drawn.",
+         "directory is a set of configs and every one of them is drawn, bar those "
+         "marked `# skip`.",
 )
 parser.add_argument(
     "-o", "--output",
@@ -406,14 +407,13 @@ def goal_curves(
     # The steps that are a selection, which is what these rates are over: a
     # choice counts once, however long the agent then acts on it.
     #
-    # Which steps those are follows the actor's own two flags (see
-    # Actor.draw_action in src/actor.py). `per_step_selection` without
-    # `goal_value_check` re-selects at every step, so every carrying step is a
-    # choice whether or not it lands on the same tile again. With the check, and
-    # without per-step selection, the actor keeps its goal until something drops
-    # it: the choices are the first step of an episode and every step the goal
-    # changes under it. A step whose predecessor carried no goal is a choice
-    # either way, and so is the first step of the dump.
+    # Which steps those are follows the actor's own two flags.
+    # `per_step_selection` without `goal_value_check` re-selects at every step, so
+    # every carrying step is a choice whether or not it lands on the same tile
+    # again. With the check, and without per-step selection, the actor keeps its
+    # goal until something drops it: the choices are the first step of an episode
+    # and every step the goal changes under it. A step whose predecessor carried
+    # no goal is a choice either way, and so is the first step of the dump.
     if per_step_selection and not goal_value_check:
         active = carried
     else:
@@ -908,10 +908,11 @@ def pooled(selected, envs, metric, index):
     """One configuration's rate averaged over the environments of a group, as
     (mean, interval).
 
-    The two are averaged separately: the interval is what the seeds of an
-    environment disagreed by, averaged over environments, and not the spread
-    between environments -- those differ in difficulty, not in what the
-    configuration did."""
+    The mean is the average of the per-environment means. The interval is the
+    interval of the mean of those independent estimates, sqrt(sum(h_i ** 2)) / n
+    for the n per-environment half-widths h_i. It carries what the seeds of each
+    environment disagreed by, and not the spread between environments -- those
+    differ in difficulty, not in what the configuration did."""
 
     values = []
     for env in envs:
@@ -934,7 +935,7 @@ def pooled(selected, envs, metric, index):
         return None
     return (
         float(np.mean([m for m, _ in values])),
-        float(np.mean([e for _, e in values])),
+        float(np.sqrt(np.sum([e ** 2 for _, e in values])) / len(values)),
     )
 
 

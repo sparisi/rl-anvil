@@ -27,7 +27,8 @@ Example:
 A value listed twice for one key, or equal to an earlier one (1 and 1.0), is
 run once.
 
-Note: either section MUST define `environment` and `algorithm`.
+Every configuration the sweep expands to must set `environment` and `algorithm`,
+in `global_sweep` or in its `config_sweep` entry.
 """
 
 import itertools
@@ -74,7 +75,9 @@ def load_sweep(name):
     (global_sweep, config_sweep), with missing keys defaulting to "no extra
     hyperparameters" (i.e., a single configuration with nothing swept). The file
     is read as Hydra reads config files (src.utils.id.load_yaml), and repeated
-    values of a key are dropped (unique_values).
+    values of a key are dropped (unique_values). A `config_sweep` entry that,
+    together with `global_sweep`, sets no `environment` or no `algorithm` stops
+    the program.
     """
     path = name if os.path.isfile(name) else os.path.join(SWEEP_DIR, f"{name}.yaml")
     if not os.path.isfile(path):
@@ -104,6 +107,15 @@ def load_sweep(name):
     empty += [k for entry in config_sweep for k, v in entry.items() if not v]
     if empty:
         raise SystemExit(f"Empty sweep values in {path} for: {empty}")
+    # Every configuration of an entry sets the same keys, so checking each entry
+    # with global_sweep checks every configuration.
+    for i, entry in enumerate(config_sweep):
+        for key in ("environment", "algorithm"):
+            if key not in global_sweep and key not in entry:
+                raise SystemExit(
+                    f"{path}: config_sweep entry {i} sets no `{key}`, and neither does "
+                    f"global_sweep."
+                )
     return global_sweep, config_sweep
 
 

@@ -216,8 +216,9 @@ def value_map(critic, counter, env, nan_mask=None):
     critic cannot be evaluated on it.
 
     A tabular critic hands over its whole table; a network is queried at the bin
-    centres, which only `counter` knows -- without them there is no grid to plot.
-    `env` decides the orientation only.
+    centres, which only `counter` knows -- without them, or when they are not the
+    size of `env`'s observations, there is no grid to plot. `env` also decides the
+    orientation.
 
     `nan_mask` is true for the bins to keep and false for the ones to set to
     NaN. See orient."""
@@ -240,6 +241,10 @@ def value_map(critic, counter, env, nan_mask=None):
         if not hasattr(counter, "bin_centers_raw"):
             return None
         states = counter.bin_centers_raw()
+        # A counter that bins only some observation columns has bin centres
+        # smaller than the observations the critic takes.
+        if np.prod(states.shape[1:]) != np.prod(env.observation_space.shape):
+            return None
         if hasattr(critic, "eval"):
             critic.eval()
         try:

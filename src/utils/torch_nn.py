@@ -59,9 +59,10 @@ class LinearN(nn.Module):
 
 class Aggregation(nn.Module):
     """
-    Concatenates statistics along the aggregation dimension.
+    Computes statistics along the layers axis, concatenates them, and flattens them with the
+    features axis.
 
-    Default shape: (..., num_layers, out_features) → (..., num_stats * out_features).
+    Shape: (..., num_layers, out_features) → (..., num_stats * out_features).
 
     Supported stats:
         - "raw" (concatenates all features, no operation)
@@ -78,10 +79,9 @@ class Aggregation(nn.Module):
         Principal Neighbourhood Aggregation (Corso et al., 2020).
     """
 
-    def __init__(self, stats, dim=-2, **kwargs):
+    def __init__(self, stats, **kwargs):
         super().__init__()
         self.stats = stats
-        self.dim = dim
 
     def forward(self, x):
         outputs = []
@@ -90,21 +90,19 @@ class Aggregation(nn.Module):
             if stat == "raw":
                 outputs.append(x)
             elif stat == "mean":
-                outputs.append(x.mean(dim=self.dim, keepdim=True))
+                outputs.append(x.mean(dim=-2, keepdim=True))
             elif stat == "prod":
-                outputs.append(x.prod(dim=self.dim, keepdim=True))
+                outputs.append(x.prod(dim=-2, keepdim=True))
             elif stat == "max":
-                outputs.append(x.amax(dim=self.dim, keepdim=True))
+                outputs.append(x.amax(dim=-2, keepdim=True))
             elif stat == "min":
-                outputs.append(x.amin(dim=self.dim, keepdim=True))
+                outputs.append(x.amin(dim=-2, keepdim=True))
             elif stat == "std":
-                outputs.append(x.std(dim=self.dim, keepdim=True, unbiased=False))
+                outputs.append(x.std(dim=-2, keepdim=True, unbiased=False))
             else:
                 raise ValueError(f"Unknown statistic: {stat}")
 
-        return torch.cat(outputs, dim=self.dim).flatten(
-            start_dim=self.dim, end_dim=self.dim + 1
-        )
+        return torch.cat(outputs, dim=-2).flatten(start_dim=-2)
 
 
 class FuzzyTileActivation(nn.Module):

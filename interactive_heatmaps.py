@@ -45,7 +45,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.utils.id import read_run_cfg
+from src.utils.id import flatten_cfg, read_run_cfg
+from src.utils.matching import assign_configs, load_config_group, value_str
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     ALGO,
@@ -55,17 +56,13 @@ from src.utils.plot import (
     SweepLayout,
     add_config_group_args,
     apply_filters,
-    assign_configs,
     declared_environments,
-    flatten_cfg,
     html_page,
     hyperparameter_to_label,
     keep_composed_runs,
     keep_declared_environments,
-    load_config_group,
     memory_fractions,
     swept_keys,
-    value_str,
     iter_cells,
     label_of,
     values_of,

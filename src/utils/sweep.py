@@ -34,6 +34,7 @@ import itertools
 import os
 import re
 import string
+from functools import lru_cache
 
 from hydra.core.override_parser.overrides_parser import OverridesParser
 
@@ -120,19 +121,18 @@ def expand_sweep(global_sweep, config_sweep):
             yield dict(zip(keys, combo))
 
 
+@lru_cache(maxsize=None)
 def config_groups():
     """Keys that select a Hydra config GROUP (configs/<key>/<value>.yaml) rather
     than a config value, read from the directories under CONFIG_DIR so that a
-    new group never has to be registered here by hand."""
+    new group never has to be registered here by hand. CONFIG_DIR is scanned on
+    the first call, and later calls return the cached tuple."""
     try:
         return tuple(
             sorted(entry.name for entry in os.scandir(CONFIG_DIR) if entry.is_dir())
         )
     except OSError:
         raise SystemExit(f"Cannot list config groups in {CONFIG_DIR}")
-
-
-CONFIG_GROUPS = config_groups()
 
 # Characters Hydra's override grammar accepts unquoted.
 _UNQUOTED_CHARS = frozenset(string.ascii_letters + string.digits + "_-./+@:")
@@ -166,7 +166,7 @@ def _quote(text):
 def format_override(key, value):
     """Render one Hydra override as a single argv token.
 
-    Keys in CONFIG_GROUPS are rendered bare (`environment=gymnasium/lunar_lander`),
+    Keys in config_groups() are rendered bare (`environment=gymnasium/lunar_lander`),
     everything else as a forced override (`++agent.critic.lr=0.1`).
 
     Hydra's override grammar reads a bare `None` as the string "None", not
@@ -179,9 +179,9 @@ def format_override(key, value):
 
     A null renders as `null` and reaches cfg.yaml as None. By the time the
     analysis side reads that back it is indistinguishable from a key the run
-    never recorded, which is why src.utils.plot.is_null treats the two as one
+    never recorded, which is why src.utils.matching.is_null treats the two as one
     value -- see that module's docstring. Anything comparing a sweep-declared
-    value against recorded data must go through plot.select_rows.
+    value against recorded data must go through matching.select_rows.
 
     What this renders feeds compose_cfg, whose output is hashed into the
     config_id. Rendering only has to preserve the VALUE Hydra parses: quoting
@@ -201,4 +201,4 @@ def format_override(key, value):
             if not isinstance(v, str) or _reads_back(text):
                 return text
         return _quote(text)
-    return f"{'' if key in CONFIG_GROUPS else '++'}{key}={fmt(value)}"
+    return f"{'' if key in config_groups() else '++'}{key}={fmt(value)}"

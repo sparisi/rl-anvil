@@ -16,7 +16,6 @@ from src.actor import Actor
 from src.critic import Critic
 import src.replay_memory
 from src.utils.misc import (
-    cantor_pairing,
     format_dict_row,
     atomic_open,
     random_argmax,
@@ -309,9 +308,11 @@ class Experiment:
             self._disc_ret_test_buf = np.zeros(self._testing_episodes)
             self._undisc_ret_test_buf = np.zeros(self._testing_episodes)
             self._done_test_buf = np.zeros(self._testing_episodes, dtype=bool)
+            # The test seeds are fixed per experiment: every call to test() resets
+            # the test episodes with the same seeds.
+            seed_seq = np.random.SeedSequence([self._rng_seed, 1])
             self._seed_test = [
-                cantor_pairing(self._rng_seed, ep)
-                for ep in range(self._testing_episodes)
+                int(s) for s in seed_seq.generate_state(self._testing_episodes)
             ]
 
         # The train return reported at each checkpoint is the mean over the last
@@ -392,7 +393,7 @@ class Experiment:
             training_time = time.time() - self._start_time
             os.makedirs(self._data_dir, exist_ok=True)
             # The memory is written before data.npz, and both atomically
-            # (atomic_open): data.npz marks the seed as done, so it exists only
+            # (atomic_open): data.npz marks the run as done, so it exists only
             # once everything the run saves is complete.
             if self._save_memory:
                 # First, save any unsaved data since the last memory wrap.
@@ -455,13 +456,16 @@ class Experiment:
             while self._tot_steps < self._training_steps:
 
                 # Episode reset
-                ep_seed = cantor_pairing(self._rng_seed, self._tot_episodes)
-                actor_rng = self._actor.rng_generator(seed=ep_seed)
-                critic_rng = self._critic.rng_generator(seed=ep_seed)
+                # Seeding depends on the current episode, so every reset changes
+                # the seeds; environment, actor and critic each get their own seed.
+                seed_seq = np.random.SeedSequence([self._rng_seed, 0, self._tot_episodes])
+                env_seed, actor_seed, critic_seed = (int(s) for s in seed_seq.generate_state(3))
+                actor_rng = self._actor.rng_generator(seed=actor_seed)
+                critic_rng = self._critic.rng_generator(seed=critic_seed)
 
-                obs, info = self._env_train.reset(seed=ep_seed)
+                obs, info = self._env_train.reset(seed=env_seed)
                 self._actor.reset_episode(
-                    seed=ep_seed,
+                    seed=actor_seed,
                     rng_generator=actor_rng,
                     obs=obs,
                 )

@@ -376,7 +376,7 @@ class QVisitNetwork(QNetwork):
     This critic also learns Q-functions based on the successor representation, to
     approximate first time visitation of state-action pairs.
     These are often called S-functions or W-functions in the RL literature. Here,
-    they are they are called Q-visit.
+    they are called Q-visit.
     """
 
     def __init__(
@@ -412,7 +412,8 @@ class QVisitNetwork(QNetwork):
         self.q_visit_target = getattr(src.approximator, approximator_visit.id)(
             goal_shape, obs_space.shape, act_space.n, **approximator_visit, seed=seed,
         )
-        self.q_visit_target.eval()
+        # As with q_target, the target network runs in the same mode of the main
+        # network, so dropout (if any) is active in both.
         QVisitNetwork.reset(self, seed=seed)
 
     def __call__(self, obs, act=None, goal=None, target=False, **kwargs):
@@ -567,8 +568,8 @@ class QVisitNetwork(QNetwork):
         }
 
     def post_step(self, obs, act, *args, **kwargs):
-        # lr_visit steps here, not in post_update, because on this branch every
-        # schedule runs on the environment-step clock (see QCritic.post_step).
+        # lr_visit steps here, not in post_update, because every schedule runs on
+        # the environment-step clock (see QCritic.post_step).
         QNetwork.post_step(self, obs, act, *args, **kwargs)
         self.lr_visit.step()
 
@@ -583,10 +584,12 @@ class QVisitNetwork(QNetwork):
     def train(self):
         QNetwork.train(self)
         self.q_visit.train()
+        self.q_visit_target.train()
 
     def eval(self):
         QNetwork.eval(self)
         self.q_visit.eval()
+        self.q_visit_target.eval()
 
     def copy_from(self, source):
         QNetwork.copy_from(self, source)
@@ -608,10 +611,13 @@ class QEnsemble(Critic):
 
     Each Qt_k is updated from its main Q_k.
     Each call to update() trains one member Q_i, chosen at random, on its own
-    mini-batch. Its TD target is computed with a target network Qt_k chosen at
-    random from the ensemble, i.e.,
+    mini-batch. Its TD targets are computed with the target networks of a member
+    k chosen at random from the ensemble, i.e.,
 
         Q_i(s_t, a_t) target: r + γ max_a Qt_k(s_{t+1}, a) with i, k random
+
+    and, for members that learn a visit Q-function, its target uses Qt_visit_k
+    in the same way.
 
     The attribute "aggregation" determines how the ensemble aggregates the values
     of the critics:
@@ -680,19 +686,24 @@ class QEnsemble(Critic):
         if rng_generator is None:
             rng_generator = self.rng_generator()
 
-        # Randomly assign each critic a target network from the ensemble
-        original_targets = [c.q_target for c in self.critics]
+        # Randomly assign each critic the target networks of a member of the
+        # ensemble, for the extrinsic Q-function and, when the members learn
+        # one, the visit Q-function.
+        target_names = [n for n in ("q_target", "q_visit_target") if hasattr(self.critics[0], n)]
+        original_targets = {n: [getattr(c, n) for c in self.critics] for n in target_names}
         assigned = rng_generator.integers(self.n_critics, size=self.n_critics)
-        for i, critic in enumerate(self.critics):
-            critic.q_target = original_targets[assigned[i]]
+        for n in target_names:
+            for i, critic in enumerate(self.critics):
+                setattr(critic, n, original_targets[n][assigned[i]])
 
         # Update one random critic
         i = rng_generator.integers(self.n_critics)
         stats = self.critics[i].update(replay_memory, rng_generator=rng_generator, **kwargs)
 
         # Revert assigned target networks
-        for i, critic in enumerate(self.critics):
-            critic.q_target = original_targets[i]
+        for n in target_names:
+            for i, critic in enumerate(self.critics):
+                setattr(critic, n, original_targets[n][i])
 
         return stats
 

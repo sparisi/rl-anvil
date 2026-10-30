@@ -59,6 +59,7 @@ Example
 import argparse
 import itertools
 import os
+import re
 import sys
 from ast import literal_eval
 from dataclasses import dataclass, field
@@ -1431,13 +1432,14 @@ def draw_config(config_name, cfg):
 
 
 def tex_escape(text):
-    """A display label as LaTeX: `_`, `&`, `%` and `#` are escaped, and `$` is
-    left as it is."""
+    """A display label as LaTeX: `_`, `&`, `%` and `#` outside `$...$` are
+    escaped unless a backslash already precedes them. Text between two
+    unescaped `$` is left as it is."""
 
-    text = str(text)
-    for char in "_&%#":
-        text = text.replace(char, "\\" + char)
-    return text
+    parts = re.split(r"(?<!\\)\$", str(text))
+    for i in range(0, len(parts), 2):
+        parts[i] = re.sub(r"(?<!\\)([_&%#])", r"\\\1", parts[i])
+    return "$".join(parts)
 
 
 def write_table(drawing):

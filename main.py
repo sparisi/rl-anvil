@@ -7,7 +7,6 @@ import os
 from functools import partial
 from rich import print
 import wandb
-import numpy as np
 
 from src.utils.id import prepare_run
 from src.wrappers import gym_wrappers
@@ -18,6 +17,11 @@ import src.replay_memory
 
 
 def _run(cfg: DictConfig) -> None:
+    # Checked before prepare_run writes the seed folder.
+    rng_seed = cfg.experiment.rng_seed
+    if rng_seed < 0:
+        raise ValueError(f"experiment.rng_seed must be a non-negative integer, got {rng_seed}")
+
     try:
         git_hash = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -94,7 +98,7 @@ def _run(cfg: DictConfig) -> None:
     ).run()
 
 
-# Wrap _run() to raise only errors relevant the the run, and skip Hydra stacks.
+# Wrap _run() to raise only errors relevant to the run, and skip Hydra stacks.
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def run(cfg: DictConfig) -> None:
     try:

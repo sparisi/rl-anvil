@@ -59,6 +59,7 @@ Example
 import argparse
 import itertools
 import os
+import re
 import sys
 from ast import literal_eval
 from dataclasses import dataclass, field
@@ -87,6 +88,7 @@ from src.utils.misc import make_vprint, warn_once
 from src.utils.plot import (
     PLOT_CONFIG_DIR,
     SEED,
+    STEPS_STAT,
     TIME,
     add_config_group_args,
     area_over_span,
@@ -140,7 +142,8 @@ parser.add_argument(
     metavar="NAME",
     help=f"Plot config: which configurations to draw, and over which environments. "
          f"A name without .yaml is looked for in {PLOT_CONFIG_DIR}, or give a path; "
-         f"a directory is a set of configs and every one of them is drawn.",
+         f"a directory is a set of configs and every one of them is drawn, bar "
+         f"those marked `# skip`.",
 )
 parser.add_argument(
     "-o", "--output",
@@ -288,7 +291,8 @@ algo_configs = load_config_group(args.algorithms) if args.algorithms else {}
 _assigned: dict = {}
 
 
-stats_found = sorted({c[1] for c in df.columns if c[0] == "statistic"})
+# `steps` is the x axis of every curve, not a statistic to draw.
+stats_found = sorted({c[1] for c in df.columns if c[0] == "statistic" and c != STEPS_STAT})
 
 ensure_font()
 sns.set_context("paper")
@@ -854,7 +858,7 @@ def draw_config(config_name, cfg):
     # order it writes them; --stats narrows that further. Without either,
     # everything the data holds -- which is a lot of it that is not a curve.
     wanted = list(args.stats) or list(stat_labels) or stats_found
-    missing = [s for s in wanted if s not in stats_found]
+    missing = [s for s in wanted if s not in stats_found and s != STEPS_STAT[1]]
     if missing:
         print(f"WARNING: {config_name} asks for statistics not in the data: {missing}")
     stats = [s for s in wanted if s in stats_found]
@@ -1431,13 +1435,14 @@ def draw_config(config_name, cfg):
 
 
 def tex_escape(text):
-    """A display label as LaTeX: `_`, `&`, `%` and `#` are escaped, and `$` is
-    left as it is."""
+    """A display label as LaTeX: `_`, `&`, `%` and `#` outside `$...$` are
+    escaped unless a backslash already precedes them. Text between two
+    unescaped `$` is left as it is."""
 
-    text = str(text)
-    for char in "_&%#":
-        text = text.replace(char, "\\" + char)
-    return text
+    parts = re.split(r"(?<!\\)\$", str(text))
+    for i in range(0, len(parts), 2):
+        parts[i] = re.sub(r"(?<!\\)([_&%#])", r"\\\1", parts[i])
+    return "$".join(parts)
 
 
 def write_table(drawing):

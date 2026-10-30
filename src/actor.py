@@ -1,4 +1,3 @@
-import warnings
 import numpy as np
 from abc import ABC, abstractmethod
 from omegaconf import DictConfig
@@ -338,6 +337,12 @@ class GoalConditioned(EpsilonGreedy):
     def _goal_reached_check(self, obs, act, replay_memory):
         if self.goal is None:
             return False
+
+        if replay_memory.counter is None:
+            raise ValueError(
+                "The goal-reached check needs the environment's binned counter, but "
+                "this environment has none."
+            )
 
         # The goal is reached if |s_t - g_t| < η, where η is the bin width of true counts.
         # this is equivalent to using an oracle, aligned with how GCRL environments are implemented.

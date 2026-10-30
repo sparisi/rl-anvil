@@ -2,8 +2,6 @@ import numpy as np
 from abc import ABC, abstractmethod
 import torch
 from torch import nn
-import torch.nn.functional as F
-from torch.nn import Linear
 
 import src.utils.torch_nn
 from src.utils.torch_nn import (
@@ -137,7 +135,7 @@ class Table(FunctionApproximator):
         self._table = source._table.copy()
 
     def randomize(self, rng_generator, std: float = 1.0):
-        self._table += rng_generator.normal(*self._table.shape) * std
+        self._table += rng_generator.normal(size=self._table.shape) * std
 
 
 class CountTable(Table):
@@ -372,7 +370,7 @@ class GridAggregationEncoder(nn.Module):
 
 class MSENetwork(FunctionApproximator, nn.Module):
     """
-    Its input are states and its output are Q-values for all actions.
+    Its inputs are states and its outputs are Q-values for all actions.
 
         >>> q_fun = MSENetwork(
             state_shape=(9,),
@@ -383,6 +381,9 @@ class MSENetwork(FunctionApproximator, nn.Module):
             lrate=0.001,
             optimizer_id="Adam",
             loss="mse_loss",
+            bias=False,
+            maxout_layers=4,
+            dropout_p=0.1,
             max_grad_norm=1.0,
             device="cpu",
             seed=42,
@@ -500,7 +501,7 @@ class MSENetwork(FunctionApproximator, nn.Module):
         if self._max_grad_norm is None:
             gradient_norm = torch.nn.utils.get_total_norm(
                 [p.grad for p in self.parameters() if p.grad is not None]
-            )
+            ).item()
         else:
             gradient_norm = torch.nn.utils.clip_grad_norm_(self.parameters(), self._max_grad_norm).item()
         self._optimizer.step()
@@ -580,12 +581,18 @@ class MSENetwork(FunctionApproximator, nn.Module):
         if tau == 1.0:  # hard copy
             self.load_state_dict(source.state_dict())
         else:  # soft copy
+            # Floating-point buffers are averaged with the parameters, the others are copied.
             with torch.no_grad():
+                buffers = list(zip(self.buffers(), source.buffers()))
+                floats = [(t, s) for t, s in buffers if t.is_floating_point()]
                 torch._foreach_lerp_(
-                    list(self.parameters()),
-                    list(source.parameters()),
+                    list(self.parameters()) + [t for t, _ in floats],
+                    list(source.parameters()) + [s for _, s in floats],
                     tau,
                 )
+                for t, s in buffers:
+                    if not t.is_floating_point():
+                        t.copy_(s)
 
 
 class DuelingMSENetwork(MSENetwork):

@@ -5,7 +5,9 @@ grid: one stacked block per `config_sweep` entry, and subplots
 inside a block for the hyperparameters the sweep declares. What fills a cell is
 the difference. interactive_curves.py draws a curve per `global_sweep`
 combination, averaged over seeds; here a cell is one heatmap of one run, so there
-are no curves at all and every declared hyperparameter becomes an axis.
+are no curves at all and every declared hyperparameter becomes an axis. The page
+loads Vega, Vega-Lite and Vega-Embed from a CDN, so opening it needs internet
+access.
 
 Seeds are not averaged, so every seed is read and one is shown at a time, chosen
 from a dropdown. --rng_seed cuts the dropdown down to the seeds it names.

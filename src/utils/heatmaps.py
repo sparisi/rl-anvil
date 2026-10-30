@@ -19,6 +19,7 @@ Cartesian while an image's are not.
 
 import contextlib
 import json
+import re
 import sys
 import warnings
 
@@ -59,6 +60,14 @@ def add_border(ax, lw=1.5):
         spine.set_visible(True)
         spine.set_color("black")
         spine.set_linewidth(lw)
+
+
+def safe_stem(name):
+    """Return `name` as a filename, with every run of characters other than
+    letters, digits, `_`, `.`, `=`, `+` and `-` replaced by one `_` and leading
+    and trailing `_` stripped. Return "unnamed" when nothing is left."""
+
+    return re.sub(r"[^\w.=+-]+", "_", str(name)).strip("_") or "unnamed"
 
 
 # ----- Counters ---------------------------------------------------------------
@@ -234,8 +243,9 @@ def value_map(critic, counter, env, nan_mask=None):
     critic cannot be evaluated on it.
 
     A tabular critic hands over its whole table; a network is queried at the bin
-    centres, which only `counter` knows -- without them there is no grid to plot.
-    `env` decides the orientation only.
+    centres, which only `counter` knows -- without them, or when they are not the
+    size of `env`'s observations, there is no grid to plot. `env` also decides the
+    orientation.
 
     `nan_mask` is true for the bins to keep and false for the ones to set to
     NaN. See orient."""
@@ -258,6 +268,10 @@ def value_map(critic, counter, env, nan_mask=None):
         if not hasattr(counter, "bin_centers_raw"):
             return None
         states = counter.bin_centers_raw()
+        # A counter that bins only some observation columns has bin centres
+        # smaller than the observations the critic takes.
+        if np.prod(states.shape[1:]) != np.prod(env.observation_space.shape):
+            return None
         if hasattr(critic, "eval"):
             critic.eval()
         try:
@@ -316,9 +330,10 @@ def visit_value_map(critic, counter, env, nan_mask=None):
       - a network cannot be read out at once, so it is queried at every pair of
         bin centres, which only `counter` knows. Its goals are states already
         (`critic(obs, goal=...)` slices out what it needs), so only the action
-        taken is reduced away.
+        taken is reduced away. Bin centres that are not the size of `env`'s
+        observations leave no grid to plot.
 
-    `env` decides the orientation only.
+    `env` also decides the orientation.
 
     `nan_mask` is true for the bins to keep and false for the ones to set to
     NaN. A cell here is a (state, goal) pair, so it is kept only where both ends
@@ -355,6 +370,10 @@ def visit_value_map(critic, counter, env, nan_mask=None):
         if not hasattr(counter, "bin_centers_raw"):
             return None
         states = counter.bin_centers_raw()
+        # A counter that bins only some observation columns has bin centres
+        # smaller than the observations the critic takes.
+        if np.prod(states.shape[1:]) != np.prod(env.observation_space.shape):
+            return None
         n, dim = states.shape
         if hasattr(critic, "eval"):
             critic.eval()
@@ -452,10 +471,9 @@ def memory_maps(memory, env=None, env_cfg=None, fractions=(1.0,)):
 
     # The prefixes are nested, so each one is the one before it plus the entries
     # in between. Walked in increasing order and accumulated, every entry is
-    # counted once across all the fractions rather than once per fraction --
-    # the same saving pseudocount_prefixes makes over calling pseudocount per
-    # (radius, prefix). `np.maximum.at` is the slowest of the counts and gains
-    # the most: it runs over each entry once instead of over every prefix.
+    # counted once across all the fractions rather than once per fraction.
+    # `np.maximum.at` is the slowest of the counts and gains the most: it runs
+    # over each entry once instead of over every prefix.
     prefixes = [max(1, int(round(size * fraction))) for fraction in fractions]
     visit   = np.zeros(n_flat, dtype=np.int64)
     pseudo  = np.zeros(n_flat, dtype=float) if entry_count is not None else None
@@ -633,9 +651,9 @@ def fmt_tick(v):
 
 
 def cbar_groups(cell_keys, cell_ranges):
-    """{(row, col): key} and {(row, col): (vmin, vmax)} -> [((vmin, vmax), cells)],
-    one entry per set of cells that was drawn on a shared range -- that is, one
-    entry per colour bar.
+    """Group the cells drawn on a shared colour range, one group per colour bar,
+    and return [((vmin, vmax), cells)]. The inputs are {(row, col): key} and
+    {(row, col): (vmin, vmax)}.
 
     A cell with no range never held a map, so it joins no set, and a key whose
     every cell was empty drops out rather than captioning blank panels."""

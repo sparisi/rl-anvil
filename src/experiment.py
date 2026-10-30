@@ -233,7 +233,7 @@ class Experiment:
             git_hash (str): commit the run was launched from, and
             slurm_job_id (str): the SLURM job that ran it. Both are recorded per
                 seed in the .npz rather than in cfg.yaml, which every seed of a
-                run_id shares -- see `self._run_meta`,
+                config_id shares -- see `self._run_meta`,
         """
 
         self._env_train = env_train
@@ -256,7 +256,7 @@ class Experiment:
             self._log_frequency = max(training_steps // max(testing_points, 1), 1)
 
         # Step at which the next checkpoint is due (first is step 0).
-        #A threshold, not an exact `% log_frequency`, which would only fire on
+        # A threshold, not an exact `% log_frequency`, which would only fire on
         # steps that are a multiple of both this and update_frequency -- sometimes never.
         self._next_checkpoint = 0
 
@@ -266,7 +266,9 @@ class Experiment:
         self._save_videos = save_videos
         self._save_heatmaps = save_heatmaps
 
-        # Used for debugging
+        # The environment's tabular counters, None when it has none. The critic's
+        # gives the true counts for the exploration statistics and the heatmaps;
+        # an actor that selects goals gets two more, for goal selections and hits.
         self._critic.visit_count = tabular_count(self._env_train)
         if hasattr(self._actor, "goal_selected_count"):
             self._actor.goal_selected_count = tabular_count(self._env_train)
@@ -409,7 +411,9 @@ class Experiment:
                     f,
                     time=training_time,
                     **self._data,
-                    **self._run_meta,
+                    # np.savez stores None as an object array, which np.load
+                    # refuses without allow_pickle.
+                    **{k: v for k, v in self._run_meta.items() if v is not None},
                 )
         # TODO save models as well, and call this in checkpoint
 
@@ -537,7 +541,7 @@ class Experiment:
                     mem_ready = self._replay_memory.is_ready
                     time_to_update = self._tot_steps % self._update_frequency == 0
 
-                    # Start the clock when the first time the memory is ready.
+                    # Start the clock the first time the memory is ready.
                     if mem_ready and self._t_last_ckpt is None:
                         self._t_last_ckpt = time.perf_counter()
                         self._steps_last_ckpt = self._tot_steps
@@ -780,7 +784,7 @@ class Experiment:
         ep_done.fill(False)
         ep_seed = self._seed_test
         test_rng = self._critic_test.rng_generator(seed=self._rng_seed)
-        obs, _ = self._env_test.reset(seed=ep_seed)  # ep_sees is fixed per experiment.rng_seed
+        obs, _ = self._env_test.reset(seed=ep_seed)  # ep_seed is fixed per experiment.rng_seed
 
         if self._save_videos and self._data_dir is not None:
             import cv2

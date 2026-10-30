@@ -2,9 +2,8 @@
 
 The root is found by walking up until the marker file appears, NOT by counting
 directories with `parents[n]` or chained `os.path.dirname`. A counted depth is
-silently wrong the moment a module moves (src/sweep_utils.py -> src/utils/sweep.py
-already broke it twice), and the failure is a config that cannot be found rather
-than an error pointing at the cause.
+silently wrong the moment a module moves, and the failure is a config that cannot
+be found rather than an error pointing at the cause.
 """
 
 from pathlib import Path

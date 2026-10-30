@@ -134,7 +134,7 @@ def load_seeds(dirpath: str, dict_cfg_flat: dict) -> tuple:
         (
             entry
             for entry in os.listdir(dirpath)
-            if re.fullmatch(r"-?\d+", entry)
+            if re.fullmatch(r"\d+", entry)
             and os.path.isdir(os.path.join(dirpath, entry))
         ),
         key=int,
@@ -421,6 +421,11 @@ def process_data_folders(
         )
 
         if not part_paths:
+            if n_skipped:
+                raise FileNotFoundError(
+                    f"No readable data.npz under '{data_dir}': {n_skipped} folder(s) "
+                    f"were skipped (listed above with -v)."
+                )
             raise FileNotFoundError(
                 f"No .npz data found in the specified structure under '{data_dir}'."
             )
@@ -464,10 +469,10 @@ def process_data_folders(
             if stat_cols:
                 stat_line = f"Statistics: {stat_cols}"
 
-            # value_str renders every null spelling alike and integral floats as
-            # ints, as the plotting scripts compare values.
             seeds_of_folder = {cfg_flats[d][CFG_DIR_COL]: set(s) for d, s in seeds_of.items()}
             hyp_cols = [c for c in cfg_df.columns if c[0] == "hyperparameter"]
+            # value_str renders every null spelling alike and integral floats as
+            # ints, as the plotting scripts compare values.
             hyp_strs = {c: cfg_df[c].map(value_str) for c in hyp_cols}
             varying_hyp = sorted(
                 [c for c in hyp_cols if hyp_strs[c].nunique() > 1],

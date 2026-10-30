@@ -33,9 +33,9 @@ class MultiProgressBar:
     ...
     >>> def worker(pbar, bar_id, steps, delay):
     ...     for i in range(steps + 1):
-    ...     pbar.update(bar_id, i)
-    ...     pbar.set_stats({"loss": 0.1234, "updates": i, "clipped": True})
-    ...     time.sleep(delay)
+    ...         pbar.update(bar_id, i)
+    ...         pbar.set_stats({"loss": 0.1234, "updates": i, "clipped": True})
+    ...         time.sleep(delay)
     ...
     >>> mpb = MultiProgressBar()
     >>> mpb.add_task("train", 50)

@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from omegaconf import DictConfig
 
 from src.utils.misc import random_argmax, random_choice
+import src.approximator
 import src.parameter
 from src.critic import Critic
 
@@ -28,14 +29,41 @@ def resmax(x: np.array, eps: float = 1.0, axis: int = -1):
 
 
 class Actor(ABC):
-    def __init__(self, critic: Critic, seed: int = None):
+    def __init__(
+        self,
+        critic: Critic,
+        pi: DictConfig = None,
+        seed: int = None,
+        **kwargs,
+    ):
+        """
+        Args:
+            critic (Critic): the critic,
+            pi (DictConfig): configuration to initialize the actor's own approximator
+                (e.g., a neural network). The actor acts on its outputs, and
+                `update` trains it with the critic's output (e.g., as in PPO).
+                If None, the actor acts on the estimates of the critic directly
+                (as in DQN), and `update` does nothing,
+            seed (int): seed to initialize the network for reproducibility,
+        """
+
         self._critic = critic
         self._train = True
+        self.pi = None
+        if pi is not None:
+            self.pi = getattr(src.approximator, pi.id)(
+                critic.obs_shape,
+                critic.n_actions,
+                **pi,
+                seed=seed,
+            )
         self.reset(seed=seed)
 
     def __call__(self, obs, rng_generator, **kwargs):
         """
-        Draw one action in one state. Not vectorized.
+        Draw one action in one state. Not vectorized in training mode, when
+        the action comes from `explore`. In evaluation mode, the action comes
+        from `greedy`, which is vectorized.
         """
 
         if self._train:
@@ -43,7 +71,26 @@ class Actor(ABC):
             self._critic.eval()
             return self.explore(obs, rng_generator, **kwargs)
         else:
-            return random_argmax(self._critic(obs), rng_generator, axis=-1)
+            return self.greedy(obs, rng_generator, **kwargs)
+
+    def _values(self, obs):
+        """
+        Return the values the actor acts on: the outputs of its own network or
+        the estimates of the critic. If normalization is enabled in the critic,
+        observations are normalized.
+        """
+
+        if self.pi is None:
+            return self._critic(obs)  # calls self._critic._normalize_obs
+        self.pi.eval()
+        return self.pi(self._critic._normalize_obs(obs))
+
+    def greedy(self, obs, rng_generator, **kwargs):
+        """
+        Return the greedy action. Vectorized.
+        """
+
+        return random_argmax(self._values(obs), rng_generator, axis=-1)
 
     @abstractmethod
     def explore(self, obs, rng_generator, **kwargs):
@@ -56,6 +103,32 @@ class Actor(ABC):
     def rng_generator(self, seed=None):
         return np.random.default_rng(seed=seed)
 
+    def update(self, replay_memory, rng_generator=None, **kwargs):
+        """
+        Train the actor's own network with the advantages of the critic on the
+        transitions collected since the last update (OnlineMemory), and return
+        a dictionary of statistics. Without a network, it does nothing and
+        returns an empty dictionary.
+        The network update assumes that the transitions were sampled from the
+        policy of the network, as Softmax does with eps = 1 and a PolicyNetwork.
+        """
+
+        if self.pi is None:
+            return {}
+
+        batch = replay_memory.get()
+        _, advantages = self._critic.returns_and_advantages(batch)
+
+        # Every transition is a sample for the minibatches.
+        n = advantages.size
+        obs = self._critic._normalize_obs(batch["obs"])
+        return self.pi.update(
+            obs.reshape(n, *obs.shape[2:]),
+            batch["act"].reshape(n),
+            advantages.reshape(n),
+            rng_generator=rng_generator,
+        )
+
     def post_update(self, *args, **kwargs):
         pass
 
@@ -64,6 +137,8 @@ class Actor(ABC):
 
     def reset(self, seed=None):
         self.t = 0
+        if self.pi is not None:
+            self.pi.reset(seed=seed)
 
     def eval(self):
         self._train = False
@@ -75,19 +150,20 @@ class Actor(ABC):
         self.t = source.t
         self._train = source._train
         self._critic.copy_from(source._critic)
+        if self.pi is not None:
+            self.pi.copy_from(source.pi)
 
 
 class EpsilonGreedy(Actor):
-    def __init__(self, critic: Critic, eps: DictConfig, **kwargs):
+    def __init__(self, *args, eps: DictConfig, **kwargs):
         """
         Args:
-            critic (Critic): the critic providing estimates of state-action values,
             eps (DictConfig): configuration to initialize the exploration coefficient
                 epsilon,
         """
 
         self._eps = getattr(src.parameter, eps.id)(**eps)
-        Actor.__init__(self, critic)
+        Actor.__init__(self, *args, **kwargs)
 
     def copy_from(self, source):
         Actor.copy_from(self, source)
@@ -98,7 +174,7 @@ class EpsilonGreedy(Actor):
             return rng_generator.integers(self._critic.n_actions)
         else:
             self._critic.eval()
-            return random_argmax(self._critic(obs), rng_generator, axis=-1)
+            return random_argmax(self._values(obs), rng_generator, axis=-1)
 
     def post_step(self, *args, **kwargs):
         self._eps.step()
@@ -112,23 +188,22 @@ class EpsilonGreedy(Actor):
 
 
 class Resmax(Actor):
-    def __init__(self, critic: Critic, eps: DictConfig, **kwargs):
+    def __init__(self, *args, eps: DictConfig, **kwargs):
         """
         Args:
-            critic (Critic): the critic providing estimates of state-action values,
             eps (DictConfig): configuration to initialize the exploration coefficient
                 epsilon,
         """
 
         self._eps = getattr(src.parameter, eps.id)(**eps)
-        Actor.__init__(self, critic)
+        Actor.__init__(self, *args, **kwargs)
 
     def copy_from(self, source):
         Actor.copy_from(self, source)
         self._eps.copy_from(source._eps)
 
     def explore(self, obs, rng_generator, **kwargs):
-        p = resmax(self._critic(obs), self._eps.value)
+        p = resmax(self._values(obs), self._eps.value)
         return random_choice(p, rng_generator, axis=-1)
 
     def post_step(self, *args, **kwargs):
@@ -143,24 +218,23 @@ class Resmax(Actor):
 
 
 class Softmax(Actor):
-    def __init__(self, critic: Critic, eps: DictConfig, **kwargs):
+    def __init__(self, *args, eps: DictConfig, **kwargs):
         """
         Args:
-            critic (Critic): the critic providing estimates of state-action values,
             eps (DictConfig): configuration to initialize the exploration coefficient
                 epsilon (eps → 0 makes the distribution greedy; eps → ∞ makes it
                 uniform; eps = 1 recovers vanilla categorical / softmax sampling),
         """
 
         self._eps = getattr(src.parameter, eps.id)(**eps)
-        Actor.__init__(self, critic)
+        Actor.__init__(self, *args, **kwargs)
 
     def copy_from(self, source):
         Actor.copy_from(self, source)
         self._eps.copy_from(source._eps)
 
     def explore(self, obs, rng_generator, **kwargs):
-        p = softmax(self._critic(obs), self._eps.value)
+        p = softmax(self._values(obs), self._eps.value)
         return random_choice(p, rng_generator, axis=-1)
 
     def post_step(self, *args, **kwargs):

@@ -137,6 +137,9 @@ class Table(FunctionApproximator):
     def randomize(self, rng_generator, std: float = 1.0):
         self._table += rng_generator.normal(size=self._table.shape) * std
 
+    def rng_generator(self, seed=None):
+        return np.random.default_rng(seed=seed)
+
 
 class CountTable(Table):
     """
@@ -605,6 +608,17 @@ class MSENetwork(FunctionApproximator, nn.Module):
 
     def soft_reset_optimizer(self, alpha: float):
         src.utils.torch_nn.soft_reset_optimizer(self._optimizer, alpha)
+
+    def randomize(self, std: float = 1.0, generator: torch.Generator = None):
+        src.utils.torch_nn.add_noise_to_parameters(self, std, generator)
+
+    def rng_generator(self, seed=None):
+        generator = torch.Generator(device=self.device)
+        if seed is None:
+            generator.seed()
+        else:
+            generator.manual_seed(seed)
+        return generator
 
     def copy_from(self, source, tau: float = 1.0):
         self._encoder_cfg = source._encoder_cfg

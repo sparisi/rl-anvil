@@ -267,11 +267,11 @@ TIMEOUTS_ENV = {
     "gymnasium/lunar_lander": 500,
     "gymnasium/lunar_lander_full": 1900,
     "gymnasium/cart_pole": 280,
-    "gymnasium/pendulum_discrete": 150,
+    "gymnasium/pendulum_discrete": 215,
     "gymnasium/acrobot": 220,
     "gymnasium/mountain_car": 300,
     "gym_gridworlds/three_rooms_wall_mini_nonuniform": 110,
-    "gym_gridworlds/four_rooms_stuck_hard": 220,
+    "gym_gridworlds/four_rooms_stuck_hard": 290,
     "gym_gridworlds/travel_field_small": 310,
 }
 
@@ -281,6 +281,8 @@ TIMEOUTS_ADJUST_ALGO = {
     "random": 0.3,
     "discover": 1.3,
     "adagoal": 1.3,
+    "sun_ratio_episodic": 0.7,
+    "sun_ucb_episodic": 0.7,
 }
 
 # Memory: `mem_mb = BASE_MEM_MB + PER_SEED_MEM_MB[env] * len(seeds_in_chunk)`.

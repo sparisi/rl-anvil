@@ -611,7 +611,8 @@ class QEnsemble(Critic):
 
     Each Qt_k is updated from its main Q_k.
     Each call to update() trains one member Q_i, chosen at random, on its own
-    mini-batch. Its TD target is computed with its own target network, i.e.,
+    mini-batch. Its TD targets are computed with its own target networks, Qt_i
+    and, for members that learn a visit Q-function, Qt_visit_i, i.e.,
 
         Q_i(s_t, a_t) target: r + γ max_a Qt_i(s_{t+1}, a) with i random
 
@@ -619,9 +620,6 @@ class QEnsemble(Critic):
     remains an independent estimate and the spread of the ensemble measures
     their disagreement, as in Bootstrapped DQN (Osband et al., 2016) and
     SUNRISE (Lee et al., 2021).
-
-    and, for members that learn a visit Q-function, its target uses Qt_visit_k
-    in the same way.
 
     The attribute "aggregation" determines how the ensemble aggregates the values
     of the critics:

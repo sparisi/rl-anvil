@@ -379,17 +379,19 @@ class MyBatchNorm1d(nn.BatchNorm1d):
 # ------------------------------------------------------------------------------
 
 def almost_zero_init(module):
-    if module.weight is not None:
-        nn.init.normal_(module.weight, mean=0.0, std=0.01)
     if module.bias is not None:
         module.bias.data.fill_(0.0)
+
+    if module.weight is not None:
+        nn.init.normal_(module.weight, mean=0.0, std=0.01)
 
 
 def xavier_init(module, activation):
-    if module.weight is not None:
-        nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain(activation))
     if module.bias is not None:
         module.bias.data.fill_(0.0)
+
+    if module.weight is not None:
+        nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain(activation))
 
 
 def sparse_init(module, sparsity, type='uniform'):
@@ -419,10 +421,11 @@ def sparse_init(module, sparsity, type='uniform'):
 # ------------------------------------------------------------------------------
 
 @torch.no_grad()
-def add_noise_to_parameters(module, std):
+def add_noise_to_parameters(module, std, generator: torch.Generator = None):
     for param in module.parameters():
         noise = torch.randn(
             param.shape,
+            generator=generator,
             device=param.device,
             dtype=param.dtype,
         ) * std

@@ -393,6 +393,24 @@ class GoalConditioned(EpsilonGreedy):
             return
         self._episode_critic_idx = int(rng_generator.integers(len(critics)))
 
+    def _values(self, obs, goal=None):
+        """
+        Return the values the actor acts on toward `goal`: the outputs of its own
+        network, or the estimates of the acting critic for the goal action. Without
+        a goal, return the values of `Actor._values`.
+        """
+
+        if goal is None:
+            return Actor._values(self, obs)
+        if self.pi is None:
+            return self._acting_critic(obs=obs, goal=goal["obs"])[..., goal["act"]]
+        self.pi.eval()
+        return self.pi(
+            self._critic._normalize_obs(obs),
+            self._critic._normalize_obs(goal["obs"])[..., self._critic.goal_idx],
+            goal["act"],
+        )
+
     def reset(self, seed=None):
         super().reset(seed=seed)
         # `_goal_used_last_step` is needed because `self.goal` is reset to None
@@ -566,9 +584,7 @@ class GoalConditioned(EpsilonGreedy):
                 if self.goal_selected_count is not None:
                     self.goal_selected_count.update(self.goal["obs"], self.goal["act"])
 
-            q_visit = self._acting_critic(obs=obs, goal=self.goal["obs"])
-
-            act = random_argmax(q_visit[..., self.goal["act"]], rng_generator, axis=-1)
+            act = random_argmax(self._values(obs, goal=self.goal), rng_generator, axis=-1)
             self._previous_was_random = False
             self._act_source_last_step = ACT_GCRL
             self._goal_selection_last_step = should_select

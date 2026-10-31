@@ -366,10 +366,14 @@ class QEnsemble(Critic):
 
     Each Qt_k is updated from its main Q_k.
     Each call to update() trains one member Q_i, chosen at random, on its own
-    mini-batch. Its TD target is computed with a target network Qt_k chosen at
-    random from the ensemble, i.e.,
+    mini-batch. Its TD target is computed with its own target network, i.e.,
 
-        Q_i(s_t, a_t) target: r + γ max_a Qt_k(s_{t+1}, a) with i, k random
+        Q_i(s_t, a_t) target: r + γ max_a Qt_i(s_{t+1}, a) with i random
+
+    Members never bootstrap from each other's target networks, so each one
+    remains an independent estimate and the spread of the ensemble measures
+    their disagreement, as in Bootstrapped DQN (Osband et al., 2016) and
+    SUNRISE (Lee et al., 2021).
 
     The attribute "aggregation" determines how the ensemble aggregates the values
     of the critics:
@@ -438,21 +442,12 @@ class QEnsemble(Critic):
         if rng_generator is None:
             rng_generator = self.rng_generator()
 
-        # Randomly assign each critic a target network from the ensemble
-        original_targets = [c.q_target for c in self.critics]
-        assigned = rng_generator.integers(self.n_critics, size=self.n_critics)
-        for i, critic in enumerate(self.critics):
-            critic.q_target = original_targets[assigned[i]]
-
-        # Update one random critic
+        # Update one random critic, with its own target network.
+        # Sharing target networks between members (e.g., randomly shuffling
+        # targets or using the min-value of all targets) would pull them toward
+        # the same function and shrink the spread of the ensemble.
         i = rng_generator.integers(self.n_critics)
-        stats = self.critics[i].update(replay_memory, rng_generator=rng_generator, **kwargs)
-
-        # Revert assigned target networks
-        for i, critic in enumerate(self.critics):
-            critic.q_target = original_targets[i]
-
-        return stats
+        return self.critics[i].update(replay_memory, rng_generator=rng_generator, **kwargs)
 
     def post_update(self):
         for c in self.critics:
@@ -490,13 +485,13 @@ class SUNRISE(QEnsemble):
 
     - UCB acting: return `mean(Q) + kappa * std(Q)` across ensemble members
       (kappa=0 recovers plain mean-Q greedy behavior).
-    - Weighted Bellman backup: pool one batch across all members; pick the
-      next-state greedy action from `mean(Q_target)` and bootstrap with
-      `min(Q_target)` (clipped double-Q).
+    - Weighted Bellman backup: pool one batch across all members; each member
+      bootstraps from its own target network (double DQN: next action from
+      Q_i, its value from Qt_i).
     - Bootstrap masks + uncertainty-weighted loss: each member sees each
       transition with probability `mask_p` (Bernoulli), and every sample is
-      re-weighted by `sigmoid(-temperature * std(max Q_target)) + 0.5` so
-      transitions the ensemble already agrees on get down-weighted.
+      re-weighted by `sigmoid(-temperature * std(max Q_target)) + 0.5`, so
+      transitions on which the target networks disagree get down-weighted.
     """
 
     def __init__(
@@ -560,40 +555,40 @@ class SUNRISE(QEnsemble):
         q_target_next_max_std = q_target_next.max(-1).std(0)  # (B, T)
         u_weights = 1.0 / (1.0 + np.exp(self.temperature.value * q_target_next_max_std)) + 0.5
 
-        # Weighted Bellman backup: action from mean, value from min (clipped double-Q)
-        q_target_next_mean = q_target_next.mean(0)  # (B, T, n_actions)
-        next_a_max = random_argmax(q_target_next_mean, rng_generator=rng_generator, axis=-1)
-        target_q_next = np.take_along_axis(
-            q_target_next.min(0), next_a_max[..., None], axis=-1,
-        ).squeeze(-1)  # (B, T)
-
-        is_next_act_greedy = None
-        if c0.lmbda > 0.0 and T > 1:
-            is_next_act_greedy = is_act_greedy(
-                q_target_next_mean[:, :-1], act[:, 1:], axis=-1,
-            )
-            trace_cut_frac = (1.0 - is_next_act_greedy).mean()
-        else:
-            trace_cut_frac = np.nan
-
-        target = td_target(
-            rwd,
-            term,
-            trunc,
-            is_next_act_greedy,
-            target_q_next,
-            c0.gamma,
-            c0.lmbda,
-        )
-
         # Bootstrap mask, shape (n_critics, B, T)
         critic_mask = (rng_generator.random((n, B, T)) < self.mask_p).astype(np.float32)
 
         base_stepsize = weights * u_weights  # (B, T)
 
-        losses, grad_norms, q_means = [], [], []
+        losses, grad_norms, q_means, trace_cut_fracs = [], [], [], []
         for i, c in enumerate(self.critics):
             c.n_updates += 1
+
+            # Weighted Bellman backup with the member's own networks (SUNRISE Eq. 9):
+            # double DQN, with the next action from Q_i and its value from Qt_i.
+            q_next = c.q(next_obs, with_gradient=False)
+            next_a_max = random_argmax(q_next, rng_generator=rng_generator, axis=-1)
+            target_q_next = np.take_along_axis(
+                q_target_next[i], next_a_max[..., None], axis=-1,
+            ).squeeze(-1)  # (B, T)
+
+            is_next_act_greedy = None
+            if c.lmbda > 0.0 and T > 1:
+                is_next_act_greedy = is_act_greedy(
+                    q_next[:, :-1], act[:, 1:], axis=-1,
+                )  # use the main Q, not the target Q
+                trace_cut_fracs.append((1.0 - is_next_act_greedy).mean())
+
+            target = td_target(
+                rwd,
+                term,
+                trunc,
+                is_next_act_greedy,
+                target_q_next,
+                c.gamma,
+                c.lmbda,
+            )
+
             stepsize = c.lr.value * base_stepsize * critic_mask[i]
             loss, grad_norm, q = c.q.update(
                 obs, act, target=target, stepsize=stepsize, rng_generator=rng_generator,
@@ -610,7 +605,7 @@ class SUNRISE(QEnsemble):
             "grad_norm": np.mean(grad_norms),
             "q_mean": np.mean(q_means),
             "q_std_next": q_target_next_max_std.mean(),
-            "trace_cut_frac": trace_cut_frac,
+            "trace_cut_frac": np.mean(trace_cut_fracs) if trace_cut_fracs else np.nan,
         }
 
     def post_step(self, *args, **kwargs):

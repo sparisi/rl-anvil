@@ -18,7 +18,6 @@ import src.replay_memory
 from src.utils.misc import (
     format_dict_row,
     atomic_open,
-    random_argmax,
     StatsTracker,
 )
 from src.utils.slurm import (
@@ -315,6 +314,7 @@ class Experiment:
         # Pre-allocate critic and arrays for test()
         if self._testing_episodes >= 1 and self._env_test is not None:
             self._critic_test = deepcopy(self._critic)
+            self._actor_test = deepcopy(self._actor, {id(self._critic): self._critic_test})
             self._disc_ret_test_buf = np.zeros(self._testing_episodes)
             self._undisc_ret_test_buf = np.zeros(self._testing_episodes)
             self._done_test_buf = np.zeros(self._testing_episodes, dtype=bool)
@@ -556,11 +556,17 @@ class Experiment:
 
                     if mem_ready and time_to_update:
                         for _ in range(self._updates_per_step):
+                            # The actor updates first, so it reads the critic
+                            # as it was when the transitions were collected.
+                            actor_stats = self._actor.update(
+                                replay_memory=self._replay_memory,
+                                rng_generator=actor_rng,
+                            )
                             update_stats = self._critic.update(
                                 replay_memory=self._replay_memory,
                                 rng_generator=critic_rng,
                             )
-                            self._update_stats.update(**update_stats)
+                            self._update_stats.update(**actor_stats, **update_stats)
                             self._tot_updates += 1
                             self._critic.post_update()  # target network copy
                             self._actor.post_update()
@@ -771,7 +777,8 @@ class Experiment:
         if self._testing_episodes < 1 or self._env_test is None:
             return
 
-        self._critic_test.copy_from(self._critic)
+        self._actor_test.copy_from(self._actor)  # it also copies the critic
+        self._actor_test.eval()
         self._critic_test.eval()
 
         # Buffers built in __init__, reset in place to not allocate new memory
@@ -797,8 +804,7 @@ class Experiment:
             if self._pbar is not None:
                 self._pbar.update("testing", ep_steps)
 
-            # TODO define self._actor_test (for example, with eps = 0.05)
-            act = random_argmax(self._critic_test(obs), test_rng, axis=-1)
+            act = self._actor_test(obs, test_rng)
 
             # Videos from all episodes are automatically arranged into a grid
             if self._save_videos and self._data_dir is not None:

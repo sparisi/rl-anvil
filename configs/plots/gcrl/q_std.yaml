@@ -1,0 +1,13 @@
+default:
+  - default
+
+configs:
+  adagoal:
+    - algorithm: adagoal
+      plot.label: "AdaGoal"
+  discover:
+    - algorithm: discover
+      plot.label: "DISCOVER"
+
+statistics:
+  q_std: "Critic Std."

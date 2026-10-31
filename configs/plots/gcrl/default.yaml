@@ -3,7 +3,9 @@ rng_seed: 12
 
 # Keys to be ignored when matching configs
 ignored_cfg_keys:
-  experiment.testing_episodes
+  - experiment.testing_episodes
+  - agent.critic.approximator.device
+  - agent.critic.approximator_visit.device
 
 # plots_rows_cols: [1, -1]  # defines how to arrange subplots (optional; default = one row)
 # legend_rows_cols: [1, -1]  # defines how to arrange legend entries

@@ -12,7 +12,7 @@ from rich import print
 import wandb
 
 from src.utils.pbar import MultiProgressBar
-from src.actor import Actor
+from src.actor import ACT_RANDOM, Actor
 from src.critic import Critic
 import src.replay_memory
 from src.utils.misc import (
@@ -285,12 +285,20 @@ class Experiment:
             next_obs=self._env_train.observation_space.sample(),
         )
 
-        # Also for debugging
+        # The goal of every step and how the action was chosen.
+        # - goal_obs, goal_act: the goal the actor held when it acted.
+        # - has_goal: whether the actor held a goal at all (goal_obs and goal_act
+        #   are initialized with 0, the default memory placeholder, but there
+        #   are steps without a goal, e.g., memory warm up steps).
+        # - goal_selection: whether the actor selected a goal on this step.
+        # - act_source: where the action came from (e.g., random or greedy).
         if hasattr(self._actor, "goal_selected_count"):
             self._replay_memory.add_keys(
                 goal_obs=self._env_train.observation_space.sample(),
                 goal_act=self._env_train.action_space.sample(),
-                goal_valid=np.asarray(False),  # Whether the actor acted on a goal or not (e.g., random exploration)
+                has_goal=np.asarray(False),
+                goal_selection=np.asarray(False),
+                act_source=np.asarray(ACT_RANDOM, dtype=np.int8),
             )
 
         # Counts for scoring goal candidates. The memory serves either the true
@@ -499,21 +507,12 @@ class Experiment:
                         next_obs=next_obs,
                     )
                     if hasattr(self._actor, "goal_selected_count"):
-                        # `_goal_used_last_step` is the goal the action was
-                        # actually taken for, which is not `goal` once a
-                        # per-step actor has already re-selected.
-                        goal = getattr(self._actor, "_goal_used_last_step", None)
-                        if goal is None:
-                            goal = self._actor.goal
-                        # Written every step, including the ones with no goal:
-                        # add() only stores what it is given, so leaving the keys
-                        # out would keep whatever the slot held before -- a goal
-                        # from a previous lap of the ring buffer -- and record it
-                        # as this step's. goal_valid says which entries mean
-                        # anything; the rest are zeroed placeholders.
-                        sample["goal_valid"] = goal is not None
+                        goal = self._actor._goal_used_last_step
+                        sample["has_goal"] = goal is not None
                         sample["goal_obs"] = 0 if goal is None else goal["obs"]
                         sample["goal_act"] = 0 if goal is None else goal["act"]
+                        sample["goal_selection"] = self._actor._goal_selection_last_step
+                        sample["act_source"] = self._actor._act_source_last_step
 
                     # Update statistics and decay epsilon, learning rates, and
                     # any other scheduled parameter. These run on the

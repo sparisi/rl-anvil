@@ -31,7 +31,5 @@ configs:
     - algorithm: discover
       plot.label: "DISCOVER"
 
-statistics: null
-
 environments:
   gymnasium/mountain_car: "Mountain Car"

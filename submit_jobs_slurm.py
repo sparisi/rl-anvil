@@ -281,8 +281,12 @@ TIMEOUTS_ADJUST_ALGO = {
     "random": 0.3,
     "discover": 1.3,
     "adagoal": 1.3,
-    "sun_ratio_episodic": 0.7,
     "sun_ucb_episodic": 0.7,
+    "sun_ratio_adaptive": 1.3,
+    "sun_ucb_adaptive": 1.3,
+    "sun_ratio_step": 1.3,
+    "sun_reachability_adaptive": 1.3,
+    "sun_novelty_adaptive": 1.3,
 }
 
 # Memory: `mem_mb = BASE_MEM_MB + PER_SEED_MEM_MB[env] * len(seeds_in_chunk)`.

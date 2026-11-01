@@ -281,7 +281,6 @@ TIMEOUTS_ADJUST_ALGO = {
     "random": 0.3,
     "discover": 1.3,
     "adagoal": 1.3,
-    "sun_ucb_episodic": 0.7,
     "sun_ratio_adaptive": 1.3,
     "sun_ucb_adaptive": 1.3,
     "sun_ratio_step": 1.3,

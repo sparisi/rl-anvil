@@ -49,9 +49,9 @@ class Actor(ABC):
 
         self._critic = critic
         self._train = True
-        self.pi = None
+        self._pi = None
         if pi is not None:
-            self.pi = getattr(src.approximator, pi.id)(
+            self._pi = getattr(src.approximator, pi.id)(
                 critic.obs_shape,
                 critic.n_actions,
                 **pi,
@@ -66,9 +66,13 @@ class Actor(ABC):
         from `greedy`, which is vectorized.
         """
 
+        # Always draw action in eval mode.
+        self._critic.eval()
+        if self._pi is not None:
+            self._pi.eval()
+
         if self._train:
             self.t += 1
-            self._critic.eval()
             return self.explore(obs, rng_generator, **kwargs)
         else:
             return self.greedy(obs, rng_generator, **kwargs)
@@ -80,10 +84,9 @@ class Actor(ABC):
         observations are normalized.
         """
 
-        if self.pi is None:
+        if self._pi is None:
             return self._critic(obs)  # calls self._critic._normalize_obs
-        self.pi.eval()
-        return self.pi(self._critic._normalize_obs(obs))
+        return self._pi(self._critic._normalize_obs(obs))
 
     def greedy(self, obs, rng_generator, **kwargs):
         """
@@ -113,8 +116,11 @@ class Actor(ABC):
         policy of the network, as Softmax does with eps = 1 and a PolicyNetwork.
         """
 
-        if self.pi is None:
+        if self._pi is None:
             return {}
+
+        self._pi.train()
+        self._critic.train()
 
         batch = replay_memory.get()
         _, advantages = self._critic.returns_and_advantages(batch)
@@ -122,7 +128,7 @@ class Actor(ABC):
         # Every transition is a sample for the minibatches.
         n = advantages.size
         obs = self._critic._normalize_obs(batch["obs"])
-        return self.pi.update(
+        return self._pi.update(
             obs.reshape(n, *obs.shape[2:]),
             batch["act"].reshape(n),
             advantages.reshape(n),
@@ -137,8 +143,8 @@ class Actor(ABC):
 
     def reset(self, seed=None):
         self.t = 0
-        if self.pi is not None:
-            self.pi.reset(seed=seed)
+        if self._pi is not None:
+            self._pi.reset(seed=seed)
 
     def eval(self):
         self._train = False
@@ -150,8 +156,8 @@ class Actor(ABC):
         self.t = source.t
         self._train = source._train
         self._critic.copy_from(source._critic)
-        if self.pi is not None:
-            self.pi.copy_from(source.pi)
+        if self._pi is not None:
+            self._pi.copy_from(source._pi)
 
 
 class EpsilonGreedy(Actor):
@@ -173,7 +179,6 @@ class EpsilonGreedy(Actor):
         if rng_generator.random() < self._eps.value:
             return rng_generator.integers(self._critic.n_actions)
         else:
-            self._critic.eval()
             return random_argmax(self._values(obs), rng_generator, axis=-1)
 
     def post_step(self, *args, **kwargs):

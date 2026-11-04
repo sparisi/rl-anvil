@@ -265,7 +265,7 @@ DEFAULT_OVERRIDES = [
 # tasks.
 TIMEOUTS_ENV = {
     "gymnasium/lunar_lander": 500,
-    "gymnasium/lunar_lander_full": 1900,
+    "gymnasium/lunar_lander_full": 2300,
     "gymnasium/cart_pole": 280,
     "gymnasium/pendulum_discrete": 215,
     "gymnasium/acrobot": 220,
@@ -311,7 +311,7 @@ TIMEOUTS_ADJUST_ALGO = {
 BASE_MEM_MB = 1250
 PER_SEED_MEM_MB = {
     "gymnasium/lunar_lander": 850,
-    "gymnasium/lunar_lander_full": 1105,
+    "gymnasium/lunar_lander_full": 1500,
     "gymnasium/cart_pole": 650,
     "gymnasium/pendulum_discrete": 650,
     "gymnasium/acrobot": 650,

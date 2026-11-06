@@ -901,6 +901,63 @@ def save_figure(fig, folder, name, dpi=300):
     return path
 
 
+def write_legend(entries, plot_cfg, output_dir, font_size):
+    """Write the legend of `entries` on its own, for a figure that has to carry
+    one elsewhere, and return the paths written.
+
+    Both shapes are written every time, since which one fits depends on the
+    document the figure goes into rather than on the data. The horizontal is laid
+    out by `legend_rows_cols`; the vertical is always one entry per row."""
+
+    # Thick strokes in the curves' linestyles. Dash lengths scale with the line
+    # width, so the handle is long enough to hold a full dash-dot period.
+    handles = [
+        plt.Line2D(
+            [], [],
+            color=e["color"],
+            linestyle=e["linestyle"],
+            linewidth=7.0,
+            solid_capstyle="butt",
+            label=e["label"],
+        )
+        for e in entries
+    ]
+    if not handles:
+        return []
+    n_cols = rows_cols(plot_cfg.get("legend_rows_cols"), len(handles))[1]
+
+    paths = []
+    for name, cols in (("legend_horizontal", n_cols), ("legend_vertical", 1)):
+        fig_legend = plt.figure()
+        ax_legend = fig_legend.add_subplot(111)
+        ax_legend.axis("off")
+        legend = ax_legend.legend(
+            handles,
+            [h.get_label() for h in handles],
+            fontsize=font_size,
+            frameon=True,
+            loc="center",
+            ncol=cols,
+            # In font units. The defaults (2.0 and 0.7) draw a block half the
+            # height of the text beside it.
+            handlelength=6.0,
+            handleheight=1.3,
+        )
+        for text in legend.get_texts():
+            text.set(**tex_kwargs(text.get_text()))
+        # The canvas is cut to the legend rather than guessed at. A figure sized
+        # by a rule of thumb is a floor the crop cannot go below -- the axes fills
+        # it whether the legend does or not -- and one entry per row in a canvas
+        # wide enough for four is all margin.
+        fig_legend.canvas.draw()
+        box = legend.get_window_extent().transformed(
+            fig_legend.dpi_scale_trans.inverted())
+        fig_legend.set_size_inches(box.width, box.height)
+        paths.append(save_figure(fig_legend, output_dir, name))
+        plt.close(fig_legend)
+    return paths
+
+
 def hyperparameter_to_label(keys) -> dict:
     """Give every hyperparameter the shortest name that still tells it apart, and
     return them as {key: label}.

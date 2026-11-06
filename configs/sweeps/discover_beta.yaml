@@ -1,0 +1,12 @@
+global_sweep:
+  environment:
+    - gymnasium/acrobot
+    - gymnasium/mountain_car
+    - gymnasium/pendulum_discrete
+    - gymnasium/cart_pole
+    - gymnasium/lunar_lander
+    - gymnasium/lunar_lander_full
+  algorithm: discover
+  agent.actor.beta_novelty: [0.1, 1, 5, 10, 100]
+  results.save_memory: True
+  experiment.testing_episodes: 0

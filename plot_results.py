@@ -114,6 +114,7 @@ from src.utils.plot import (
     style_entries,
     summarize,
     tex_kwargs,
+    write_legend,
     write_missing_runs_script,
 )
 
@@ -1426,7 +1427,8 @@ def draw_config(config_name, cfg):
     write_table(drawing)
     write_rliable_tables(drawing)
     recap(drawing)
-    write_legend(drawing)
+    for path in write_legend(drawing.entries, drawing.cfg, drawing.output_dir, FONT_SIZE):
+        vprint(f"  Saved: {path}")
     print(
         f"\n{drawing.name}: {len(drawing.entries)} configuration(s), "
         f"{len(drawing.groups)} environment group(s) -> {drawing.output_dir}"
@@ -1699,51 +1701,6 @@ def recap(drawing):
             )
             print(f"  {entries[i]['label']:>{label_w}}  {cells}")
         print(f"  {'=' * len(header)}")
-
-
-def write_legend(drawing):
-    """The legend on its own, for a figure that has to carry one elsewhere.
-
-    Both shapes are written every time, since which one fits depends on the
-    document the figure goes into rather than on the data. The horizontal is laid
-    out by `legend_rows_cols`; the vertical is always one entry per row."""
-
-    # Filled blocks, not the line the curves are drawn with: at the size a legend
-    # is read at, a bar of colour carries the colour better than a stroke of it.
-    handles = [
-        mpatches.Patch(facecolor=e["color"], label=e["label"])
-        for e in drawing.entries
-    ]
-    n_rows, n_cols = rows_cols(drawing.cfg.get("legend_rows_cols"), len(handles))
-
-    for name, cols in (("legend_horizontal", n_cols), ("legend_vertical", 1)):
-        fig_legend = plt.figure()
-        ax_legend = fig_legend.add_subplot(111)
-        ax_legend.axis("off")
-        legend = ax_legend.legend(
-            handles,
-            [h.get_label() for h in handles],
-            fontsize=FONT_SIZE,
-            frameon=True,
-            loc="center",
-            ncol=cols,
-            # In font units. The defaults (2.0 and 0.7) draw a block half the
-            # height of the text beside it.
-            handlelength=2.6,
-            handleheight=1.3,
-        )
-        for text in legend.get_texts():
-            text.set(**tex_kwargs(text.get_text()))
-        # The canvas is cut to the legend rather than guessed at. A figure sized
-        # by a rule of thumb is a floor the crop cannot go below -- the axes fills
-        # it whether the legend does or not -- and one entry per row in a canvas
-        # wide enough for four is all margin.
-        fig_legend.canvas.draw()
-        box = legend.get_window_extent().transformed(
-            fig_legend.dpi_scale_trans.inverted())
-        fig_legend.set_size_inches(box.width, box.height)
-        vprint(f"  Saved: {save_figure(fig_legend, drawing.output_dir, name)}")
-        plt.close(fig_legend)
 
 
 for config_name, plot_cfg_path, config in plot_cfgs:

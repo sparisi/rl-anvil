@@ -8,3 +8,9 @@ experiment:
   cool_down: 10_000
   training_steps: 300_000
   testing_episodes: 50
+
+agent:
+  critic:
+    approximator:
+      encoder:
+        passthrough: [6, 7]  # last two obs are binary (leg contacts)

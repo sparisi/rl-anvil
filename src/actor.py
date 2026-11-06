@@ -124,7 +124,7 @@ class Actor(ABC):
         self._critic.train()
 
         batch = replay_memory.get()
-        _, advantages = self._critic.returns_and_advantages(batch)
+        advantages = self._critic.advantages(batch)
 
         # Every transition is a sample for the minibatches.
         n = advantages.size

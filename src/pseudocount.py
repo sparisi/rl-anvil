@@ -350,11 +350,11 @@ def tabular_count(env, n_bins: int = 40):
     high = env.observation_space.high
     if env_id == "Pendulum-v1":
         return BinnedCountPendulum(low, high, n_bins, n_actions)
-    if "Acrobot" in env_id:
+    elif "Acrobot" in env_id:
         return BinnedCountAcrobot(low, high, n_bins, n_actions)
-    if "CartPole" in env_id:
+    elif "CartPole" in env_id:
         return BinnedCountCartPole(low, high, n_bins, n_actions)
-    if "LunarLander" in env_id:
+    elif "LunarLander" in env_id:
         return BinnedCountLunarLander(low, high, n_bins, n_actions)
     elif "Gym-Gridworlds" in env_id and "MatrixWrapper" in get_wrapper_names(env):
         return GridworldCount(

@@ -35,7 +35,7 @@ Output goes to <data_dir>/<output>/heatmaps/<plot config>/<memory key>/.
 
 Example
 
-    python plot_heatmaps.py -f data_example -p example --progression_step=0.1 --shared_vmap --log_scale -v
+    python plot_heatmaps.py -f data_example -p example --progression_step=0.1 --shared_vmap=all_figures --log_scale -v
 """
 
 import matplotlib

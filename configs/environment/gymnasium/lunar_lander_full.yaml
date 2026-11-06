@@ -14,6 +14,7 @@ agent:
     normalize_observation: True
     approximator:
       encoder:
+        passthrough: [6, 7]  # last two obs are binary (leg contacts)
         id: RawGridEncoder
         grid_id: GaussianActivation
         num_centers: 20
@@ -21,6 +22,7 @@ agent:
         centers_mode: learned
     approximator_visit:
       encoder:
+        passthrough: [6, 7]  # last two obs are binary (leg contacts)
         id: RawGridEncoder
         grid_id: GaussianActivation
         num_centers: 20

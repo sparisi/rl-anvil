@@ -36,7 +36,7 @@ to a size a browser can open when a sweep declares many hyperparameters.
 
 Example
 
-    python interactive_heatmaps.py -f data_encoders --sweep encoders --progression_step 0.1
+    python interactive_heatmaps.py -f data_encoders --sweep=encoders --progression_step 0.1
 """
 
 import argparse

@@ -22,7 +22,7 @@ configs:
     - algorithm: adagoal
       agent.actor.batch_size_goal: 10_000
       plot.label: "AdaGoal (10,000)"
-  adagoal:
+  sun_ratio_episodic:
     - algorithm: sun_ratio_episodic
       agent.actor.batch_size_goal: 256
       plot.label: "SUN (Epis.) (256)"

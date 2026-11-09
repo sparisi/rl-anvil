@@ -18,5 +18,6 @@ configs:
     - algorithm: discover
       agent.actor.beta_novelty: 100
       plot.label: "$\\beta = 100$"
+    - algorithm: discover
       agent.actor.beta_novelty: 1_000
       plot.label: "$\\beta = 1,000$"

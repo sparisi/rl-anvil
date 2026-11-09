@@ -9,7 +9,7 @@ global_sweep:
     - gymnasium/cart_pole
     - gymnasium/lunar_lander
     # - gymnasium/lunar_lander_full
-  algorithm: sun_ratio_episodic, adagoal, discover
+  algorithm: [sun_ratio_episodic, adagoal, discover]
   batch_size_goal: [256, 2_2500, 10_000]
   results.save_memory: True
   experiment.testing_episodes: 0

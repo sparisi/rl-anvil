@@ -696,6 +696,7 @@ def submit_jobs(
             print(f"Skipped {skipped_queued_seeds} run(s) already pending or running.")
             print(f"Skipped {skipped_completed_seeds} run(s) already completed.")
         print(f"Skipped {skipped_configs} configuration(s) with no seed left to submit.")
+        print(f"Submitted {submitted} job(s) (array elements).")
 
 
 if __name__ == "__main__":

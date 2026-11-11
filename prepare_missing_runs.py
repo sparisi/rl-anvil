@@ -28,8 +28,11 @@ The script is written to <folder>/submit_missing_runs.py and relaunches the
 missing seeds through submit_jobs_slurm.submit_jobs(...). Its command line takes
 the parameters of submit_jobs, the cluster among them, and `--extra` the
 overrides to launch every run with, which is where the values of the exempt keys
-go. A recap of every configuration missing seeds is printed at the end: its
-config_id, the sources declaring it, the missing seeds and its overrides.
+go. A recap of every configuration missing seeds is printed at the end: the
+run directories it matches, relative to the data directory, the sources
+declaring it, the missing seeds and its overrides. A configuration matching no
+run is named by the config_id it composes to; when it has keys exempt from
+matching, that config_id is marked as composed before `--extra`.
 
 Example
 
@@ -131,7 +134,8 @@ def identity(flat, ignore):
 
 
 # --- The runs in the data directory --------------------------------------------
-# (flat config of its cfg.yaml, {seeds holding a data.npz}) per run directory.
+# (run directory, flat config of its cfg.yaml, {seeds holding a data.npz}) per
+# run directory.
 runs = []
 cfg_dirs = [dirpath for dirpath, _dirs, files in os.walk(args.folder) if "cfg.yaml" in files]
 for dirpath in tqdm(cfg_dirs, desc="Reading cfg.yaml", unit="run"):
@@ -143,23 +147,26 @@ for dirpath in tqdm(cfg_dirs, desc="Reading cfg.yaml", unit="run"):
         int(entry) for entry in os.listdir(dirpath)
         if entry.isdigit() and os.path.isfile(os.path.join(dirpath, entry, "data.npz"))
     }
-    runs.append((flatten_cfg(cfg_dict, drop_interpolations=False), seeds))
+    runs.append((dirpath, flatten_cfg(cfg_dict, drop_interpolations=False), seeds))
 
-# Exempt keys -> {identity: seeds}, built the first time a set of exempt keys is
-# asked for.
+# Exempt keys -> {identity: (seeds, run directories)}, built the first time a set
+# of exempt keys is asked for.
 run_index = {}
 
 
-def seeds_found(flat, ignore):
-    """Return the seeds holding a data.npz in any run `flat` matches with the
-    keys in `ignore` exempt."""
+def runs_found(flat, ignore):
+    """Return the seeds holding a data.npz in the runs `flat` matches with the
+    keys in `ignore` exempt, and the directories of those runs relative to the
+    data directory."""
 
     if ignore not in run_index:
         by_identity = {}
-        for run_flat, seeds in runs:
-            by_identity.setdefault(identity(run_flat, ignore), set()).update(seeds)
+        for dirpath, run_flat, seeds in runs:
+            found_seeds, found_dirs = by_identity.setdefault(identity(run_flat, ignore), (set(), set()))
+            found_seeds.update(seeds)
+            found_dirs.add(os.path.relpath(dirpath, args.folder))
         run_index[ignore] = by_identity
-    return run_index[ignore].get(identity(flat, ignore), set())
+    return run_index[ignore].get(identity(flat, ignore), (set(), set()))
 
 
 # --- The configurations to check -----------------------------------------------
@@ -224,17 +231,27 @@ with tqdm(total=len(sweep_hps) + len(plot_items), desc="Configurations", unit="c
 missing_runs = {}
 recap = []
 for config_id, entry in configs.items():
-    present = set().union(*(seeds_found(entry["flat"], ignore) for ignore in entry["ignores"]))
+    present, run_dirs = set(), set()
+    for ignore in entry["ignores"]:
+        seeds, dirs = runs_found(entry["flat"], ignore)
+        present |= seeds
+        run_dirs |= dirs
     found = [seed for seed in range(args.n_seeds) if seed in present]
-    if record_missing(missing_runs, entry["hp"], found, args.n_seeds):
-        missing = [seed for seed in range(args.n_seeds) if seed not in present]
-        recap.append((config_id, entry["sources"], missing, entry["hp"]))
+    missing = record_missing(missing_runs, entry["hp"], found, args.n_seeds)
+    if missing:
+        if run_dirs:
+            where = ", ".join(sorted(run_dirs))
+        elif any(entry["ignores"]):
+            where = f"{config_id} (no run on disk; config_id before --extra)"
+        else:
+            where = f"{config_id} (no run on disk)"
+        recap.append((where, entry["sources"], missing, entry["hp"]))
 
 path, n_jobs = write_missing_runs_script(args.folder, missing_runs)
 
 print(f"\nMissing runs -- {len(recap)} of {len(configs)} configuration(s), {sum(len(m) for _, _, m, _ in recap)} seed(s)")
-for config_id, sources, missing, hp in recap:
-    print(f"\n  {config_id}  [{', '.join(sources)}]")
+for where, sources, missing, hp in recap:
+    print(f"\n  {where}  [{', '.join(sources)}]")
     print(f"    seeds: {', '.join(map(str, missing))}")
     for key, value in hp.items():
         print(f"    {key}={value}")

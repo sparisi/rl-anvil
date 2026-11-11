@@ -98,6 +98,7 @@ from src.utils.plot import (
     env_groups,
     error_shade_plot,
     fitted_rows_cols,
+    hyperparameter_strings,
     load_plot_configs,
     plot_labels,
     rows_cols,
@@ -268,6 +269,10 @@ vprint(f"\nLoaded parquet file from: {parquet_path}")
 if all(isinstance(c, str) and c.startswith("(") for c in df.columns):
     df.columns = pd.MultiIndex.from_tuples([literal_eval(c) for c in df.columns])
 
+# Every hyperparameter column as value_str renders it, once: rows_of compares
+# against them for every (environment, entry).
+hp_strings = hyperparameter_strings(df)
+
 # A config selects runs by hyperparameter, and `algorithm` and `environment` are
 # among them -- neither is recorded, so both are matched back from their YAMLs.
 # Without the YAMLs, the id the run recorded still distinguishes environments.
@@ -311,7 +316,12 @@ def rows_of(drawing, env, index, entry):
         drawing.rows[key] = (
             df.iloc[0:0] if flat is None
             else df[
-                composed_mask(df, flat, ignore=drawing.ignored_keys)
+                composed_mask(
+                    df,
+                    flat,
+                    ignore=drawing.ignored_keys,
+                    as_str=hp_strings,
+                )
                 & drawing.matched
             ]
         )

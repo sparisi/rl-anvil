@@ -1,8 +1,5 @@
 # @package _global_
 
-# Expected seeds per algorithm / environment.
-rng_seed: 10
-
 # Keys to be ignored when matching configs
 # ignored_cfg_keys:
 #   if your sweep fixes some keys that are different from defaults,
@@ -41,6 +38,13 @@ configs:
   random:
     - algorithm: random
       plot.label: "Random"
+
+# You can assign names to the config groups above (used by plot_violin.py, optional).
+group_labels:
+  eps_greedy: "ε-greedy"
+  resmax: "Resmax"
+  greedy: "Greedy"
+  random: "Random"
 
 # Environments to plot.
 # You can customize the y-lim of statistics for better visualization.

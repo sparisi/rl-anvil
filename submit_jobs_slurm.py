@@ -192,7 +192,7 @@ Note:
         ]
 
     This function is used as public entry point for other tools (e.g.,
-    plot_results.py's missing-runs generator).
+    prepare_missing_runs.py).
 """
 
 import os

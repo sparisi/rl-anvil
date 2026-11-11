@@ -25,6 +25,20 @@ DEFAULT_OVERRIDES = [
     "wandb.mode=disabled",
 ]
 
+# Environment of every run, the same SLURM_SETUP exports in submit_jobs_slurm.py,
+# which documents each variable.
+THREADS_PER_RUN = 1
+RUN_ENV = {
+    "OMP_NUM_THREADS": f"{THREADS_PER_RUN}",
+    "NUMEXPR_NUM_THREADS": f"{THREADS_PER_RUN}",
+    "MKL_NUM_THREADS": f"{THREADS_PER_RUN}",
+    "OPENBLAS_NUM_THREADS": f"{THREADS_PER_RUN}",
+    "HYDRA_FULL_ERROR": "1",
+    "MALLOC_MMAP_THRESHOLD_": "131072",
+    "MALLOC_TRIM_THRESHOLD_": "131072",
+    "MALLOC_ARENA_MAX": "2",
+}
+
 
 def sweep_override(key, values):
     """One Hydra override covering every value a key takes.
@@ -115,6 +129,6 @@ for argv in commands(
 ):
     print(" ".join(argv))
     if not args.debug:
-        result = subprocess.run(argv)
+        result = subprocess.run(argv, env={**os.environ, **RUN_ENV})
         if result.returncode:
             sys.exit(result.returncode)

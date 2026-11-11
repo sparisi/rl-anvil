@@ -1,5 +1,3 @@
-rng_seed: 12
-
 ignored_cfg_keys:
   - experiment.testing_episodes
   - agent.critic.approximator.device

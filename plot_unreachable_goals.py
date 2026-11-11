@@ -81,6 +81,7 @@ from src.utils.plot import (
     env_groups,
     error_shade_plot,
     fitted_rows_cols,
+    hyperparameter_strings,
     load_plot_configs,
     plot_labels,
     rows_cols,
@@ -627,6 +628,9 @@ if not flat_cfgs:
 
 df = pd.DataFrame.from_dict(flat_cfgs, orient="index")
 df.columns = pd.MultiIndex.from_tuples([("hyperparameter", c) for c in df.columns])
+# Every hyperparameter column as value_str renders it, once: runs_of compares
+# against them for every (environment, entry).
+hp_strings = hyperparameter_strings(df)
 
 # Neither the environment nor the algorithm is recorded by a run: both are matched
 # back from their config YAMLs, the file a run's hyperparameters agree with.
@@ -671,7 +675,8 @@ def runs_of(env, entry, ignored, matched):
     # The same exemption assign_configs was given above: a key a launch set for
     # every run alike is not part of what tells two configurations apart, and
     # holding a run to the YAML's value for it would match nothing.
-    return list(df.index[composed_mask(df, flat, ignore=ignored) & matched])
+    mask = composed_mask(df, flat, ignore=ignored, as_str=hp_strings)
+    return list(df.index[mask & matched])
 
 
 # -----------------------------------------------------------------------------

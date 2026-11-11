@@ -66,6 +66,7 @@ from src.utils.plot import (
     ensure_font,
     entry_config,
     env_groups,
+    hyperparameter_strings,
     load_plot_configs,
     plot_labels,
     rows_cols,
@@ -1000,6 +1001,9 @@ if not flat_cfgs:
 
 df = pd.DataFrame.from_dict(flat_cfgs, orient="index")
 df.columns = pd.MultiIndex.from_tuples([("hyperparameter", c) for c in df.columns])
+# Every hyperparameter column as value_str renders it, once: runs_of compares
+# against them for every (environment, entry).
+hp_strings = hyperparameter_strings(df)
 
 plot_cfgs = load_plot_configs(args.plot_config)
 vprint(f"\n{len(plot_cfgs)} plot config(s): {[n for n, _, _ in plot_cfgs]}")
@@ -1033,7 +1037,8 @@ def runs_of(env, entry, ignored, matched):
     flat = entry_config(env, entry["selector"], entry["label"])
     if flat is None:
         return []
-    return list(df.index[composed_mask(df, flat, ignore=ignored) & matched])
+    mask = composed_mask(df, flat, ignore=ignored, as_str=hp_strings)
+    return list(df.index[mask & matched])
 
 
 # --- Which runs the plot configs ask for ---

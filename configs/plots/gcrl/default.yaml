@@ -1,5 +1,4 @@
 # @package _global_
-rng_seed: 12
 
 # Keys to be ignored when matching configs
 ignored_cfg_keys:

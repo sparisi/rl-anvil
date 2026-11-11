@@ -1,8 +1,6 @@
 default:
   - default
 
-rng_seed: 12
-
 # plots_rows_cols: [1, -1]  # defines how to arrange subplots (optional; default = one row)
 legend_rows_cols: [1, 8]
 

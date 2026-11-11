@@ -16,9 +16,6 @@ apart is the null rather than the config file.
 directory of them; every *.yaml in it is drawn, except those whose first
 non-empty line is `# skip`.
 
-`rng_seed` in a plot config is not read: --rng_seed picks which seed's memory is
-drawn, for every config alike.
-
 --colorbar draws the colour scale under the panels it applies to. How many panels
 a bar covers follows --shared_vmap; unset, it is one bar per panel. Panels are
 drawn larger so the bar and its ticks stay legible.
@@ -61,8 +58,8 @@ from src.utils.matching import (
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     add_config_group_args, assign_groups, composed_mask, ensure_font, entry_config,
-    env_groups, load_plot_configs, memory_fractions, plot_entries, plot_labels,
-    tex_kwargs as _tex,
+    env_groups, hyperparameter_strings, load_plot_configs, memory_fractions,
+    plot_entries, plot_labels, tex_kwargs as _tex,
 )
 from src.utils.heatmaps import (
     CBAR_SUBPLOT_SIZE, add_border, add_colorbar, arr_range as _arr_range, auto_dpi,
@@ -216,9 +213,8 @@ def ablation_from_entries(plot_cfg, where=""):
     the reference and the ablations may name the same algorithm: what tells them
     apart is the value, not the config file.
 
-    Labels come from `plot.label`, one per row. `rng_seed`, `statistics` and
-    `color_scheme` are not read: the first is a command-line argument, and the
-    other two describe figures this script does not draw."""
+    Labels come from `plot.label`, one per row. `statistics` and `color_scheme`
+    are not read: they describe figures this script does not draw."""
 
     if not (plot_cfg.get("configs") or {}):
         raise SystemExit(f"{where}: no `configs:` to draw.")
@@ -554,6 +550,9 @@ if not flat_cfgs:
 
 df = pd.DataFrame.from_dict(flat_cfgs, orient="index")
 df.columns = pd.MultiIndex.from_tuples([("hyperparameter", c) for c in df.columns])
+# Every hyperparameter column as value_str renders it, once: reference_run
+# compares against them for every (environment, entry).
+hp_strings = hyperparameter_strings(df)
 
 
 # --- Identify environment ---
@@ -585,7 +584,8 @@ def reference_run(env, row, ignored, matched):
     flat = entry_config(env, row["selector"], row["label"])
     if flat is None:
         return None
-    names = list(df.index[composed_mask(df, flat, ignore=ignored) & matched])
+    mask = composed_mask(df, flat, ignore=ignored, as_str=hp_strings)
+    names = list(df.index[mask & matched])
     if not names:
         return None
     if len(names) > 1:

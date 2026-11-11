@@ -293,7 +293,7 @@ def job_name(config_id, seeds):
     The seed part is a range when the seed set is contiguous (which chunking a
     seed range always is) and the explicit list otherwise, so that two different
     seed sets -- say [0, 3, 7] and 0..7 -- never collapse into the same name.
-    Names are what `queued_job_names` matches on, so a collision would silently skip a job.
+    Names are what `queued_runs` parses into (config_id, seed) pairs, so a collision would silently skip a run.
     """
     if len(seeds) == 1:
         seeds_str = str(seeds[0])

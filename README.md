@@ -323,11 +323,13 @@ colors, filtered configurations, ... Customizations are defined in [`configs/plo
 ```
 python plot_results.py -f data_example --plot_config=example -v --with_auc
 python plot_heatmaps.py -f data_example --plot_config=example -v --progression_step=0.1 --shared_vmap=same_figure
+python plot_violin.py -f data_example -p example -v
 ```
 
 <p align="center">
   <img src="assets/train_gridworlds_curves.png" width="400" alt="Example Plots"> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="assets/four_rooms.png" width="300" alt="Example Heatmaps">
+  <img src="assets/four_rooms.png" width="300" alt="Example Heatmaps"> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="assets/train_gridworlds_violin.png" width="300" alt="Example Violins">
 </p>
 
 > All plotting scripts take optional arguments for further customization. For

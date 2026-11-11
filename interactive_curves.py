@@ -83,13 +83,6 @@ configs/default.yaml fill in under them -- not merely when it agrees on the keys
 the entry writes down. Runs matching nothing are reported and dropped. Composing
 goes through Hydra, so this script needs hydra installed and CONFIG_DIR readable.
 
---prepare_missing_runs writes a script to submit jobs for missing runs (e.g.,
-due to failed jobs). They are checked against the sweep, so a configuration it
-declares that has no successful run is still detected -- including an environment
-that left no run at all, which is reported and written out in full against the
-highest seed found anywhere. The number of seeds is always inferred from the
-highest seed found.
-
 --stats to filter the statistics to plot. By default it plots ALL, potentially
 generating very large HTML files.
 
@@ -147,13 +140,10 @@ from src.utils.plot import (
     keep_composed_runs,
     keep_declared_environments,
     label_of,
-    launch_overrides,
     mask_of,
-    record_missing,
     series_of,
     swept_keys,
     vega_field_name,
-    write_missing_runs_script,
 )
 from src.utils.sweep import expand_sweep, load_sweep
 
@@ -212,12 +202,6 @@ parser.add_argument(
     type=int,
     default=2000,
     help="Bootstrap replicates behind every interval of the rliable tab.",
-)
-parser.add_argument(
-    "--prepare_missing_runs",
-    action="store_true",
-    help="Write a submit script for configurations missing seeds below the "
-         "highest seed of that environment.",
 )
 parser.add_argument("-v", "--verbose", action="store_true")
 args = parser.parse_args()
@@ -546,13 +530,11 @@ def declared_rows(df_env, env_stem):
     """Walk what the sweep declares for `env_stem`, yielding (configuration, its
     rows) for every combination, run or not.
 
-    A configuration whose runs all failed has no row to be found by, and those are
-    the ones worth relaunching, so the walk goes over the sweep rather than over
-    the data.
+    A configuration whose runs all failed has no row to be found by, so the walk
+    goes over the sweep rather than over the data.
 
     A sweep may declare several environments while this is called once per
-    environment, so combinations belonging to another environment are skipped
-    rather than counted as missing here."""
+    environment, so combinations belonging to another environment are skipped."""
 
     for hp in expand_sweep(global_sweep, sweep):
         if "environment" in hp and value_str(hp["environment"]) != env_stem:
@@ -561,20 +543,6 @@ def declared_rows(df_env, env_stem):
         # can itself be a list, so wrap before selecting.
         mask, _ = select_rows(df_env, {k: [v] for k, v in hp.items()})
         yield hp, df_env[mask]
-
-
-def algorithm_of(frame):
-    """The config group these rows were launched with, for relaunching them --
-    submit_jobs needs an `algorithm=` and the runs do not record one.
-
-    None when nothing resolved it, and None when the rows disagree, which happens
-    when the sweep does not declare the algorithm and several ran: better to omit
-    it from the relaunch than to pick one of them."""
-
-    if ALGO not in frame.columns or frame.empty:
-        return None
-    values = frame[ALGO].dropna().unique()
-    return values[0] if len(values) == 1 else None
 
 
 def seeds_of(frame):
@@ -2893,8 +2861,6 @@ for pairs, flag, keep in (
     for message in filter_messages:
         vprint(message)
 
-missing_runs = {}
-
 # Only the environments the sweep declares. The parquet file holds whatever ran
 # in the folder, and a sweep that names two of them is a figure about those two.
 #
@@ -2971,10 +2937,6 @@ for env in envs_present:
     df_env = df[df[ENV] == env]
     vprint(f"\n{'=' * 60}\nEnvironment: {env_name}\n{'=' * 60}")
 
-    # Not configured: the fullest configuration actually seen for this environment.
-    has_seeds = SEED in df_env.columns and df_env[SEED].notna().any()
-    expected_seeds = int(df_env[SEED].dropna().max()) + 1 if has_seeds else None
-
     blocks, curve_axes = layout.blocks(df_env)
     if not blocks:
         vprint(f"Nothing to plot for {env_name}, skipping.")
@@ -2992,30 +2954,6 @@ for env in envs_present:
 
     if args.verbose:
         recap(env_stem, df_env)
-
-    if args.prepare_missing_runs and expected_seeds is None:
-        print(
-            f"WARNING: {env_name} records no seed, so its missing runs were not "
-            f"checked."
-        )
-
-    if args.prepare_missing_runs and expected_seeds is not None:
-        declared = incomplete = 0
-        for hp, rows in declared_rows(df_env, env_stem):
-            declared += 1
-            incomplete += record_missing(
-                missing_runs,
-                launch_overrides(
-                    {"environment": env, "algorithm": algorithm_of(rows)},
-                    hp,
-                ),
-                seeds_of(rows),
-                expected_seeds,
-            )
-        vprint(
-            f"{declared} configuration(s) declared by the sweep, "
-            f"{incomplete} with missing seeds"
-        )
 
     # `time` is not among them: it has a mode of its own, and offering it here
     # would draw a run's duration a second time, in seconds, as a curve, as an
@@ -3221,36 +3159,6 @@ if declared_envs is not None:
             f"WARNING: {len(absent_envs)} environment(s) the sweep declares have "
             f"no run in the data: {absent_envs}"
         )
-    if absent_envs and args.prepare_missing_runs:
-        # No rows, so no seed count of its own. The highest seed anywhere in the
-        # data is used instead, and reported, since the environment recorded
-        # nothing to derive it from.
-        has_any_seed = SEED in df.columns and df[SEED].notna().any()
-        if not has_any_seed:
-            print(
-                f"WARNING: the data records no seed, so the missing runs of "
-                f"{absent_envs} were not written."
-            )
-        else:
-            everywhere = int(df[SEED].dropna().max()) + 1
-            print(
-                f"Their missing runs are written against {everywhere} seed(s), "
-                f"the highest seed found anywhere in the data."
-            )
-            # An empty slice, columns and all: `declared_rows` walks the sweep
-            # and selects rows for each combination, and for these there are
-            # none to find -- every seed of every configuration is missing.
-            empty = df.iloc[0:0]
-            for env_stem in absent_envs:
-                for hp, _ in declared_rows(empty, env_stem):
-                    record_missing(
-                        missing_runs,
-                        launch_overrides(
-                            {"environment": env_stem, "algorithm": None}, hp
-                        ),
-                        [],
-                        everywhere,
-                    )
 
 # An empty Time Bars mode looks the same whether the runs were never timed or
 # the column did not decode, so the case that reached no environment is named.
@@ -3310,10 +3218,6 @@ for env_name, long_df, filter_fields, laid_out in env_tabs:
             for log in (False, True)
         },
     })
-
-if args.prepare_missing_runs:
-    path, n_jobs = write_missing_runs_script(args.folder, missing_runs)
-    print(f"\nMissing runs script: {path} ({n_jobs} entries)")
 
 if not panels:
     raise SystemExit("No environment produced a curve, so no page was written.")

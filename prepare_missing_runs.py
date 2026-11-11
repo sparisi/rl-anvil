@@ -115,7 +115,7 @@ if not args.sweep and not args.plot_config:
 if not os.path.isdir(args.folder):
     raise SystemExit(f"Data directory not found: {args.folder}")
 
-device ="cuda" if args.cuda else "cpu"
+device = "cuda" if args.cuda else "cpu"
 
 
 def identity(flat, ignore):

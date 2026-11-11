@@ -131,12 +131,14 @@ def load_plot_configs(name: str):
     """Every plot config `-p name` asks for, as [(name, path, contents)].
 
     A directory is a set of figures that belong together -- one sweep's, say --
-    with a file per set inside it, and every one of them is drawn: `-p example`
-    reads configs/plots/example/*.yaml. A file in it whose first non-empty line
-    starts with `# skip` is left out. A single file is one such set.
+    with a file per set inside it or in any of its subdirectories, and every one
+    of them is drawn: `-p example` reads configs/plots/example/**/*.yaml. A file
+    whose first non-empty line starts with `# skip` is left out. A single file is
+    one such set.
 
     The name each comes back with is its path under PLOT_CONFIG_DIR without the
-    extension, e.g. "example/default", which is what a caller writing one
+    extension, e.g. "example/default" or "example/ablations/eps", which is what a
+    caller writing one
     directory of figures per config should name it by -- otherwise every
     `default.yaml` in the repo writes over the same place."""
 
@@ -152,7 +154,7 @@ def load_plot_configs(name: str):
             files = [path]
             break
         if path.is_dir():
-            files = sorted(p for p in path.glob("*.yaml"))
+            files = sorted(p for p in path.rglob("*.yaml"))
             if not files:
                 raise SystemExit(f"No .yaml in {path}, so there is nothing to plot.")
             files = [p for p in files if not is_skipped_config(p)]

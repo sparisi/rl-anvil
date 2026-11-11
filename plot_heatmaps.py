@@ -52,8 +52,8 @@ from src.utils.matching import ignored_cfg_keys, load_config_group, split_config
 from src.utils.misc import make_vprint
 from src.utils.plot import (
     add_config_group_args, assign_groups, composed_mask, ensure_font, entry_config,
-    env_groups, load_plot_configs, memory_fractions, plot_entries, plot_labels,
-    tex_kwargs as _tex,
+    env_groups, hyperparameter_strings, load_plot_configs, memory_fractions,
+    plot_entries, plot_labels, tex_kwargs as _tex,
 )
 from src.utils.heatmaps import (
     CBAR_SUBPLOT_SIZE, add_colorbar, arr_range, auto_dpi, cbar_groups, cbar_hspace,
@@ -360,6 +360,9 @@ if not flat_cfgs:
 
 df = pd.DataFrame.from_dict(flat_cfgs, orient="index")
 df.columns = pd.MultiIndex.from_tuples([("hyperparameter", c) for c in df.columns])
+# Every hyperparameter column as value_str renders it, once: run_of compares
+# against them for every (environment, entry).
+hp_strings = hyperparameter_strings(df)
 
 plot_cfgs = load_plot_configs(args.plot_config)
 vprint(f"\n{len(plot_cfgs)} plot config(s): {[n for n, _, _ in plot_cfgs]}")
@@ -400,7 +403,8 @@ def run_of(env, selector, label, ignored, matched):
     flat = entry_config(env, selector, label)
     if flat is None:
         return None
-    names = list(df.index[composed_mask(df, flat, ignore=ignored) & matched])
+    mask = composed_mask(df, flat, ignore=ignored, as_str=hp_strings)
+    names = list(df.index[mask & matched])
     if not names:
         return None
     if len(names) > 1:

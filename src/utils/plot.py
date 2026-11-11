@@ -247,8 +247,7 @@ def plot_entries(plot_cfg: dict, with_directives: bool = False):
               plot.label: "..."             # what to call them
               plot.color: "purple"          # what to draw it in
 
-    A group is a family drawn in one hue; what a group is called does not reach
-    the figure. An entry that names no hyperparameter would select every run, so
+    A group is a family drawn in one hue (see style_entries). An entry that names no hyperparameter would select every run, so
     it is dropped and reported rather than drawn.
 
     Every key under `plot.` is a directive rather than a hyperparameter, so it is
@@ -304,12 +303,16 @@ def style_entries(plot_cfg: dict):
     """The entries a plot config draws, in the order it writes them, each with
     what to draw it in, as a list of dicts with:
 
-        group      the colour group it belongs to
-        selector   what the runs must hold, as {hyperparameter: value}
-        label      what to call them
-        color      the group's hue, shaded by the entry's position in it
-        linestyle  varied within a group as well, so a printout in grey still reads
-        hatch      the same distinction, for bars
+        group       the colour group it belongs to
+        group_label what to call the group: its value in the plot config's
+                    `group_labels`, a mapping of group names to labels, and None
+                    when that mapping leaves it out
+        selector    what the runs must hold, as {hyperparameter: value}
+        label       what to call them
+        base_color  the group's palette colour, unshaded
+        color       the group's hue, shaded by the entry's position in it
+        linestyle   varied within a group as well, so a printout in grey still reads
+        hatch       the same distinction, for bars
 
     A group's entries share a hue; a group of one keeps the palette colour
     undarkened, since it has no siblings to reserve brightness for.
@@ -334,6 +337,7 @@ def style_entries(plot_cfg: dict):
     ):
         by_group.setdefault(name, []).append((label, selector, directives))
 
+    group_labels = plot_cfg.get("group_labels") or {}
     hue = {name: i for i, name in enumerate(plot_cfg.get("color_scheme") or [])}
     for name in by_group:
         if name not in hue:
@@ -360,8 +364,10 @@ def style_entries(plot_cfg: dict):
                     )
             entries.append({
                 "group": name,
+                "group_label": group_labels.get(name),
                 "selector": selector,
                 "label": label,
+                "base_color": base,
                 "color": color,
                 "linestyle": LINESTYLES[i % len(LINESTYLES)],
                 "hatch": HATCHES[i % len(HATCHES)],
@@ -369,11 +375,23 @@ def style_entries(plot_cfg: dict):
     return entries
 
 
+def hyperparameter_strings(frame) -> dict:
+    """Return {hyperparameter: its column of `frame` rendered by value_str}, the
+    form composed_mask compares. Computed once, it serves every composed_mask
+    call on the same frame."""
+
+    return {
+        c[1]: frame[c].map(value_str)
+        for c in frame.columns if c[0] == "hyperparameter"
+    }
+
+
 def composed_mask(
     frame,
     flat,
     assigned: tuple = LABEL_KEYS,
     ignore: frozenset = frozenset(),
+    as_str: dict | None = None,
 ):
     """The rows of `frame` whose whole recorded configuration is `flat`, as a
     boolean mask.
@@ -392,25 +410,25 @@ def composed_mask(
     `ignore` is the same exemption `assign_configs` takes, for keys a launch set
     for every run alike: composing gives them the value the YAMLs declare, which
     is not the value any run holds. A key exempt from one comparison and not the
-    other would let a run be an environment and not be any configuration of it."""
+    other would let a run be an environment and not be any configuration of it.
 
-    recorded = {c[1] for c in frame.columns if c[0] == "hyperparameter"}
+    `as_str` is hyperparameter_strings(frame). Without it, the columns are
+    rendered on every call."""
+
+    if as_str is None:
+        as_str = hyperparameter_strings(frame)
     if any(
-        k not in recorded and not is_null(v) and not exempt_key(k, ignore)
+        k not in as_str and not is_null(v) and not exempt_key(k, ignore)
         for k, v in flat.items()
     ):
         # A key the configuration sets and no run recorded: no row is it.
         return pd.Series(False, index=frame.index)
 
     mask = pd.Series(True, index=frame.index)
-    for col in frame.columns:
-        if (
-            col[0] != "hyperparameter"
-            or col[1] in assigned
-            or exempt_key(col[1], ignore)
-        ):
+    for key, series in as_str.items():
+        if key in assigned or exempt_key(key, ignore):
             continue
-        mask &= frame[col].map(value_str) == value_str(flat.get(col[1]))
+        mask &= series == value_str(flat.get(key))
     return mask
 
 
@@ -735,9 +753,10 @@ def record_missing(
     overrides: dict,
     found: list[int],
     expected: int,
-) -> bool:
+) -> list[int]:
     """Note the seeds a configuration is short of in `missing_runs`, the dict
-    write_missing_runs_script writes out. True when something was missing.
+    write_missing_runs_script writes out, and return them, empty when none are
+    missing.
 
     `overrides` is every key that identifies the configuration, `environment` and
     `algorithm` among them if they are known -- submit_jobs takes them as ordinary
@@ -745,12 +764,12 @@ def record_missing(
 
     missing = [s for s in range(expected) if s not in found]
     if not missing:
-        return False
+        return missing
     overrides = {k: native(v) for k, v in overrides.items()}
     key = tuple(sorted((k, value_str(v)) for k, v in overrides.items()))
     _, seeds = missing_runs.setdefault(key, (overrides, []))
     seeds.extend(s for s in missing if s not in seeds)
-    return True
+    return missing
 
 
 # -----------------------------------------------------------------------------
@@ -890,15 +909,21 @@ def tex_kwargs(label):
 
 
 def save_figure(fig, folder, name, dpi=300):
-    """Save `fig` as `folder/name.png` and return the path to it.
+    """Save `fig` as `folder/name.png` and return the path to it, or None when
+    the file cannot be written.
 
     The name is sanitized with pathvalidate, which strips the characters a
     filename cannot hold, and the path is normalized so its separators are the
-    platform's own."""
+    platform's own. A write that fails with an OSError prints a warning naming
+    the path and the error, and the caller goes on to its next figure."""
 
     name = sanitize_filename(name, platform="auto")
     path = os.path.normpath(os.path.join(folder, name + ".png"))
-    fig.savefig(path, bbox_inches="tight", pad_inches=0.1, dpi=dpi)
+    try:
+        fig.savefig(path, bbox_inches="tight", pad_inches=0.1, dpi=dpi)
+    except OSError as e:
+        print(f"WARNING: could not write {path}: {e}")
+        return None
     return path
 
 
@@ -923,6 +948,16 @@ def write_legend(entries, plot_cfg, output_dir, font_size):
         )
         for e in entries
     ]
+    return write_legend_handles(handles, plot_cfg, output_dir, font_size)
+
+
+def write_legend_handles(handles, plot_cfg, output_dir, font_size):
+    """Write a legend of `handles` on its own, as legend_horizontal and
+    legend_vertical in `output_dir`, and return the paths written.
+
+    The horizontal is laid out by `legend_rows_cols`; the vertical is always one
+    entry per row."""
+
     if not handles:
         return []
     n_cols = rows_cols(plot_cfg.get("legend_rows_cols"), len(handles))[1]

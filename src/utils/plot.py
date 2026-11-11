@@ -137,10 +137,9 @@ def load_plot_configs(name: str):
     one such set.
 
     The name each comes back with is its path under PLOT_CONFIG_DIR without the
-    extension, e.g. "example/default" or "example/ablations/eps", which is what a
-    caller writing one
-    directory of figures per config should name it by -- otherwise every
-    `default.yaml` in the repo writes over the same place."""
+    extension, e.g. "example/default" or "example/ablations/eps", which is what
+    a caller writing one directory of figures per config should name it by
+    -- otherwise every `default.yaml` in the repo writes over the same place."""
 
     for candidate in (
         name,

@@ -131,12 +131,14 @@ def load_plot_configs(name: str):
     """Every plot config `-p name` asks for, as [(name, path, contents)].
 
     A directory is a set of figures that belong together -- one sweep's, say --
-    with a file per set inside it, and every one of them is drawn: `-p example`
-    reads configs/plots/example/*.yaml. A file in it whose first non-empty line
-    starts with `# skip` is left out. A single file is one such set.
+    with a file per set inside it or in any of its subdirectories, and every one
+    of them is drawn: `-p example` reads configs/plots/example/**/*.yaml. A file
+    whose first non-empty line starts with `# skip` is left out. A single file is
+    one such set.
 
     The name each comes back with is its path under PLOT_CONFIG_DIR without the
-    extension, e.g. "example/default", which is what a caller writing one
+    extension, e.g. "example/default" or "example/ablations/eps", which is what a
+    caller writing one
     directory of figures per config should name it by -- otherwise every
     `default.yaml` in the repo writes over the same place."""
 
@@ -152,7 +154,7 @@ def load_plot_configs(name: str):
             files = [path]
             break
         if path.is_dir():
-            files = sorted(p for p in path.glob("*.yaml"))
+            files = sorted(p for p in path.rglob("*.yaml"))
             if not files:
                 raise SystemExit(f"No .yaml in {path}, so there is nothing to plot.")
             files = [p for p in files if not is_skipped_config(p)]
@@ -899,6 +901,63 @@ def save_figure(fig, folder, name, dpi=300):
     path = os.path.normpath(os.path.join(folder, name + ".png"))
     fig.savefig(path, bbox_inches="tight", pad_inches=0.1, dpi=dpi)
     return path
+
+
+def write_legend(entries, plot_cfg, output_dir, font_size):
+    """Write the legend of `entries` on its own, for a figure that has to carry
+    one elsewhere, and return the paths written.
+
+    Both shapes are written every time, since which one fits depends on the
+    document the figure goes into rather than on the data. The horizontal is laid
+    out by `legend_rows_cols`; the vertical is always one entry per row."""
+
+    # Thick strokes in the curves' linestyles. Dash lengths scale with the line
+    # width, so the handle is long enough to hold a full dash-dot period.
+    handles = [
+        plt.Line2D(
+            [], [],
+            color=e["color"],
+            linestyle=e["linestyle"],
+            linewidth=7.0,
+            solid_capstyle="butt",
+            label=e["label"],
+        )
+        for e in entries
+    ]
+    if not handles:
+        return []
+    n_cols = rows_cols(plot_cfg.get("legend_rows_cols"), len(handles))[1]
+
+    paths = []
+    for name, cols in (("legend_horizontal", n_cols), ("legend_vertical", 1)):
+        fig_legend = plt.figure()
+        ax_legend = fig_legend.add_subplot(111)
+        ax_legend.axis("off")
+        legend = ax_legend.legend(
+            handles,
+            [h.get_label() for h in handles],
+            fontsize=font_size,
+            frameon=True,
+            loc="center",
+            ncol=cols,
+            # In font units. The defaults (2.0 and 0.7) draw a block half the
+            # height of the text beside it.
+            handlelength=6.0,
+            handleheight=1.3,
+        )
+        for text in legend.get_texts():
+            text.set(**tex_kwargs(text.get_text()))
+        # The canvas is cut to the legend rather than guessed at. A figure sized
+        # by a rule of thumb is a floor the crop cannot go below -- the axes fills
+        # it whether the legend does or not -- and one entry per row in a canvas
+        # wide enough for four is all margin.
+        fig_legend.canvas.draw()
+        box = legend.get_window_extent().transformed(
+            fig_legend.dpi_scale_trans.inverted())
+        fig_legend.set_size_inches(box.width, box.height)
+        paths.append(save_figure(fig_legend, output_dir, name))
+        plt.close(fig_legend)
+    return paths
 
 
 def hyperparameter_to_label(keys) -> dict:

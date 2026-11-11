@@ -46,9 +46,6 @@ A LaTeX table of each entry's area under the curve is written beside the figures
 (table.tex), and with --rliable_final or --rliable_auc one of the IQM and the
 probability of improvement on that score (rliable_final.tex, rliable_auc.tex).
 
---prepare_missing_runs writes a script relaunching the seeds an entry is short of,
-counted against `rng_seed` in the config.
-
 Run with --help for the rest of the options.
 
 Example
@@ -87,7 +84,6 @@ from src.utils.matching import ignored_cfg_keys, load_config_group
 from src.utils.misc import make_vprint, warn_once
 from src.utils.plot import (
     PLOT_CONFIG_DIR,
-    SEED,
     STEPS_STAT,
     TIME,
     add_config_group_args,
@@ -102,10 +98,8 @@ from src.utils.plot import (
     env_groups,
     error_shade_plot,
     fitted_rows_cols,
-    launch_overrides,
     load_plot_configs,
     plot_labels,
-    record_missing,
     rows_cols,
     save_figure,
     series_of,
@@ -114,7 +108,7 @@ from src.utils.plot import (
     style_entries,
     summarize,
     tex_kwargs,
-    write_missing_runs_script,
+    write_legend,
 )
 
 # A plot config names its configurations whatever reads best -- "ε-greedy (1 → 0)"
@@ -253,11 +247,6 @@ parser.add_argument(
     help="Leave the legend off the figures. The standalone legend is still "
          "written.",
 )
-parser.add_argument(
-    "--prepare_missing_runs",
-    action="store_true",
-    help="Write a script relaunching the seeds each configuration is short of.",
-)
 parser.add_argument("-v", "--verbose", action="store_true")
 args = parser.parse_args()
 
@@ -301,9 +290,6 @@ plt.rcParams["font.size"] = FONT_SIZE
 plt.rcParams["axes.axisbelow"] = False
 plt.rcParams["grid.linestyle"] = "--"
 
-# Accumulated over every config drawn: the relaunch script is one script for the
-# whole run, whatever it took to find out what is missing.
-missing_runs = {}
 written = 0
 
 
@@ -316,8 +302,8 @@ def rows_of(drawing, env, index, entry):
     configuration, and belongs to whichever entry composes to it.
 
     Kept in `drawing.rows`: the same (environment, entry) is asked for once for
-    the timings, once per statistic and once for the missing runs, and each
-    answer costs a comparison against every hyperparameter column of the frame."""
+    the timings and once per statistic, and each answer costs a comparison
+    against every hyperparameter column of the frame."""
 
     key = (env, index)
     if key not in drawing.rows:
@@ -438,7 +424,6 @@ class Drawing:
     ignored_keys: frozenset
     matched: pd.Series
     env_stem: pd.Series
-    expected_seeds: object
     output_dir: str
     summaries: dict = field(default_factory=dict)
     # (score kind, group, statistic) -> the rliable estimates the tables print.
@@ -908,7 +893,6 @@ def draw_config(config_name, cfg):
         ignored_keys=ignored_keys,
         matched=matched,
         env_stem=env_stem,
-        expected_seeds=cfg.get("rng_seed"),
         output_dir=output_dir,
     )
     written = 0
@@ -1392,41 +1376,11 @@ def draw_config(config_name, cfg):
                     plt.close(fig)
                     written += 1
 
-    # --- The seeds each configuration is short of ------------------------------
-    # Over every environment the config declares rather than the ones that had
-    # runs, and outside the group loop for the same reason: an environment with no
-    # runs at all is the one short of the most seeds, and it never reaches
-    # `present` -- a group with none skips the loop body altogether.
-    if args.prepare_missing_runs and drawing.expected_seeds is not None:
-        declared = dict.fromkeys(
-            env for envs in drawing.groups.values() for env in envs
-        )
-        for env in declared:
-            for i, entry in enumerate(drawing.entries):
-                # An entry naming another environment composes to nothing here,
-                # and the seeds it is short of belong to the environment it names.
-                # Recorded against this one, its own environment would still win
-                # the override that keys the relaunch (see launch_overrides), so
-                # every seed would be filed as missing under a configuration that
-                # may well be complete.
-                if entry_config(env, entry["selector"], entry["label"]) is None:
-                    continue
-                rows = rows_of(drawing, env, i, entry)
-                seeds = sorted(int(s) for s in rows[SEED].dropna().unique()) \
-                    if SEED in rows.columns else []
-                # The entry's own keys are the overrides to relaunch it with:
-                # they are what made it this configuration and not another.
-                record_missing(
-                    missing_runs,
-                    launch_overrides({"environment": env}, dict(entry["selector"])),
-                    seeds,
-                    drawing.expected_seeds,
-                )
-
     write_table(drawing)
     write_rliable_tables(drawing)
     recap(drawing)
-    write_legend(drawing)
+    for path in write_legend(drawing.entries, drawing.cfg, drawing.output_dir, FONT_SIZE):
+        vprint(f"  Saved: {path}")
     print(
         f"\n{drawing.name}: {len(drawing.entries)} configuration(s), "
         f"{len(drawing.groups)} environment group(s) -> {drawing.output_dir}"
@@ -1701,58 +1655,9 @@ def recap(drawing):
         print(f"  {'=' * len(header)}")
 
 
-def write_legend(drawing):
-    """The legend on its own, for a figure that has to carry one elsewhere.
-
-    Both shapes are written every time, since which one fits depends on the
-    document the figure goes into rather than on the data. The horizontal is laid
-    out by `legend_rows_cols`; the vertical is always one entry per row."""
-
-    # Filled blocks, not the line the curves are drawn with: at the size a legend
-    # is read at, a bar of colour carries the colour better than a stroke of it.
-    handles = [
-        mpatches.Patch(facecolor=e["color"], label=e["label"])
-        for e in drawing.entries
-    ]
-    n_rows, n_cols = rows_cols(drawing.cfg.get("legend_rows_cols"), len(handles))
-
-    for name, cols in (("legend_horizontal", n_cols), ("legend_vertical", 1)):
-        fig_legend = plt.figure()
-        ax_legend = fig_legend.add_subplot(111)
-        ax_legend.axis("off")
-        legend = ax_legend.legend(
-            handles,
-            [h.get_label() for h in handles],
-            fontsize=FONT_SIZE,
-            frameon=True,
-            loc="center",
-            ncol=cols,
-            # In font units. The defaults (2.0 and 0.7) draw a block half the
-            # height of the text beside it.
-            handlelength=2.6,
-            handleheight=1.3,
-        )
-        for text in legend.get_texts():
-            text.set(**tex_kwargs(text.get_text()))
-        # The canvas is cut to the legend rather than guessed at. A figure sized
-        # by a rule of thumb is a floor the crop cannot go below -- the axes fills
-        # it whether the legend does or not -- and one entry per row in a canvas
-        # wide enough for four is all margin.
-        fig_legend.canvas.draw()
-        box = legend.get_window_extent().transformed(
-            fig_legend.dpi_scale_trans.inverted())
-        fig_legend.set_size_inches(box.width, box.height)
-        vprint(f"  Saved: {save_figure(fig_legend, drawing.output_dir, name)}")
-        plt.close(fig_legend)
-
-
 for config_name, plot_cfg_path, config in plot_cfgs:
     vprint(f"\n{'#' * 60}\nPlot config: {config_name}\n{'#' * 60}")
     written += draw_config(config_name, config)
-
-if args.prepare_missing_runs:
-    path, n_jobs = write_missing_runs_script(args.folder, missing_runs)
-    print(f"\nMissing runs script: {path} ({n_jobs} entries)")
 
 print(
     f"\n{len(plot_cfgs)} plot config(s), {written} figure(s) -> "

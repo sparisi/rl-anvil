@@ -15,6 +15,7 @@ agent:
     random_tail: False
     per_step_selection: True
     goal_value_check: False
+    beta_novelty: 1.0
     eps:
       id: LinearDecay
       init_value: 1.0

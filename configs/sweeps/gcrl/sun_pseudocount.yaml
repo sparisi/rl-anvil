@@ -5,6 +5,7 @@ global_sweep:
     - gymnasium/pendulum_discrete
     - gymnasium/cart_pole
     - gymnasium/lunar_lander
+    - gymnasium/lunar_lander_full
   algorithm: sun_ratio_adaptive
   experiment.replay_memory.rho: [null, 0.5, 0.25, 0.1, 0.05, 0.01]
   results.save_memory: True

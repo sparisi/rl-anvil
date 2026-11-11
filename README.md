@@ -267,14 +267,17 @@ script below for SLURM jobs.
 
 **<ins>SLURM.</ins>** Launch parallel jobs over cluster compute nodes.
 ```
-python submit_jobs_slurm.py --sweep=example --data_dir=data_example --cluster=roihu --seeds=0-9 --seeds_per_chunk=5
+python submit_jobs_slurm.py --sweep=example --data_dir=data_example --cluster=roihu --seeds=0-9 --seeds_per_chunk=5 --skip_duplicates
 ```
 
 > `--cluster` selects a settings file in `configs/slurm` (directories, modules, account, ---).
 
 Each configuration's seeds are split into chunks, and each chunk runs on a
 separate process within the same job via SLURM tasks. This script assigns unique
-names to jobs and checks for existing queued/running configurations.  
+names to jobs and checks for existing queued/running configurations. With
+`--skip_duplicates`, seeds that are already queued, running, or completed are not
+submitted again.  
+To list the runs missing from a sweep or a plot config, check `prepare_missing_runs.py`.  
 Run `bash inspect_jobs.sh` to print details about one or more running jobs, or
 `bash inspect_jobs.sh --progress_only` to check the progress of each job, e.g.
 ```shell

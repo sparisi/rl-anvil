@@ -620,8 +620,17 @@ class SUN_Reachability(GoalConditioned):
 
 
 class SUN_UCB(GoalConditioned):
+    def __init__(
+        self,
+        *args,
+        beta_novelty: float,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.beta_novelty = beta_novelty
+
     def _score(self, q_visit, n):
-        return q_visit.max(-2) + np.sqrt(np.log(self.t) / n)
+        return q_visit.max(-2) + self.beta_novelty * np.sqrt(np.log(self.t) / n)
 
 
 class DISCOVER(GoalConditioned):

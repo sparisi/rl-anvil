@@ -89,6 +89,7 @@ from src.utils.plot import (
     style_entries,
     summarize,
     tex_kwargs,
+    write_legend,
 )
 from src.utils.heatmaps import env_context
 
@@ -1028,43 +1029,6 @@ def legend_on(fig, cfg, handles, offset=None, top=None):
         text.set(**tex_kwargs(text.get_text()))
 
 
-def write_legend(cfg, entries, output_dir):
-    """The legend on its own, for a figure that has to carry one elsewhere.
-
-    Both shapes are written every time, since which one fits depends on the document
-    the figure goes into rather than on the data. The horizontal is laid out by
-    `legend_rows_cols`; the vertical is always one entry per row."""
-
-    handles = [mpatches.Patch(facecolor=e["color"], label=e["label"]) for e in entries]
-    if not handles:
-        return
-    n_cols = rows_cols(cfg.get("legend_rows_cols"), len(handles))[1]
-
-    for name, cols in (("legend_horizontal", n_cols), ("legend_vertical", 1)):
-        fig_legend = plt.figure()
-        ax_legend = fig_legend.add_subplot(111)
-        ax_legend.axis("off")
-        legend = ax_legend.legend(
-            handles,
-            [h.get_label() for h in handles],
-            fontsize=FONT_SIZE,
-            frameon=True,
-            loc="center",
-            ncol=cols,
-            handlelength=2.6,
-            handleheight=1.3,
-        )
-        for text in legend.get_texts():
-            text.set(**tex_kwargs(text.get_text()))
-        # The canvas is cut to the legend rather than guessed at.
-        fig_legend.canvas.draw()
-        box = legend.get_window_extent().transformed(
-            fig_legend.dpi_scale_trans.inverted())
-        fig_legend.set_size_inches(box.width, box.height)
-        vprint(f"  Saved: {save_figure(fig_legend, output_dir, name)}")
-        plt.close(fig_legend)
-
-
 def draw_curves(
     config_name,
     cfg,
@@ -1380,7 +1344,8 @@ for config_name, _path, cfg in plot_cfgs:
     for metric in METRICS:
         written += draw_auc_all(cfg, entries, selected, all_envs, metric, output_dir)
 
-    write_legend(cfg, entries, output_dir)
+    for path in write_legend(entries, cfg, output_dir, FONT_SIZE):
+        vprint(f"  Saved: {path}")
     recap(config_name, entries, selected, all_envs)
     print(
         f"\n{config_name}: {len(entries)} configuration(s), "

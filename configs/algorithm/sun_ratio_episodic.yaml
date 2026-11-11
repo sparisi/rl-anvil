@@ -11,7 +11,7 @@ agent:
 
   actor:
     id: SUN_Ratio
-    batch_size_goal: 2500
+    batch_size_goal: 2_500
     random_tail: True
     per_step_selection: False
     goal_value_check: False

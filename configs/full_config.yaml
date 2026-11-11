@@ -19,6 +19,7 @@ results:
   force_run:  # if False and the corresponding data.npz exists, the run will be prevented; set it to True if you want to force reruns (e.g., with save_videos=True)
   progress_report:  # history_table (progress bars + one scrolling row per checkpoint), live_table (progress bars + the latest checkpoint rewritten in place), dict (one plain {key: value} line per checkpoint, for SLURM logs), or null
   slurm_debug:  # if True, every checkpoint also records memory diagnostics
+  true_visit_check:  # if True, goal-conditioned actors and visit critics record diagnostics against the true visit Q-function (base Gym-Gridworlds only)
 
 experiment:
   rng_seed:  # random seed

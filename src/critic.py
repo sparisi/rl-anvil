@@ -405,6 +405,10 @@ class QVisitNetwork(QNetwork):
         self.negative_visit_reward = negative_visit_reward
         self.reward_visit_hard = reward_visit_hard
         self.relabeling = relabeling
+        # The true visit Q-function (src.oracle.TrueVisitQ), set by the experiment
+        # when results.true_visit_check is True. If set, `update` also returns
+        # the errors of the learned visit Q-function against it.
+        self.true_visit = None
         goal_shape = np.empty(obs_space.shape, dtype=obs_space.dtype)[..., self.goal_idx].shape
         self.q_visit = getattr(src.approximator, approximator_visit.id)(
             goal_shape, obs_space.shape, act_space.n, **approximator_visit, seed=seed,
@@ -478,6 +482,11 @@ class QVisitNetwork(QNetwork):
         # obs scale, but it also breaks the condition on terminal transition
         # "term = rwd_visit == 1", unless a threshold check |s - g | < η is used.
 
+        # The true visit Q-function reads observations before normalization.
+        q_true = None
+        if self.true_visit is not None:
+            q_true = self.true_visit(obs, goal)
+
         obs = self._normalize_obs(obs)
         next_obs = self._normalize_obs(next_obs)
         goal = self._normalize_obs(goal)
@@ -543,6 +552,14 @@ class QVisitNetwork(QNetwork):
             self.lmbda_visit,
         )
 
+        # Learned values of all actions before the update. Evaluation mode
+        # disables dropout, so this forward pass draws no random numbers.
+        q_visit_all = None
+        if q_true is not None:
+            self.q_visit.eval()
+            q_visit_all = self.q_visit(obs, goal[..., self.goal_idx])
+            self.q_visit.train()
+
         loss_visit, gradient_norm_visit, q_visit = self.q_visit.update(
             obs,
             goal[..., self.goal_idx],
@@ -561,10 +578,34 @@ class QVisitNetwork(QNetwork):
         # The new priority value is the critic loss.
         replay_memory.post_sampling(batch["idx"], mean_loss_visit, batch["priority_key"])
 
-        return q_stats | {
+        stats = q_stats | {
             "loss_visit": mean_loss_visit,
             "grad_norm_visit": gradient_norm_visit,
             "q_visit_mean": q_visit.mean(),
+        }
+        if q_true is not None:
+            stats |= self._true_visit_errors(q_true, q_visit_all, q_visit, act)
+        return stats
+
+    @staticmethod
+    def _true_visit_errors(q_true, q_visit_all, q_visit_act, act):
+        """
+        Return the mean absolute errors of the learned visit Q-function against
+        the true one `q_true` on a relabeled batch of shape (B, T, K_total):
+        over all actions (`q_visit_all`), over the actions taken (`q_visit_act`,
+        the predictions of the update), and over the actions taken split into
+        the positive goals (first half of K_total) and the negative goals
+        (second half).
+        """
+
+        q_true_act = np.take_along_axis(q_true, act[..., None, None], axis=-2).squeeze(-2)
+        err_act = np.abs(q_visit_act - q_true_act)
+        k = err_act.shape[2] // 2
+        return {
+            "q_visit_abs_err": np.abs(q_visit_all - q_true).mean(),
+            "q_visit_abs_err_act": err_act.mean(),
+            "q_visit_abs_err_pos": err_act[:, :, :k].mean(),
+            "q_visit_abs_err_neg": err_act[:, :, k:].mean(),
         }
 
     def post_step(self, obs, act, *args, **kwargs):

@@ -162,6 +162,7 @@ class Experiment:
         rng_seed: int = 0,
         progress_report: str = "history_table",
         slurm_debug: bool = False,
+        true_visit_check: bool = False,
         training_return_episode_window: int = 10,
         git_hash: str = None,
         slurm_job_id: str = None,
@@ -229,6 +230,13 @@ class Experiment:
                   W&B (if enabled); only stdout stays silent.
             slurm_debug (bool): if True, every checkpoint also records memory
                 diagnostics,
+            true_visit_check (bool): if True, the true visit Q-function of the
+                environment (src.oracle.TrueVisitQ) is given to the actor and
+                to every visit critic, which then record diagnostics against it.
+                It needs a goal-conditioned actor, a visit critic whose goal is
+                the whole observation, and a base Gym-Gridworlds environment.
+                The diagnostics draw no random numbers, so training is the same
+                with and without them,
             git_hash (str): commit the run was launched from, and
             slurm_job_id (str): the SLURM job that ran it. Both are recorded per
                 seed in the .npz rather than in cfg.yaml, which every seed of a
@@ -324,6 +332,26 @@ class Experiment:
             self._seed_test = [
                 int(s) for s in seed_seq.generate_state(self._testing_episodes)
             ]
+
+        # Set after the test copies above, which never explore or update and
+        # keep `true_visit` None.
+        if true_visit_check:
+            if not hasattr(self._actor, "true_visit"):
+                raise ValueError("results.true_visit_check needs a goal-conditioned actor.")
+            if not hasattr(self._critic, "gamma_visit"):
+                raise ValueError("results.true_visit_check needs a visit critic.")
+            if self._critic.goal_idx != slice(None):
+                raise ValueError("results.true_visit_check needs goals that are whole observations (goal_idx: null).")
+            from src.oracle import TrueVisitQ
+            true_visit = TrueVisitQ(
+                self._env_train,
+                self._critic.visit_count,
+                gamma=self._critic.gamma_visit,
+                negative_reward=self._critic.negative_visit_reward,
+            )
+            self._actor.true_visit = true_visit
+            for c in getattr(self._critic, "critics", [self._critic]):
+                c.true_visit = true_visit
 
         # The train return reported at each checkpoint is the mean over the last
         # N completed episodes.

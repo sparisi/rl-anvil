@@ -14,6 +14,7 @@ results:
   force_run: True
   progress_report: history_table
   slurm_debug: False
+  true_visit_check: False
 
 meta:
   slurm_job_id: null

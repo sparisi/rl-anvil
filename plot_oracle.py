@@ -141,7 +141,7 @@ parser.add_argument(
 )
 parser.add_argument("--parquet", default="results.parquet")
 parser.add_argument(
-    "-p", "--plot_config",
+    "-p", "--plot",
     default="gcrl_oracle/oracle",
     metavar="NAME",
     help=f"Plot config: which configurations to draw, and over which environments. "
@@ -173,7 +173,7 @@ args = parser.parse_args()
 
 vprint = make_vprint(args.verbose)
 
-plot_cfgs = load_plot_configs(args.plot_config)
+plot_cfgs = load_plot_configs(args.plot)
 vprint(f"\n{len(plot_cfgs)} plot config(s): {[n for n, _, _ in plot_cfgs]}")
 
 parquet_path = os.path.join(args.folder, args.parquet)

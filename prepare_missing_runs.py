@@ -5,8 +5,10 @@ The configurations come from two sources, either or both of which can be given.
 With neither, the script ends without writing anything.
 
   --sweep           every configuration the sweep expands to (see
-                    src/utils/sweep.py).
-  --plot_config     every entry of the plot config in every environment it
+                    src/utils/sweep.py). A directory is a set of sweeps, and
+                    every one in it or in its subdirectories not marked `# skip`
+                    is read.
+  --plot            every entry of the plot config in every environment it
                     declares, as plot_results.py composes it. An entry that pins
                     another environment is skipped in that one. A directory is a
                     set of plot configs, and every one not marked `# skip` is read.
@@ -14,7 +16,8 @@ With neither, the script ends without writing anything.
 Every configuration is composed through Hydra with the overrides
 submit_jobs_slurm.py adds to every run (the approximator devices, set by --cuda)
 and the ones given with --with. A configuration that both sources declare
-composes to the same config_id, and is checked and reported once.
+composes to the same config_id, and is checked and reported once. So is a
+configuration that several sweeps of a directory declare.
 
 The runs in the data directory are the directories holding a cfg.yaml, at any
 depth. A configuration matches a run when the two agree on every key, with the
@@ -36,12 +39,13 @@ matching, that config_id is marked as composed before `--extra`.
 
 Example
 
-    python prepare_missing_runs.py --sweep encoders --plot_config example --folder data_encoders --n_seeds 10
+    python prepare_missing_runs.py --sweep encoders --plot example --folder data_encoders --n_seeds 10
 """
 
 import argparse
 import os
 import sys
+from pathlib import Path
 
 from tqdm import tqdm
 
@@ -53,9 +57,11 @@ from src.utils.matching import (
     split_config_label,
     value_str,
 )
+from src.utils.paths import SWEEP_DIR
 from src.utils.plot import (
     PLOT_CONFIG_DIR,
     env_groups,
+    is_skipped_config,
     launch_overrides,
     load_plot_configs,
     plot_entries,
@@ -67,10 +73,12 @@ from src.utils.sweep import expand_sweep, format_override, load_sweep
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--sweep",
-    help="Sweep file in SWEEP_DIR (name without .yaml) or a path to one.",
+    help=f"Sweep whose configurations are checked. A name without .yaml is "
+         f"looked for in {SWEEP_DIR}, or give a path; a directory is a set of "
+         f"sweeps, bar those marked `# skip`.",
 )
 parser.add_argument(
-    "-p", "--plot_config",
+    "-p", "--plot",
     metavar="NAME",
     help=f"Plot config whose entries are checked. A name without .yaml is "
          f"looked for in {PLOT_CONFIG_DIR}, or give a path; a directory is a set "
@@ -111,14 +119,52 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-if not args.sweep and not args.plot_config:
-    print("No --sweep or --plot_config given, nothing to check.")
+if not args.sweep and not args.plot:
+    print("No --sweep or --plot given, nothing to check.")
     sys.exit()
 
 if not os.path.isdir(args.folder):
     raise SystemExit(f"Data directory not found: {args.folder}")
 
 device = "cuda" if args.cuda else "cpu"
+
+
+def sweep_files(name):
+    """Return every sweep `--sweep name` asks for, as [(name, path)].
+
+    `name` is looked for as given, then in SWEEP_DIR, then in SWEEP_DIR with
+    .yaml appended. A file is one sweep. A directory is a set of sweeps: every
+    .yaml in it or in its subdirectories, bar those whose first non-empty line
+    starts with `# skip`. The name each comes back with is its path under
+    SWEEP_DIR without the extension, e.g. "gcrl/main"."""
+
+    for candidate in (name, os.path.join(SWEEP_DIR, name), os.path.join(SWEEP_DIR, f"{name}.yaml")):
+        path = Path(candidate)
+        if path.is_file():
+            files = [path]
+            break
+        if path.is_dir():
+            files = [p for p in sorted(path.rglob("*.yaml")) if not is_skipped_config(p)]
+            if not files:
+                raise SystemExit(f"No .yaml in {path} that is not marked `# skip`, so there is nothing to check.")
+            break
+    else:
+        raise SystemExit(f"No sweep '{name}', and none in {SWEEP_DIR} by that name.")
+
+    out = []
+    for path in files:
+        try:
+            stem = os.path.splitext(os.path.relpath(path, SWEEP_DIR))[0]
+        except ValueError:  # another drive: no path relative to SWEEP_DIR
+            stem = path.stem
+        if stem.startswith(".."):
+            stem = path.stem
+        out.append((stem.replace(os.sep, "/"), str(path)))
+    return out
+
+
+# Read before the runs, so a sweep that does not exist stops the script at once.
+sweeps = sweep_files(args.sweep) if args.sweep else []
 
 
 def identity(flat, ignore):
@@ -202,14 +248,15 @@ def add(hp, source, ignore):
     entry["ignores"].add(ignore)
 
 
-sweep_hps = list(expand_sweep(*load_sweep(args.sweep))) if args.sweep else []
+# (sweep name, overrides) for every configuration of every sweep.
+sweep_hps = [(name, hp) for name, path in sweeps for hp in expand_sweep(*load_sweep(path))]
 sweep_ignore = frozenset(args.ignore)
 
 # (plot config name, exempt keys, environment, selector) for every entry in every
 # environment its plot config declares.
 plot_items = []
-if args.plot_config:
-    for name, _path, cfg in load_plot_configs(args.plot_config):
+if args.plot:
+    for name, _path, cfg in load_plot_configs(args.plot):
         ignore = ignored_cfg_keys(cfg) | sweep_ignore
         envs = dict.fromkeys(env for group in env_groups(cfg).values() for env in group)
         for env in envs:
@@ -217,8 +264,8 @@ if args.plot_config:
                 plot_items.append((name, ignore, env, selector))
 
 with tqdm(total=len(sweep_hps) + len(plot_items), desc="Configurations", unit="config") as bar:
-    for hp in sweep_hps:
-        add(hp, f"sweep {args.sweep}", sweep_ignore)
+    for name, hp in sweep_hps:
+        add(hp, f"sweep {name}", sweep_ignore)
         bar.update()
     for name, ignore, env, selector in plot_items:
         # An entry naming another environment is skipped in this one.

@@ -157,7 +157,7 @@ parser.add_argument(
          "memory.npz in it.",
 )
 parser.add_argument(
-    "-p", "--plot_config",
+    "-p", "--plot",
     required=True,
     metavar="NAME",
     help="Plot config: which configurations to draw, and over which environments. "
@@ -585,7 +585,7 @@ def curves_for_file(task):
 # ----- The runs --------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-plot_cfgs = load_plot_configs(args.plot_config)
+plot_cfgs = load_plot_configs(args.plot)
 vprint(f"\n{len(plot_cfgs)} plot config(s): {[n for n, _, _ in plot_cfgs]}")
 
 root = Path(args.folder)

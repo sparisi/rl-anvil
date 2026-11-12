@@ -1,0 +1,34 @@
+default:
+  - gcrl/default
+
+configs:
+  sun_ucb_adaptive:
+    - algorithm: sun_ucb_adaptive
+      plot.label: "SUN (Adapt., Additive)"
+  adagoal:
+    - algorithm: adagoal
+      plot.label: "AdaGoal"
+  discover:
+    - algorithm: discover
+      plot.label: "DISCOVER"
+
+statistics:
+  oracle_agree_%: "Oracle Agreement"
+  oracle_regret: "Score Regret"
+  true_q: "True Visit Value"
+  true_q_sel: "Selected Goal"
+  true_q_oracle: "Oracle Goal"
+  resel_random_%: "Random Action"
+  resel_suboptimal_%: "Suboptimal Action"
+  resel_stochastic_%: "Stochastic Transition"
+  resel_value_error_%: "Value Error"
+  resel_oracle_keep_%: "Oracle Keeps Goal"
+  q_visit_abs_err: "Abs. Error (All Actions)"
+  q_visit_abs_err_act: "Abs. Error (Batch Action)"
+  q_visit_abs_err_pos: "Abs. Error (Positive Goals)"
+  q_visit_abs_err_neg: "Abs. Error (Negative Goals)"
+
+environments:
+  gridworlds:
+    gym_gridworlds/three_rooms_wall_mini_nonuniform: "ThreeRoom"
+    gym_gridworlds/four_rooms_stuck_hard: "FourRoomStuck"

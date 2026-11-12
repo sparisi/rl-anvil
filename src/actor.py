@@ -363,7 +363,7 @@ class GoalConditioned(EpsilonGreedy):
             self.goal_reached_count.copy_from(source.goal_reached_count)
 
     def info(self):
-        return super().info() | {
+        info = super().info() | {
             "goal_success_%": np.nan if self._new_goal_selections == 0 else self._goal_reached / self._new_goal_selections,
             "self_goal_%": np.nan if self._goal_selections == 0 else self._self_goal_selections / self._goal_selections,
             "goal_reselections_%": np.nan if self._policy_steps == 0 else self._goal_reselections / self._policy_steps,
@@ -371,6 +371,8 @@ class GoalConditioned(EpsilonGreedy):
             "avg_steps_to_goal": np.nan if self._goal_reached == 0 else self._steps_to_goal_sum / self._goal_reached,
             "random_tail_steps_%": np.nan if (self.t - self._policy_steps) == 0 else self._random_tail_steps / (self.t - self._policy_steps),
         } | self._oracle_stats.get()
+        self._oracle_stats.reset()
+        return info
 
     def reset_goal(self):
         self.goal = None
@@ -378,6 +380,11 @@ class GoalConditioned(EpsilonGreedy):
         self._sel_obs = None
 
     def reset_episode(self, seed=None, rng_generator=None, *args, **kwargs):
+        # A goal still held while unreachable at the end of the episode was
+        # never replaced.
+        if self.true_visit is not None and self._oracle_unreach is not None:
+            self._oracle_stats.update(**{"unreach_replaced_%": False})
+        self._oracle_unreach = None
         self.reset_goal()
         self._random_exploration = False
         self._pick_episode_critic(rng_generator)
@@ -457,10 +464,15 @@ class GoalConditioned(EpsilonGreedy):
         # `_oracle_kept_old` tells whether the true scores of the last goal
         #     selection keep the goal held before it, or None if that goal was
         #     not a candidate.
-        # `_oracle_stats` averages every diagnostic since the last reset.
+        # `_oracle_unreach` is (goal obs, goal act, steps) while the goal held is
+        #     unreachable from the current obs, with the steps since it became
+        #     so, and None otherwise (see `_oracle_track_unreachable`).
+        # `_oracle_stats` averages every diagnostic since the last call to
+        #     `info`, which resets it.
         self._oracle_prev = None
         self._oracle_sel_obs = None
         self._oracle_kept_old = None
+        self._oracle_unreach = None
         self._since_sel_random = False
         self._since_sel_suboptimal = False
         self._since_sel_bad_landing = False
@@ -549,6 +561,7 @@ class GoalConditioned(EpsilonGreedy):
 
         if self.true_visit is not None:
             self._oracle_score(obs, goal_obs, n, goal_obs_idx, goal_act)
+            self._oracle_values(obs, goal_obs, goal_obs_idx, goal_act, q_visit[None])
 
         self.goal = {
             "obs": goal_obs[goal_obs_idx],
@@ -652,9 +665,102 @@ class GoalConditioned(EpsilonGreedy):
             stats["resel_oracle_keep_%"] = self._oracle_kept_old
         self._oracle_stats.update(**stats)
 
+    def _oracle_check(self, obs, fired):
+        """
+        Record one evaluation of the value check at `obs` against the true
+        visit Q-function. The true value of the goal held dropped if
+        V(obs, g) < V(_sel_obs, g), with `_sel_obs` the obs the check compares
+        against. `check_precision_%` is recorded when the check fired, as
+        whether the true value dropped; `check_recall_%` is recorded when the
+        true value dropped, as whether the check fired.
+        """
+
+        g, a_g = self.goal["obs"], self.goal["act"]
+        v_curr = self.true_visit(obs, g)[:, a_g].max()
+        v_sel = self.true_visit(self._sel_obs, g)[:, a_g].max()
+        dropped = v_curr < v_sel - ORACLE_TOL
+        stats = {}
+        if fired:
+            stats["check_precision_%"] = dropped
+        if dropped:
+            stats["check_recall_%"] = fired
+        self._oracle_stats.update(**stats)
+
+    def _oracle_track_unreachable(self, obs):
+        """
+        Update `_oracle_unreach` for the goal held at `obs`: start its count at
+        0 when the goal is unreachable from `obs` and was not before, add one
+        step while it stays unreachable, and clear it when the goal is reachable
+        or no goal is held.
+        """
+
+        if self.goal is None or self.true_visit.reachable(obs, self.goal["obs"]):
+            self._oracle_unreach = None
+            return
+        g, a_g = self.goal["obs"], self.goal["act"]
+        if (
+            self._oracle_unreach is None
+            or not np.array_equal(self._oracle_unreach[0], g)
+            or self._oracle_unreach[1] != a_g
+        ):
+            self._oracle_unreach = (g, a_g, 0)
+        else:
+            self._oracle_unreach = (g, a_g, self._oracle_unreach[2] + 1)
+
+    def _oracle_replaced_unreachable(self):
+        """
+        If the goal just replaced was unreachable, record that it was replaced
+        (`unreach_replaced_%`) and the steps it was held while unreachable
+        (`unreach_detect_steps`).
+        """
+
+        if self._oracle_unreach is None:
+            return
+        self._oracle_stats.update(**{
+            "unreach_replaced_%": True,
+            "unreach_detect_steps": self._oracle_unreach[2],
+        })
+        self._oracle_unreach = None
+
+    def _oracle_values(self, obs, goal_obs, goal_obs_idx, goal_act, values):
+        """
+        Record the absolute error between the learned and the true visit value
+        V(obs, g) = max_a Q(obs, a | g, a_g) over the goal candidates
+        `goal_obs`: on the selected goal (`v_err_sel`), and its mean over the
+        candidates reachable from `obs` (`v_err_reach`) and its mean and
+        maximum over the unreachable ones (`v_err_unreach`, `v_err_unreach_max`).
+
+        `values` are the learned visit Q-values of the candidates with a
+        leading axis over critics: one for a single critic, the members for an
+        ensemble. The errors are those of their mean, and for an ensemble also
+        of the member acting in this episode, with the suffix `_member`.
+        """
+
+        obs_batched = np.broadcast_to(obs[None], goal_obs.shape)
+        v_true = self.true_visit(obs_batched, goal_obs).max(axis=-2)
+        reach = np.broadcast_to(
+            self.true_visit.reachable(obs_batched, goal_obs)[:, None],
+            v_true.shape,
+        )
+        learned = {"": values.mean(axis=0).max(axis=-2)}
+        if values.shape[0] > 1:
+            learned["_member"] = values[self._episode_critic_idx].max(axis=-2)
+
+        stats = {}
+        for suffix, v in learned.items():
+            err = np.abs(v - v_true)
+            stats[f"v_err_sel{suffix}"] = err[goal_obs_idx, goal_act]
+            if reach.any():
+                stats[f"v_err_reach{suffix}"] = err[reach].mean()
+            if not reach.all():
+                stats[f"v_err_unreach{suffix}"] = err[~reach].mean()
+                stats[f"v_err_unreach_max{suffix}"] = err[~reach].max()
+        self._oracle_stats.update(**stats)
+
     def explore(self, obs, rng_generator, replay_memory, **kwargs):
         if self.true_visit is not None:
             self._oracle_track_step(obs)
+            self._oracle_track_unreachable(obs)
 
         if (
             rng_generator.random() < self._eps.value or
@@ -688,7 +794,10 @@ class GoalConditioned(EpsilonGreedy):
                         q_sel = self._critic(obs=self._sel_obs, goal=self.goal["obs"])
                         curr_value = q_curr[..., self.goal["act"]].max()
                         sel_value = q_sel[..., self.goal["act"]].max()
-                        if curr_value < sel_value:
+                        fired = curr_value < sel_value
+                        if self.true_visit is not None:
+                            self._oracle_check(obs, fired)
+                        if fired:
                             self.reset_goal()  # Sets goal to None, triggering `should_select` below
                 else:
                     should_select = True
@@ -712,6 +821,7 @@ class GoalConditioned(EpsilonGreedy):
                     self._steps_to_goal_current = 0
                     if self.true_visit is not None:
                         self._oracle_classify_reselection(old_goal, obs)
+                        self._oracle_replaced_unreachable()
                 if self.true_visit is not None and (old_goal is None or goal_changed):
                     self._oracle_new_goal(obs)
 
@@ -816,6 +926,9 @@ class DISCOVER(GoalConditioned):
         flat_idx = random_argmax(score.flatten(), rng_generator, axis=-1)
         goal_obs_idx, goal_act = np.unravel_index(flat_idx, score.shape)
 
+        if self.true_visit is not None:
+            self._oracle_values(obs, goal_obs, goal_obs_idx, goal_act, values)
+
         self.goal = {
             "obs": goal_obs[goal_obs_idx],
             "act": int(goal_act),
@@ -865,6 +978,9 @@ class AdaGoal(GoalConditioned):
         self.q_std = sigma.mean()
         flat_idx = random_argmax(sigma.flatten(), rng_generator, axis=-1)
         goal_obs_idx, goal_act = np.unravel_index(flat_idx, sigma.shape)
+
+        if self.true_visit is not None:
+            self._oracle_values(obs, goal_obs, goal_obs_idx, goal_act, values)
 
         self.goal = {
             "obs": goal_obs[goal_obs_idx],

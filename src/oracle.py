@@ -85,7 +85,9 @@ class TrueVisitQ:
         self.gamma = gamma
         self.reward_hit = 0.0 if negative_reward else 1.0
         self.reward_miss = -1.0 if negative_reward else 0.0
-        self.q = self._solve(self._transitions(unwrapped), tol, max_iterations)
+        cont = self._transitions(unwrapped)
+        self.q = self._solve(cont, tol, max_iterations)
+        self.reach = self._reachability(cont)
 
     def __call__(self, obs, goal):
         """
@@ -96,6 +98,16 @@ class TrueVisitQ:
         """
 
         return self.q[self._counter.bin_index(obs), self._counter.bin_index(goal)]
+
+    def reachable(self, obs, goal):
+        """
+        Return whether the cell of `goal` can be reached from the cell of `obs`
+        with the batch shape of `obs` and `goal`. A reachable goal can be hit
+        with any goal action, since the hit is the goal action taken in the
+        goal's cell.
+        """
+
+        return self.reach[self._counter.bin_index(obs), self._counter.bin_index(goal)]
 
     @staticmethod
     def _start_distribution(env):
@@ -215,3 +227,20 @@ class TrueVisitQ:
             raise RuntimeError(f"Value iteration did not converge within {max_iterations} iterations.")
 
         return q.reshape(n_cells, n_actions, n_cells, n_actions).transpose(0, 2, 1, 3).copy()
+
+    @staticmethod
+    def _reachability(cont):
+        """
+        Return a boolean array with shape (n_cells, n_cells), True at [s, g]
+        when g can be reached from s through steps that do not terminate the
+        episode (`cont` > 0), with s reaching itself.
+        """
+
+        reach = np.eye(cont.shape[0], dtype=bool) | (cont.max(axis=1) > 0.0)
+        while True:
+            # Paths of up to twice the current length, so the loop ends after
+            # about log2(n_cells) passes.
+            new = reach | ((reach.astype(np.int64) @ reach.astype(np.int64)) > 0)
+            if np.array_equal(new, reach):
+                return reach
+            reach = new

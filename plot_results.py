@@ -841,6 +841,20 @@ def draw_config(config_name, cfg):
     )
     written = 0
 
+    def rows_of(env, i, entry):
+        """Return the runs entry `i` selects in `env` (see entry_rows)."""
+
+        return entry_rows(
+            df,
+            hp_strings,
+            drawing.rows,
+            env,
+            i,
+            entry,
+            drawing.ignored_keys,
+            drawing.matched,
+        )
+
     for group_name, envs in drawing.groups.items():
         vprint(
             f"\n{'=' * 60}\n"
@@ -865,17 +879,7 @@ def draw_config(config_name, cfg):
         if TIME in df.columns:
             for env in present:
                 for i, entry in enumerate(drawing.entries):
-                    rows = entry_rows(
-                        df,
-                        hp_strings,
-                        drawing.rows,
-                        env,
-                        i,
-                        entry,
-                        drawing.ignored_keys,
-                        drawing.matched,
-                    )
-                    raw = rows[TIME].dropna()
+                    raw = rows_of(env, i, entry)[TIME].dropna()
                     if raw.empty:
                         continue
                     try:
@@ -892,17 +896,7 @@ def draw_config(config_name, cfg):
             decoded_of = {}
             for env in present:
                 for i, entry in enumerate(drawing.entries):
-                    rows = entry_rows(
-                        df,
-                        hp_strings,
-                        drawing.rows,
-                        env,
-                        i,
-                        entry,
-                        drawing.ignored_keys,
-                        drawing.matched,
-                    )
-                    decoded = series_of(rows, stat)
+                    decoded = series_of(rows_of(env, i, entry), stat)
                     if decoded is None:
                         continue
                     decoded_of[(env, i)] = decoded

@@ -85,7 +85,7 @@ from src.utils.plot import (
     load_plot_configs,
     plot_labels,
     rows_cols,
-    save_figure,
+    save_and_close,
     set_3_ticks,
     style_entries,
     summarize,
@@ -1160,9 +1160,7 @@ def draw_curves(
     )
 
     name = METRIC_FILES[metric] + (f"_{group_name}" if group_name else "") + "_curves"
-    vprint(f"  Saved: {save_figure(fig, output_dir, name)}")
-    plt.close(fig)
-    return 1
+    return save_and_close(fig, output_dir, name, vprint)
 
 
 def draw_auc(cfg, entries, selected, group_name, envs, metric, output_dir):
@@ -1213,9 +1211,7 @@ def draw_auc(cfg, entries, selected, group_name, envs, metric, output_dir):
     )
 
     name = METRIC_FILES[metric] + (f"_{group_name}" if group_name else "") + "_auc"
-    vprint(f"  Saved: {save_figure(fig, output_dir, name)}")
-    plt.close(fig)
-    return 1
+    return save_and_close(fig, output_dir, name, vprint)
 
 
 def draw_auc_all(cfg, entries, selected, envs, metric, output_dir):
@@ -1246,9 +1242,7 @@ def draw_auc_all(cfg, entries, selected, envs, metric, output_dir):
     draw_hbars(ax, items)
 
     name = METRIC_FILES[metric] + "_auc_all_envs"
-    vprint(f"  Saved: {save_figure(fig, output_dir, name)}")
-    plt.close(fig)
-    return 1
+    return save_and_close(fig, output_dir, name, vprint)
 
 
 def recap(config_name, entries, selected, envs):

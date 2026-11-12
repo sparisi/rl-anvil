@@ -70,7 +70,7 @@ from src.utils.plot import (
     load_plot_configs,
     plot_labels,
     rows_cols,
-    save_figure,
+    save_and_close,
     set_3_ticks,
     style_entries,
     tex_kwargs,
@@ -610,9 +610,7 @@ def write_legend(entries, plot_cfg, output_dir):
         fig.canvas.draw()
         box = legend.get_window_extent().transformed(fig.dpi_scale_trans.inverted())
         fig.set_size_inches(box.width, box.height)
-        vprint(f"  Saved: {save_figure(fig, output_dir, name)}")
-        plt.close(fig)
-        written += 1
+        written += save_and_close(fig, output_dir, name, vprint)
     return written
 
 
@@ -1610,9 +1608,7 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
         parts = [p for p in (group_name, stat) if p]
         if n_bins is not None:
             parts.append(f"{n_bins}bins")
-        vprint(f"  Saved: {save_figure(fig, output_dir, '_'.join(parts))}")
-        plt.close(fig)
-        return 1
+        return save_and_close(fig, output_dir, "_".join(parts), vprint)
 
     for group_name, group_envs in groups.items():
         drawn_envs = [e for e in group_envs if e in envs]

@@ -960,6 +960,19 @@ def save_figure(fig, folder, name, dpi=300):
     return path
 
 
+def save_and_close(fig, folder, name, vprint):
+    """Save `fig` as `folder/name.png` (see save_figure), close it, print the
+    path through `vprint` and return 1, or return 0 when the file cannot be
+    written."""
+
+    path = save_figure(fig, folder, name)
+    plt.close(fig)
+    if path is None:
+        return 0
+    vprint(f"  Saved: {path}")
+    return 1
+
+
 def write_legend(entries, plot_cfg, output_dir, font_size):
     """Write the legend of `entries` on its own, for a figure that has to carry
     one elsewhere, and return the paths written.

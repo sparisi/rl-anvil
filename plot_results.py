@@ -103,7 +103,7 @@ from src.utils.plot import (
     plot_labels,
     rows_cols,
     run_scores,
-    save_figure,
+    save_and_close,
     series_of,
     set_3_ticks,
     smooth,
@@ -541,12 +541,7 @@ def draw_iqm_curve(drawing, name, present, stat, decoded_of, drawn):
         ],
         -0.15,
     )
-    path = save_figure(fig, drawing.output_dir, f"{name}_curves_iqm")
-    plt.close(fig)
-    if path is None:
-        return 0
-    vprint(f"  Saved: {path}")
-    return 1
+    return save_and_close(fig, drawing.output_dir, f"{name}_curves_iqm", vprint)
 
 
 def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, kind):
@@ -631,11 +626,7 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
         ax.tick_params(axis="both", labelsize=FONT_SIZE - 2, pad=1)
         xlabel = f"P(X > Y), {score_label} {ylabel}"
         ax.set_xlabel(xlabel, fontsize=FONT_SIZE, **tex_kwargs(xlabel))
-        path = save_figure(fig, drawing.output_dir, f"{stem}_poi")
-        plt.close(fig)
-        if path is not None:
-            vprint(f"  Saved: {path}")
-            written += 1
+        written += save_and_close(fig, drawing.output_dir, f"{stem}_poi", vprint)
 
     # --- Aggregate metrics and performance profile -----------------------------
     bounds = norm_bounds(drawing.score_bounds, present, stat)
@@ -712,11 +703,7 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
         va="top",
         **tex_kwargs(xlabel),
     )
-    path = save_figure(fig, drawing.output_dir, f"{stem}_aggregate")
-    plt.close(fig)
-    if path is not None:
-        vprint(f"  Saved: {path}")
-        written += 1
+    written += save_and_close(fig, drawing.output_dir, f"{stem}_aggregate", vprint)
 
     # Over the normalized range the score bounds map to.
     taus = np.linspace(0.0, 1.0, 101)
@@ -774,11 +761,7 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
         ],
         -0.2,
     )
-    path = save_figure(fig, drawing.output_dir, f"{stem}_profile")
-    plt.close(fig)
-    if path is not None:
-        vprint(f"  Saved: {path}")
-        written += 1
+    written += save_and_close(fig, drawing.output_dir, f"{stem}_profile", vprint)
     return written
 
 
@@ -1013,11 +996,7 @@ def draw_config(config_name, cfg):
                     ],
                     -0.15,
                 )
-                path = save_figure(fig, drawing.output_dir, f"{name}_curves")
-                plt.close(fig)
-                if path is not None:
-                    vprint(f"  Saved: {path}")
-                    written += 1
+                written += save_and_close(fig, drawing.output_dir, f"{name}_curves", vprint)
 
             # --- The peak of each curve, and what it cost to get there ------
             if args.bars_peak:
@@ -1100,11 +1079,7 @@ def draw_config(config_name, cfg):
                     ],
                     -0.1,
                 )
-                path = save_figure(fig, drawing.output_dir, f"{name}_peak_bar")
-                plt.close(fig)
-                if path is not None:
-                    vprint(f"  Saved: {path}")
-                    written += 1
+                written += save_and_close(fig, drawing.output_dir, f"{name}_peak_bar", vprint)
 
             # --- One bar per configuration, over the whole group ------------
             # A bar figure, so it is written with the other bars.
@@ -1145,11 +1120,7 @@ def draw_config(config_name, cfg):
                     ],
                     -0.25,
                 )
-                path = save_figure(fig, drawing.output_dir, f"{name}_auc")
-                plt.close(fig)
-                if path is not None:
-                    vprint(f"  Saved: {path}")
-                    written += 1
+                written += save_and_close(fig, drawing.output_dir, f"{name}_auc", vprint)
 
             # --- Aggregates over the runs of every environment (rliable) ----
             if args.curves_iqm:
@@ -1251,11 +1222,12 @@ def draw_config(config_name, cfg):
                         ],
                         -0.2,
                     )
-                    path = save_figure(fig, drawing.output_dir, f"{env_name}_curves")
-                    plt.close(fig)
-                    if path is not None:
-                        vprint(f"  Saved: {path}")
-                        written += 1
+                    written += save_and_close(
+                        fig,
+                        drawing.output_dir,
+                        f"{env_name}_curves",
+                        vprint,
+                    )
 
                 if args.bars_peak:
                     stack = 2 if args.steps_to_peak else 1
@@ -1326,11 +1298,12 @@ def draw_config(config_name, cfg):
                         ],
                         -0.1,
                     )
-                    path = save_figure(fig, drawing.output_dir, f"{env_name}_peak_bar")
-                    plt.close(fig)
-                    if path is not None:
-                        vprint(f"  Saved: {path}")
-                        written += 1
+                    written += save_and_close(
+                        fig,
+                        drawing.output_dir,
+                        f"{env_name}_peak_bar",
+                        vprint,
+                    )
 
     write_table(drawing)
     write_rliable_tables(drawing)

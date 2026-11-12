@@ -72,7 +72,7 @@ from src.utils.plot import (
     plot_labels,
     rows_cols,
     run_scores,
-    save_figure,
+    save_and_close,
     series_of,
     style_entries,
     tex_kwargs,
@@ -407,12 +407,7 @@ def draw_violins(drawing, name, ylabel, present, scores):
         )
         for text in legend.get_texts():
             text.set(**tex_kwargs(text.get_text()))
-    path = save_figure(fig, drawing.output_dir, f"{name}_violin")
-    plt.close(fig)
-    if path is None:
-        return 0
-    vprint(f"  Saved: {path}")
-    return 1
+    return save_and_close(fig, drawing.output_dir, f"{name}_violin", vprint)
 
 
 def draw_config(config_name, cfg):

@@ -60,18 +60,19 @@ from src.utils.plot import (
     PLOT_CONFIG_DIR,
     STEPS_STAT,
     add_config_group_args,
-    area_over_span,
     assign_groups,
     bar_positions,
-    composed_mask,
     ensure_font,
-    entry_config,
+    entry_rows,
     env_groups,
     hyperparameter_strings,
     load_plot_configs,
+    missing_bounds,
+    norm_bounds,
     plot_labels,
     rows_cols,
-    save_figure,
+    run_scores,
+    save_and_close,
     series_of,
     style_entries,
     tex_kwargs,
@@ -165,7 +166,7 @@ vprint(f"\nLoaded parquet file from: {parquet_path}")
 if all(isinstance(c, str) and c.startswith("(") for c in df.columns):
     df.columns = pd.MultiIndex.from_tuples([literal_eval(c) for c in df.columns])
 
-# Every hyperparameter column as value_str renders it, once: rows_of compares
+# Every hyperparameter column as value_str renders it, once: entry_rows compares
 # against them for every (environment, entry).
 hp_strings = hyperparameter_strings(df)
 
@@ -193,7 +194,7 @@ written = 0
 class Drawing:
     """Everything one plot config decides, for the functions that draw it.
 
-    `rows` is the cache rows_of keeps."""
+    `rows` is the cache entry_rows keeps."""
 
     name: str
     cfg: dict
@@ -203,46 +204,6 @@ class Drawing:
     matched: pd.Series
     output_dir: str
     rows: dict = field(default_factory=dict)
-
-
-def rows_of(drawing, env, index, entry):
-    """Return the runs of one environment that an entry selects: the ones whose
-    whole recorded configuration is the one the entry composes to there.
-
-    Kept in `drawing.rows`, since the same (environment, entry) is asked for once
-    per statistic."""
-
-    key = (env, index)
-    if key not in drawing.rows:
-        flat = entry_config(env, entry["selector"], entry["label"])
-        drawing.rows[key] = (
-            df.iloc[0:0] if flat is None
-            else df[
-                composed_mask(
-                    df,
-                    flat,
-                    ignore=drawing.ignored_keys,
-                    as_str=hp_strings,
-                )
-                & drawing.matched
-            ]
-        )
-    return drawing.rows[key]
-
-
-def run_aucs(decoded):
-    """Return one area per seed of a configuration: the area under its curve over
-    the recorded steps of its finite points, divided by their span. A seed with no
-    finite point is left out."""
-
-    series, x = decoded[0], decoded[1]
-    aucs = []
-    for column in series.columns:
-        run = series[column].to_numpy(dtype=float)
-        kept = np.isfinite(run)
-        if kept.any():
-            aucs.append(area_over_span(run[kept], x[kept]))
-    return aucs
 
 
 def env_scores(drawing, group_name, present, stat):
@@ -258,8 +219,8 @@ def env_scores(drawing, group_name, present, stat):
     aucs = {}
     for i, entry in enumerate(drawing.entries):
         for env in present:
-            decoded = series_of(rows_of(drawing, env, i, entry), stat)
-            runs = [] if decoded is None else run_aucs(decoded)
+            decoded = series_of(entry_rows(df, hp_strings, drawing, env, i, entry), stat)
+            runs = [] if decoded is None else run_scores(decoded, "auc")
             if runs:
                 aucs[(env, i)] = runs
     envs = [e for e in present if any(env == e for env, _ in aucs)]
@@ -273,15 +234,15 @@ def env_scores(drawing, group_name, present, stat):
     if not envs:
         return envs, {}
 
-    bounds = [drawing.score_bounds.get((str(env), stat)) for env in envs]
-    if any(b is None or b[1] == b[0] for b in bounds):
+    bounds = norm_bounds(drawing.score_bounds, envs, stat)
+    if bounds is None:
+        missing = missing_bounds(drawing.score_bounds, envs, stat)
         print(
             f"WARNING: {drawing.name}, group {group_name or '(unnamed)'}: no "
-            f"score_bounds or ylim for {stat} in every environment, no violins."
+            f"score_bounds or ylim for {stat} in {missing}, no violins."
         )
         return envs, None
-    low = np.array([b[0] for b in bounds], dtype=float)
-    high = np.array([b[1] for b in bounds], dtype=float)
+    low, high = bounds
 
     scores = {}
     for i, entry in enumerate(drawing.entries):
@@ -357,8 +318,9 @@ def outlined(color, width):
 
 
 def draw_violins(drawing, name, ylabel, present, scores):
-    """Draw one violin per entry of `scores` over the environments of `present`
-    and save the figure as <name>_violin."""
+    """Draw one violin per entry of `scores` over the environments of `present`,
+    save the figure as <name>_violin and return 1, or 0 when it cannot be
+    written."""
 
     order = list(scores)
     shown = [drawing.entries[i] for i in order]
@@ -445,8 +407,7 @@ def draw_violins(drawing, name, ylabel, present, scores):
         )
         for text in legend.get_texts():
             text.set(**tex_kwargs(text.get_text()))
-    vprint(f"  Saved: {save_figure(fig, drawing.output_dir, f'{name}_violin')}")
-    plt.close(fig)
+    return save_and_close(fig, drawing.output_dir, f"{name}_violin", vprint)
 
 
 def draw_config(config_name, cfg):
@@ -518,8 +479,7 @@ def draw_config(config_name, cfg):
                 vprint(f"  Nothing to draw for {stat}, skipping.")
                 continue
             name = f"{stat}_{group_name}" if group_name else stat
-            draw_violins(drawing, name, stat_labels.get(stat, stat), envs_drawn, scores)
-            written += 1
+            written += draw_violins(drawing, name, stat_labels.get(stat, stat), envs_drawn, scores)
 
     for path in write_legend_handles(legend_handles(entries), cfg, output_dir, FONT_SIZE):
         vprint(f"  Saved: {path}")

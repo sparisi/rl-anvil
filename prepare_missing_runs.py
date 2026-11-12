@@ -141,7 +141,7 @@ cfg_dirs = [dirpath for dirpath, _dirs, files in os.walk(args.folder) if "cfg.ya
 for dirpath in tqdm(cfg_dirs, desc="Reading cfg.yaml", unit="run"):
     _cfg, cfg_dict, reason = read_run_cfg(os.path.join(dirpath, "cfg.yaml"))
     if reason is not None:
-        print(f"WARNING: {os.path.join(dirpath, 'cfg.yaml')} {reason}, skipping.")
+        tqdm.write(f"WARNING: {os.path.join(dirpath, 'cfg.yaml')} {reason}, skipping.")
         continue
     seeds = {
         int(entry) for entry in os.listdir(dirpath)

@@ -219,7 +219,17 @@ def env_scores(drawing, group_name, present, stat):
     aucs = {}
     for i, entry in enumerate(drawing.entries):
         for env in present:
-            decoded = series_of(entry_rows(df, hp_strings, drawing, env, i, entry), stat)
+            rows = entry_rows(
+                df,
+                hp_strings,
+                drawing.rows,
+                env,
+                i,
+                entry,
+                drawing.ignored_keys,
+                drawing.matched,
+            )
+            decoded = series_of(rows, stat)
             runs = [] if decoded is None else run_scores(decoded, "auc")
             if runs:
                 aucs[(env, i)] = runs

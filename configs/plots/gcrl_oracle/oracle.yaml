@@ -5,12 +5,12 @@ configs:
   sun_ucb_adaptive:
     - algorithm: sun_ucb_adaptive
       plot.label: "SUN (Adapt., Additive)"
-  adagoal:
-    - algorithm: adagoal
-      plot.label: "AdaGoal"
-  discover:
-    - algorithm: discover
-      plot.label: "DISCOVER"
+  # adagoal:
+  #   - algorithm: adagoal
+  #     plot.label: "AdaGoal"
+  # discover:
+  #   - algorithm: discover
+  #     plot.label: "DISCOVER"
 
 statistics:
   goal_reselections_%: "Reselections / Step"
@@ -36,9 +36,6 @@ statistics:
   v_err_reach_member: "Acting Member"
   v_err_unreach_member: "Acting Member"
   v_err_unreach_max_member: "Acting Member"
-  resel_random_%: "Random Action"
-  resel_suboptimal_%: "Suboptimal Action"
-  resel_stochastic_%: "Stochastic Transition"
   q_visit_abs_err: "Error (All Act.)"
   q_visit_abs_err_act: "Error (Batch Act.)"
   q_visit_abs_err_pos: "Error (Pos. Goals)"

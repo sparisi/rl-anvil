@@ -1,65 +1,39 @@
-"""Oracle diagnostic figures from a pre-built results.parquet, laid out by a plot
-config.
+"""Causes of the goal reselections of goal-conditioned runs, from a pre-built
+results.parquet and the runs' replay-memory dumps, laid out by a plot config.
 
-Runs launched with `results.true_visit_check=True` record diagnostics against
-the exact visit Q-function of the environment (src/oracle.py). The plot config
-names the configurations and the environments to draw, as for plot_results.py,
-and labels the statistics (see configs/plots/gcrl_oracle/oracle.yaml). Runs are
-selected as plot_results.py selects them: a run is drawn only when its whole
-configuration is the one its entry composes to. Every figure is written once
-per environment group, as <figure>_<group>.png, in
-<root>/oracle/<plot config>.
+The plot config names the configurations and the environments to draw, as for
+plot_results.py (see configs/plots/gcrl_oracle/oracle.yaml). Runs are selected
+as plot_results.py selects them: a run is drawn only when its whole
+configuration is the one its entry composes to. For every environment group,
+three files are written in <root>/oracle/<plot config>:
 
-  overview          a column per environment and a row per statistic, a curve
-                    per entry: the absolute error between the true and the
-                    learned visit Q-function on the update batch, the
-                    reselections per policy step since the start of training,
-                    the fraction of goal selections whose goal tile could not
-                    be reached from the tile they were made on, and the
-                    fraction whose goal was the best pick among the goals in
-                    reach (--goal_score). The two fractions are computed from
-                    each run's <config_id>/<seed>/memory.npz as
-                    plot_unreachable_goals.py computes them, a point holding
-                    the selections between the previous recorded step and its
-                    own, with the memory index taken as the training step.
-  selection         the same layout for goal selection: the true score the
-                    selected goal loses to the goal with the best true score,
-                    and the true visit value of the selected goal (solid) and
-                    of the goal with the best true score (dotted).
-  value_check       the same layout for the value check: the fraction of its
-                    firings in which the true value of the goal held dropped
-                    (precision), and the fraction of the drops of the true value
-                    in which it fired (recall).
-  unreachable       the same layout for the goals held while unreachable: the
-                    fraction replaced before the end of the episode, and the
-                    steps each was held while unreachable before its
-                    replacement.
-  value_error       the same layout for the absolute error between the learned
-                    and the true visit value over the goal candidates: at the
-                    selected goal, as its mean over the reachable and over the
-                    unreachable candidates, and as its maximum over the
-                    unreachable ones. For an ensemble, the error of the mean of
-                    the members is solid and the error of the member acting in
-                    the episode is dotted.
-  q_error           the same layout for the absolute error between the true
-                    and the learned visit Q-function on the update batch: over
-                    all actions, at the batch action, and at the batch action
-                    for the positive and the negative goals.
-  reselection_bars  a row per environment and a column per cause of
-                    reselection, a bar per entry: the fraction of reselections
-                    after which the true value of the goal held had dropped and
-                    that a random action, a suboptimal action or a stochastic
-                    transition preceded, as the area under each seed's curve
-                    divided by the span of its recorded steps, with its mean
-                    over seeds and its 95% interval.
+  reselection_causes_<group>.png
+                    a 100% stacked horizontal bar per environment and entry
+                    with reselections: the fraction of the reselections, pooled
+                    over seeds, whose goal was unreachable where it was
+                    selected, became unreachable, lost true value to a random
+                    action, to a suboptimal action or to the environment's
+                    noise, or kept its true value while the value check fired
+                    (critic error). Each reselection has one cause (see
+                    src.utils.reachability.reselection_causes).
+  reselection_causes_<group>.tex
+                    the same numbers as a booktabs LaTeX tabular: the number
+                    of reselections and the percentage of each cause per bar.
+  reselection_causes_steps_<group>.png
+                    the same reselections over training, a row per entry and a
+                    column per environment with reselections: a histogram in
+                    --cause_bins equal-width bins of steps, each bar the mean
+                    number of reselections per seed per 1,000 training steps
+                    in the bin, stacked by cause in the same colours. Its axes
+                    carry round ticks (see round_ticks).
 
-The causes of a reselection are not exclusive: a reselection preceded by a
-random action and by a suboptimal one counts for both. A subplot draws the
-entries that recorded its statistic; a row or a column no entry recorded is
-left out, and a subplot with nothing to draw is left blank. A curve is drawn
-at the points where at least MIN_SEED_FRACTION of its seeds recorded a value.
-The statistics in NONNEGATIVE are drawn from 0, and the other fractions on
-[0, 1], unless the plot config sets the limits.
+The legend of the causes is also written alone, once per plot config, as
+reselection_causes_legend.png in the same directory, whatever --no_legend says.
+
+The reselections are read from each run's <config_id>/<seed>/memory.npz and
+classified with the true visit Q-function of its environment
+(src.oracle.TrueVisitQ), built from the run's cfg.yaml. Runs whose environment
+TrueVisitQ does not support are left out.
 
 Run with --help for the rest of the options.
 
@@ -69,7 +43,9 @@ Example
 """
 
 import argparse
+import json
 import os
+import re
 import sys
 from ast import literal_eval
 from dataclasses import dataclass, field
@@ -81,7 +57,11 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
+from matplotlib.ticker import MaxNLocator
 
+from src.actor import ORACLE_TOL
+from src.oracle import TrueVisitQ
+from src.pseudocount import tabular_count
 from src.utils.heatmaps import env_context
 from src.utils.id import CONFIG_ID, SEED, read_run_cfg
 from src.utils.matching import ignored_cfg_keys, load_config_group
@@ -90,117 +70,74 @@ from src.utils.plot import (
     PLOT_CONFIG_DIR,
     add_config_group_args,
     assign_groups,
-    draw_bars,
     ensure_font,
     entry_rows,
     env_groups,
-    error_shade_plot,
     hyperparameter_strings,
     load_plot_configs,
     plot_labels,
-    rows_cols,
-    run_scores,
     save_and_close,
-    series_of,
-    set_3_ticks,
     style_entries,
-    summarize,
     tex_kwargs,
-    write_legend,
 )
-from src.utils.reachability import (
-    build_distances,
-    perfect_selections,
-    unreachable_selections,
-)
+from src.utils.reachability import RESELECTION_CAUSES, reselection_causes
+from src.wrappers import gym_wrappers
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(errors="replace")
 
 FONT_SIZE = 12
-SUBPLOT_W = 2.6  # inches per subplot
-SUBPLOT_H = 2.0
 
-# Linestyle of the second statistic of a row, drawn over the first one in the
-# entry's colour.
-OVERLAY_LINESTYLE = ":"
-
-# Fraction of the seeds that must record a value at a point for the point to be
-# drawn.
-MIN_SEED_FRACTION = 0.5
-
-# Statistics computed from the replay-memory dumps by memory_curve, in place of
-# statistics of the parquet: the fraction of goal selections whose goal was
-# unreachable, and the fraction whose goal was the best pick in reach.
-UNREACHABLE_STAT = "sel_unreach_%"
-PERFECT_STAT = "sel_perfect_%"
-MEMORY_STATS = (UNREACHABLE_STAT, PERFECT_STAT)
-
-# Goal selections of each memory dump read, by its path (see memory_flags).
-_memory_flags: dict = {}
-
-# Prefixes of the statistics that take no negative value, drawn from 0.
-NONNEGATIVE = (
-    "oracle_regret",
-    "unreach_detect_steps",
-    "v_err",
-    "q_visit_abs_err",
-    "goal_reselections",
+# The memory keys the causes of the reselections are read from.
+MEMORY_KEYS = (
+    "obs",
+    "act",
+    "term",
+    "trunc",
+    "goal_obs",
+    "goal_act",
+    "goal_selection",
+    "has_goal",
+    "act_source",
 )
 
-# Rows of each curve figure, as (label key, statistics). The label key names
-# the y-axis label in the plot config's `statistics`. A row holding two
-# statistics draws the second one in OVERLAY_LINESTYLE, and when a row draws
-# both, the legend names the two linestyles by the labels of the statistics.
-CURVE_FIGURES = {
-    "overview": [
-        ("q_visit_abs_err", ["q_visit_abs_err"]),
-        ("goal_reselections_%", ["goal_reselections_%"]),
-        (UNREACHABLE_STAT, [UNREACHABLE_STAT]),
-        (PERFECT_STAT, [PERFECT_STAT]),
-    ],
-    "selection": [
-        ("oracle_regret", ["oracle_regret"]),
-        ("true_q", ["true_q_sel", "true_q_oracle"]),
-    ],
-    "value_check": [
-        ("check_precision_%", ["check_precision_%"]),
-        ("check_recall_%", ["check_recall_%"]),
-    ],
-    "unreachable": [
-        ("unreach_replaced_%", ["unreach_replaced_%"]),
-        ("unreach_detect_steps", ["unreach_detect_steps"]),
-    ],
-    "value_error": [
-        ("err_sel", ["v_err_sel", "v_err_sel_member"]),
-        ("err_reach", ["v_err_reach", "v_err_reach_member"]),
-        ("err_unreach", ["v_err_unreach", "v_err_unreach_member"]),
-        ("err_unreach_max", ["v_err_unreach_max", "v_err_unreach_max_member"]),
-    ],
-    "q_error": [
-        ("q_visit_abs_err", ["q_visit_abs_err"]),
-        ("q_visit_abs_err_act", ["q_visit_abs_err_act"]),
-        ("q_visit_abs_err_pos", ["q_visit_abs_err_pos"]),
-        ("q_visit_abs_err_neg", ["q_visit_abs_err_neg"]),
-    ],
-}
+# Reselection causes of each memory dump read, by its path (see memory_causes),
+# and the true visit Q-functions built (see true_visit_of).
+_memory_causes: dict = {}
+_true_visit: dict = {}
 
-# Columns of each bar figure, one statistic each.
-BAR_FIGURES = {
-    "reselection_bars": [
-        "resel_random_%",
-        "resel_suboptimal_%",
-        "resel_stochastic_%",
-    ],
+# Label, colour and label colour of each cause of RESELECTION_CAUSES, in its
+# order: reds for the goals that were or became unreachable, blues for the true
+# value lost while acting, grey for the value checks that fired without a drop.
+CAUSE_STYLE = {
+    "unreachable_at_selection": ("Unreachable at selection", "#b2182b", "white"),
+    "became_unreachable": ("Became unreachable", "#ef8a62", "black"),
+    "random_action": ("Random action", "#d1e5f0", "black"),
+    "suboptimal_action": ("Suboptimal action", "#4393c3", "white"),
+    "env_noise": ("Env. noise", "#2166ac", "white"),
+    "critic_error": ("Critic error", "#bababa", "black"),
 }
+# A segment of a bar narrower than this fraction is drawn without its
+# percentage.
+CAUSE_LABEL_MIN = 0.04
+# Inches per bar of reselection_causes, and the width of the figure.
+CAUSE_BAR_H = 0.55
+CAUSE_FIG_W = 8.0
+# Inches per subplot of reselection_causes_steps, in width and in height.
+CAUSE_HIST_W = 3.9
+CAUSE_HIST_H = 2.0
+# Most intervals between the round ticks (see round_ticks) of a step axis and of
+# a value axis.
+STEP_TICK_BINS = 2
+VALUE_TICK_BINS = 4
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "-f", "--folder",
     required=True,
     metavar="DIR",
-    help="Data directory holding the parquet file.",
+    help="Data directory holding the parquet file and the runs.",
 )
 parser.add_argument("--parquet", default="results.parquet")
 parser.add_argument(
@@ -215,36 +152,15 @@ parser.add_argument(
 parser.add_argument(
     "-o", "--output",
     default="plots",
-    help="Output root, under the data directory. Figures go in "
+    help="Output root, under the data directory. Files go in "
          "<root>/oracle/<plot config>.",
 )
 add_config_group_args(parser)
 parser.add_argument(
-    "--smoothing_window",
+    "--cause_bins",
     type=int,
-    default=0,
-    help="Points either side to average a curve over. 0 draws it as recorded.",
-)
-parser.add_argument(
-    "--goal_score",
-    default="novelty",
-    choices=["novelty", "ratio"],
-    help="Which score a perfect goal is the argmax of, over the tiles in reach: "
-         "'novelty' is 1 / n, i.e. a least-visited tile; 'ratio' is the actor's own "
-         "V / n, with V the discounted reachability gamma ** (steps to reach it).",
-)
-parser.add_argument(
-    "--gamma",
-    type=float,
-    default=0.99,
-    help="Discount the 'ratio' score values a goal with: a goal d steps away is "
-         "worth gamma ** d. Unused by 'novelty'.",
-)
-parser.add_argument(
-    "--bar_width",
-    type=float,
-    default=0.85,
-    help="Bar width as a fraction of the slot it sits in.",
+    default=20,
+    help="Bins of training steps of the reselection_causes_steps histograms.",
 )
 parser.add_argument(
     "--no_legend",
@@ -287,21 +203,17 @@ class Drawing:
     """Everything one plot config decides, for the functions that draw it.
 
     `rows` is the cache entry_rows keeps, mapping (environment, entry index) to
-    the runs the entry selects there, and `curves` maps (environment, statistic, entry index) to the decoded
-    curves of those runs, or None when they recorded none."""
+    the runs the entry selects there."""
 
     name: str
     cfg: dict
     entries: list
-    stat_labels: dict
     env_labels: dict
-    stat_ylims: dict
     ignored_keys: frozenset
     matched: pd.Series
     env_stem: pd.Series
     output_dir: str
     rows: dict = field(default_factory=dict)
-    curves: dict = field(default_factory=dict)
 
 
 def rows_of(drawing, env, index):
@@ -319,14 +231,41 @@ def rows_of(drawing, env, index):
     )
 
 
-def read_memory_flags(run_dir, mem_file):
-    """Return the goal selections of the memory dump `mem_file` of a run in
-    `run_dir`, as a dict holding the bool array over its steps of the
-    selections ("selected"), of the unreachable ones (UNREACHABLE_STAT, see
-    unreachable_selections) and of the perfect ones (PERFECT_STAT, see
-    perfect_selections, scored by --goal_score and --gamma). Return None when the
-    dump or the run's cfg.yaml cannot be read, the dump stores no goals, or the
-    environment has no transition graph (see build_distances)."""
+def true_visit_of(env_cfg, critic_cfg):
+    """Return the true visit Q-function (src.oracle.TrueVisitQ) of the
+    environment `env_cfg` under the discount and the rewards of the visit critic
+    `critic_cfg`, or None when the critic has no visit discount or TrueVisitQ
+    does not support the environment. Built once per process for each
+    combination."""
+
+    gamma = critic_cfg.get("gamma_visit")
+    if gamma is None:
+        return None
+    negative = bool(critic_cfg.get("negative_visit_reward", False))
+    key = json.dumps([env_cfg, gamma, negative], sort_keys=True, default=str)
+    if key not in _true_visit:
+        env = gym_wrappers.make_gym_env(**env_cfg)
+        try:
+            _true_visit[key] = TrueVisitQ(
+                env,
+                tabular_count(env),
+                gamma=float(gamma),
+                negative_reward=negative,
+            )
+        except ValueError as e:
+            vprint(f"  WARNING: no true visit Q-function for {env_cfg.get('id')}: {e}")
+            _true_visit[key] = None
+        finally:
+            env.close()
+    return _true_visit[key]
+
+
+def read_memory_causes(run_dir, mem_file):
+    """Return the cause of every reselection in the memory dump `mem_file` of a
+    run in `run_dir`, as reselection_causes returns them, or None when the dump
+    or the run's cfg.yaml cannot be read, the dump lacks a key of MEMORY_KEYS,
+    the environment has no tabular counter, or true_visit_of gives no true
+    visit Q-function."""
 
     if not os.path.isfile(mem_file):
         return None
@@ -335,294 +274,345 @@ def read_memory_flags(run_dir, mem_file):
         vprint(f"  WARNING: {run_dir}/cfg.yaml {reason}.")
         return None
     env_cfg = run_cfg.get("environment") or {}
-    dist, n_act = build_distances(env_cfg)
-    counter = env_context(env_cfg)[0] if dist is not None else None
-    if counter is None:
+    counter = env_context(env_cfg)[0]
+    true_visit = true_visit_of(env_cfg, (run_cfg.get("agent") or {}).get("critic") or {})
+    if counter is None or true_visit is None:
         return None
     try:
         with np.load(mem_file) as data:
-            mem = {
-                k: data[k] for k in data.files
-                if k in ("obs", "act", "goal_obs", "goal_act", "goal_selection")
-            }
+            mem = {k: data[k] for k in data.files if k in MEMORY_KEYS}
     except Exception as e:
         vprint(f"  WARNING: skipping unreadable {mem_file}: {e}")
         return None
-    flags = unreachable_selections(dist, counter, mem)
-    if flags is None or mem.get("act") is None or mem.get("goal_act") is None:
+    if any(k not in mem for k in MEMORY_KEYS):
+        vprint(f"  WARNING: {mem_file} lacks {[k for k in MEMORY_KEYS if k not in mem]}, skipping.")
         return None
-    state, goal, selected, unreachable = flags
-    size = len(state)
-    perfect = perfect_selections(
-        dist,
-        n_act,
-        state,
-        goal,
-        np.asarray(mem["act"]).reshape(size).astype(np.int64),
-        np.asarray(mem["goal_act"]).reshape(size).astype(np.int64),
-        selected,
-        args.goal_score,
-        args.gamma,
+    size = len(mem["obs"])
+    flat = {k: np.asarray(mem[k]).reshape(size) for k in MEMORY_KEYS if k not in ("obs", "goal_obs")}
+    return reselection_causes(
+        true_visit,
+        np.asarray(counter.bin_index(mem["obs"])).reshape(size),
+        np.asarray(counter.bin_index(mem["goal_obs"])).reshape(size),
+        flat["act"].astype(np.int64),
+        flat["goal_act"].astype(np.int64),
+        flat["has_goal"].astype(bool),
+        flat["act_source"],
+        flat["goal_selection"].astype(bool),
+        flat["term"].astype(bool) | flat["trunc"].astype(bool),
+        ORACLE_TOL,
     )
-    return {"selected": selected, UNREACHABLE_STAT: unreachable, PERFECT_STAT: perfect}
 
 
-def memory_flags(config_id, seed):
-    """Return read_memory_flags for the run <config_id>/<seed> of the data
+def memory_causes(config_id, seed):
+    """Return read_memory_causes for the run <config_id>/<seed> of the data
     directory, reading its dump once per process."""
 
     run_dir = os.path.join(args.folder, str(config_id))
     mem_file = os.path.join(run_dir, str(int(seed)), "memory.npz")
-    if mem_file not in _memory_flags:
-        _memory_flags[mem_file] = read_memory_flags(run_dir, mem_file)
-    return _memory_flags[mem_file]
+    if mem_file not in _memory_causes:
+        _memory_causes[mem_file] = read_memory_causes(run_dir, mem_file)
+    return _memory_causes[mem_file]
 
 
-def memory_curve(rows, stat):
-    """Return the fraction of goal selections that `stat` of MEMORY_STATS marks,
-    per recorded point of the runs `rows`, as series_of returns a curve, or None
-    when no run has a memory dump to compute it from.
+def cause_runs(drawing, env, index):
+    """Return the reselection causes of every run entry `index` selects in
+    `env`, one int array over the steps of its memory dump per run (see
+    reselection_causes), leaving out the runs without them (see
+    read_memory_causes)."""
 
-    Each run's selections are read from <config_id>/<seed>/memory.npz under the
-    data directory (see read_memory_flags), with the memory index taken as the
-    training step, and a point holds the selections between the previous
-    recorded step and its own. A point with no selection is NaN."""
-
-    decoded = series_of(rows, "steps")
-    if decoded is None or any(c not in rows.columns for c in (CONFIG_ID, SEED)):
-        return None
-    _, x, steps, _ = decoded
-    edges = np.concatenate(([0.0], np.asarray(x, dtype=float)))
-
-    curves, names = [], []
+    rows = rows_of(drawing, env, index)
+    if any(c not in rows.columns for c in (CONFIG_ID, SEED)):
+        return []
+    runs = []
     for config_id, seed in rows[[CONFIG_ID, SEED]].drop_duplicates().itertuples(index=False):
-        flags = memory_flags(config_id, seed)
-        if flags is None:
-            continue
-        n_sel = np.histogram(np.flatnonzero(flags["selected"]), bins=edges)[0]
-        n_marked = np.histogram(np.flatnonzero(flags[stat]), bins=edges)[0]
-        with np.errstate(invalid="ignore", divide="ignore"):
-            curves.append(np.where(n_sel > 0, n_marked / n_sel, np.nan))
-        names.append(f"{config_id}/{int(seed)}")
-    if not curves:
+        causes = memory_causes(config_id, seed)
+        if causes is not None:
+            runs.append(causes)
+    return runs
+
+
+def cause_counts(drawing, env, index):
+    """Return `(counts, n_runs, n_steps)` for the runs entry `index` selects in
+    `env`: how many reselections of each cause of RESELECTION_CAUSES they made,
+    summed over their seeds, how many runs have the causes of their
+    reselections, and the steps of the longest of their memory dumps, which is
+    the training length. Return None when no run has them."""
+
+    runs = cause_runs(drawing, env, index)
+    if not runs:
         return None
-    return pd.DataFrame(np.column_stack(curves), columns=names), x, steps, names
+    counts = sum(np.bincount(c[c >= 0], minlength=len(RESELECTION_CAUSES)) for c in runs)
+    return counts, len(runs), max(len(c) for c in runs)
 
 
-def curve_of(drawing, env, stat, index):
-    """Return the decoded curves of `stat` for entry `index` in `env`, as
-    series_of returns them, or None when its runs recorded none. The statistics
-    of MEMORY_STATS are computed from the memory dumps by memory_curve."""
+def add_cause_legend(fig, **kwargs):
+    """Draw the legend of the causes of CAUSE_STYLE on `fig`, three columns
+    without a frame, placed by the fig.legend keyword arguments `kwargs`."""
 
-    key = (env, stat, index)
-    if key not in drawing.curves:
-        rows = rows_of(drawing, env, index)
-        if stat in MEMORY_STATS:
-            drawing.curves[key] = memory_curve(rows, stat)
-        else:
-            drawing.curves[key] = series_of(rows, stat)
-    return drawing.curves[key]
-
-
-def legend_on(drawing, fig, handles, offset):
-    """Draw the legend of `handles` below `fig`, unless --no_legend."""
-
-    if args.no_legend or not handles:
-        return
-    legend = fig.legend(
-        handles,
-        [h.get_label() for h in handles],
+    fig.legend(
+        [
+            mpatches.Patch(facecolor=color, edgecolor="white")
+            for _label, color, _text in CAUSE_STYLE.values()
+        ],
+        [label for label, _color, _text in CAUSE_STYLE.values()],
+        ncol=3,
+        frameon=False,
         fontsize=FONT_SIZE - 2,
-        frameon=True,
-        loc="lower center",
-        ncol=rows_cols(drawing.cfg.get("legend_rows_cols"), len(handles))[1],
-        bbox_to_anchor=(0.5, offset),
+        **kwargs,
     )
-    for text in legend.get_texts():
-        text.set(**tex_kwargs(text.get_text()))
 
 
-def draw_curve_figure(drawing, name, rows, envs):
-    """Draw one curve figure, a row per (label key, statistics) of `rows` and a
-    column per environment of `envs`, and return the number of figures written.
+def cause_legend(fig, axes):
+    """Draw the legend of the causes of CAUSE_STYLE under where `axes` and their
+    tick labels end, measured, unless --no_legend."""
 
-    Rows and environments no entry recorded a statistic of are left out, and a
-    subplot with no curve to draw is left blank. A point of a curve is drawn
-    where at least MIN_SEED_FRACTION of its seeds recorded a value."""
+    if args.no_legend:
+        return
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    bottom = min(ax.get_tightbbox(renderer).y0 for ax in axes)
+    top = fig.transFigure.inverted().transform((0, bottom))[1] - 0.02
+    add_cause_legend(fig, loc="upper center", bbox_to_anchor=(0.5, top))
 
-    def recorded(env, stats):
-        return any(
-            curve_of(drawing, env, stat, i) is not None
-            for stat in stats
-            for i in range(len(drawing.entries))
+
+def write_cause_legend(output_dir):
+    """Write the legend of the causes of CAUSE_STYLE alone, as the figures draw
+    it, to reselection_causes_legend.png in `output_dir`, and return the number
+    of figures written."""
+
+    fig = plt.figure(figsize=(CAUSE_FIG_W, 0.8))
+    add_cause_legend(fig, loc="center")
+    return save_and_close(fig, output_dir, "reselection_causes_legend", vprint)
+
+
+def round_ticks(ax, which, n_bins):
+    """Put round ticks on the `which` axis ("x" or "y") of `ax`: multiples of
+    1, 2, 2.5 or 5 times a power of ten, at most `n_bins` intervals apart over
+    its limits, and grow the limits to the round ticks just outside them, so
+    the axis starts and ends on a tick. A value axis is labelled in the shortest
+    form of each tick ("%g")."""
+
+    if which == "x":
+        get_lim, set_lim, set_ticks = ax.get_xlim, ax.set_xlim, ax.set_xticks
+    else:
+        get_lim, set_lim, set_ticks = ax.get_ylim, ax.set_ylim, ax.set_yticks
+    lo, hi = get_lim()
+    ticks = MaxNLocator(nbins=n_bins, steps=[1, 2, 2.5, 5, 10]).tick_values(lo, hi)
+    eps = 1e-9 * max(abs(hi - lo), 1e-12)
+    first = ticks[ticks <= lo + eps].max(initial=ticks[0])
+    last = ticks[ticks >= hi - eps].min(initial=ticks[-1])
+    ticks = ticks[(ticks >= first) & (ticks <= last)]
+    set_ticks(ticks)
+    set_lim(ticks[0], ticks[-1])
+    if which == "y":
+        ax.yaxis.set_major_formatter(lambda v, _pos: f"{v:g}")
+
+
+def tex_text(text):
+    """Return `text` as LaTeX, with `_`, `&`, `%` and `#` outside `$...$`
+    escaped unless a backslash already precedes them. Text between two `$` is
+    left as it is."""
+
+    parts = text.split("$")
+    for k in range(0, len(parts), 2):
+        parts[k] = re.sub(r"(?<!\\)([_&%#])", r"\\\1", parts[k])
+    return "$".join(parts)
+
+
+def write_cause_table(drawing, name, bars, several):
+    """Write the reselection causes of `bars`, as (environment, entry index,
+    counts per cause of RESELECTION_CAUSES), to <name>.tex in the output
+    directory: a booktabs tabular with a row per bar, its environment (and its
+    entry when `several`), its number of reselections and the percentage of
+    each cause, one decimal each, under the labels of CAUSE_STYLE."""
+
+    header = ["Environment"] + (["Method"] if several else []) + ["$n$"]
+    header += [tex_text(CAUSE_STYLE[c][0]) for c in RESELECTION_CAUSES]
+    lines = [
+        r"\begin{tabular}{l" + ("l" if several else "") + "r" * (len(RESELECTION_CAUSES) + 1) + "}",
+        r"\toprule",
+        " & ".join(header) + r" \\",
+        r"\midrule",
+    ]
+    for env, i, counts in bars:
+        total = int(counts.sum())
+        cells = [tex_text(drawing.env_labels.get(str(env), str(env)))]
+        if several:
+            cells.append(tex_text(drawing.entries[i]["label"]))
+        cells.append(f"{total:,}".replace(",", "{,}"))
+        cells += [f"{100 * n / total:.1f}" for n in counts]
+        lines.append(" & ".join(cells) + r" \\")
+    lines += [r"\bottomrule", r"\end{tabular}"]
+    path = os.path.join(drawing.output_dir, f"{name}.tex")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    vprint(f"  Saved: {path}")
+
+
+def draw_cause_figure(drawing, name, envs):
+    """Draw the causes of the reselections as a 100% stacked horizontal bar per
+    (environment, entry) of `envs` with at least one reselection, write the same
+    numbers to <name>.tex (see write_cause_table), and return the number of
+    figures written.
+
+    Every reselection has one cause (see reselection_causes), and the segments
+    of a bar are the fractions of its reselections of each cause, pooled over
+    the seeds, in the order and the colours of CAUSE_STYLE. A segment at least
+    CAUSE_LABEL_MIN wide is labelled with its percentage. At the end of the bar,
+    "total = <reselections>" is written over "(<x>% of <training steps>)", x
+    being the mean number of reselections per seed as a percentage of the
+    training steps. A bar is named by its environment, and by its entry too
+    when several entries have bars."""
+
+    bars, runs_steps = [], []
+    for env in envs:
+        for i in range(len(drawing.entries)):
+            counted = cause_counts(drawing, env, i)
+            if counted is not None and counted[0].sum() > 0:
+                bars.append((env, i, counted[0]))
+                runs_steps.append(counted[1:])
+    if not bars:
+        vprint(f"  No reselection for {name}, skipping.")
+        return 0
+    several = len({i for _, i, _ in bars}) > 1
+    write_cause_table(drawing, name, bars, several)
+
+    fig, ax = plt.subplots(figsize=(CAUSE_FIG_W, CAUSE_BAR_H * len(bars) + 0.6))
+    labels = []
+    for y, ((env, i, counts), (n_runs, n_steps)) in enumerate(zip(bars, runs_steps)):
+        label = drawing.env_labels.get(str(env), str(env))
+        if several:
+            label = f"{label}\n{drawing.entries[i]['label']}"
+        labels.append(label)
+        total = int(counts.sum())
+        left = 0.0
+        for cause, n in zip(RESELECTION_CAUSES, counts):
+            frac = n / total
+            _label, color, text_color = CAUSE_STYLE[cause]
+            ax.barh(y, frac, left=left, height=0.7, color=color, edgecolor="white", linewidth=0.8)
+            if frac >= CAUSE_LABEL_MIN:
+                ax.text(
+                    left + frac / 2,
+                    y,
+                    f"{100 * frac:.0f}%",
+                    ha="center",
+                    va="center",
+                    fontsize=FONT_SIZE - 3,
+                    color=text_color,
+                )
+            left += frac
+        ax.text(
+            1.01,
+            y,
+            f"total = {total:,}\n({100 * total / (n_runs * n_steps):.1f}% of {n_steps:,})",
+            ha="left",
+            va="center",
+            fontsize=FONT_SIZE - 3,
+            clip_on=False,
+        )
+        vprint(
+            f"  {label.replace(chr(10), ' / ')}: {total} reselections, "
+            + ", ".join(f"{c} {100 * n / total:.1f}%" for c, n in zip(RESELECTION_CAUSES, counts))
         )
 
-    rows = [(key, stats) for key, stats in rows if any(recorded(env, stats) for env in envs)]
-    if not rows:
-        vprint(f"  Nothing recorded for {name}, skipping.")
-        return 0
-    envs = [env for env in envs if any(recorded(env, stats) for _, stats in rows)]
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(len(bars) - 0.5, -0.5)
+    ax.set_yticks(range(len(bars)))
+    ax.set_yticklabels(labels, fontsize=FONT_SIZE - 1)
+    for text in ax.get_yticklabels():
+        text.set(**tex_kwargs(text.get_text()))
+    ax.set_xticks([0.0, 0.25, 0.5, 0.75, 1.0])
+    ax.xaxis.set_major_formatter(lambda v, _pos: f"{100 * v:.0f}%")
+    ax.tick_params(axis="x", labelsize=FONT_SIZE - 2)
+    ax.tick_params(axis="y", length=0)
+    ax.yaxis.grid(False)
+    ax.set_title("Causes of Goal Reselections", fontsize=FONT_SIZE)
 
-    n_rows, n_cols = len(rows), len(envs)
+    cause_legend(fig, [ax])
+    return save_and_close(fig, drawing.output_dir, name, vprint)
+
+
+def draw_cause_steps_figure(drawing, name, envs):
+    """Draw when the reselections happened, a row per entry and a column per
+    environment of `envs` with at least one reselection, and return the number
+    of figures written.
+
+    A subplot is a histogram over the training steps in --cause_bins
+    equal-width bins of the steps of the memory dumps: the height of a bar is
+    the mean number of reselections per seed per 1,000 training steps in the
+    bin, stacked by cause in the order and the colours of CAUSE_STYLE. Both axes
+    carry round ticks (see round_ticks). A subplot with no reselection is left
+    blank."""
+
+    hists = {}
+    for env in envs:
+        for i in range(len(drawing.entries)):
+            runs = cause_runs(drawing, env, i)
+            if not runs or not any((c >= 0).any() for c in runs):
+                continue
+            n_steps = max(len(c) for c in runs)
+            edges = np.linspace(0.0, n_steps, args.cause_bins + 1)
+            heights = np.zeros((len(RESELECTION_CAUSES), args.cause_bins))
+            for causes in runs:
+                steps = np.flatnonzero(causes >= 0)
+                for c in range(len(RESELECTION_CAUSES)):
+                    heights[c] += np.histogram(steps[causes[steps] == c], bins=edges)[0]
+            hists[(env, i)] = (edges, 1000.0 * heights / len(runs) / np.diff(edges))
+    if not hists:
+        vprint(f"  No reselection for {name}, skipping.")
+        return 0
+    envs = [env for env in envs if any((env, i) in hists for i in range(len(drawing.entries)))]
+    drawn = sorted({i for _, i in hists})
+    several = len(drawn) > 1
+
+    n_rows, n_cols = len(drawn), len(envs)
     fig, axs = plt.subplots(
         n_rows,
         n_cols,
-        figsize=(SUBPLOT_W * n_cols, SUBPLOT_H * n_rows),
+        figsize=(CAUSE_HIST_W * n_cols, CAUSE_HIST_H * n_rows),
         squeeze=False,
     )
     fig.subplots_adjust(hspace=0.35, wspace=0.3)
-
-    drawn, overlays = set(), {}
-    for r, (key, stats) in enumerate(rows):
-        ylabel = drawing.stat_labels.get(key, key)
-        row_linestyles = {}
+    for r, i in enumerate(drawn):
+        ylabel = "Reselections / 1k Steps"
+        if several:
+            ylabel = f"{drawing.entries[i]['label']}\n{ylabel}"
         for c, env in enumerate(envs):
             ax = axs[r][c]
             if r == 0:
                 title = drawing.env_labels.get(str(env), str(env))
                 ax.set_title(title, fontsize=FONT_SIZE, **tex_kwargs(title))
-
-            x_lo, x_hi = np.inf, 0.0
-            for s, stat in enumerate(stats):
-                for i, entry in enumerate(drawing.entries):
-                    decoded = curve_of(drawing, env, stat, i)
-                    if decoded is None:
-                        continue
-                    series, x, steps, _ = decoded
-                    data = series.to_numpy(dtype=float).T.copy()
-                    sparse = np.sum(~np.isnan(data), axis=0) < MIN_SEED_FRACTION * data.shape[0]
-                    if sparse.all():
-                        continue
-                    data[:, sparse] = np.nan
-                    linestyle = entry["linestyle"] if s == 0 else OVERLAY_LINESTYLE
-                    error_shade_plot(
-                        ax,
-                        data,
-                        x=x,
-                        smoothing_window=args.smoothing_window,
-                        color=entry["color"],
-                        linestyle=linestyle,
-                        linewidth=2.0,
-                    )
-                    drawn.add(i)
-                    row_linestyles.setdefault(drawing.stat_labels.get(stat, stat), linestyle)
-                    x_lo = min(x_lo, float(x[0]))
-                    x_hi = max(x_hi, steps)
-
-            if x_hi < x_lo:
+            if (env, i) not in hists:
                 ax.set_axis_off()
                 continue
+            edges, heights = hists[(env, i)]
+            bottom = np.zeros(heights.shape[1])
+            for cause, height in zip(RESELECTION_CAUSES, heights):
+                ax.bar(
+                    edges[:-1],
+                    height,
+                    width=edges[1] - edges[0],
+                    bottom=bottom,
+                    align="edge",
+                    color=CAUSE_STYLE[cause][1],
+                    edgecolor="white",
+                    linewidth=0.5,
+                )
+                bottom += height
+            ax.set_xlim(edges[0], edges[-1])
+            round_ticks(ax, "x", STEP_TICK_BINS)
+            ax.xaxis.set_major_formatter(lambda v, _pos: f"{v / 1000:g}k")
             ax.tick_params(axis="x", labelsize=FONT_SIZE - 2, pad=-2)
             ax.tick_params(axis="y", labelsize=FONT_SIZE - 2, pad=1)
-            ax.xaxis.set_major_formatter(lambda v, _pos: f"{v / 1000:g}k")
+            ax.set_ylim(bottom=0.0)
+            round_ticks(ax, "y", VALUE_TICK_BINS)
             ax.set_ylabel(
                 ylabel if c == 0 else "",
                 fontsize=FONT_SIZE,
                 **tex_kwargs(ylabel),
             )
-            if x_hi > x_lo:
-                ax.set_xlim(x_lo, x_hi)
-                ax.set_xticks([x_lo, (x_lo + x_hi) / 2, x_hi])
-            bounds = drawing.stat_ylims.get((str(env), stats[0]))
-            if bounds:
-                ax.set_ylim(*bounds)
-            elif stats[0].startswith(NONNEGATIVE):
-                ax.set_ylim(bottom=0.0)
-            elif stats[0].endswith("_%"):
-                ax.set_ylim(0.0, 1.0)
-            set_3_ticks(ax, which="y")
-        if len(row_linestyles) > 1:
-            for label, linestyle in row_linestyles.items():
-                overlays.setdefault(label, linestyle)
 
-    handles = [
-        plt.Line2D(
-            [], [],
-            color=drawing.entries[i]["color"],
-            linestyle=drawing.entries[i]["linestyle"],
-            linewidth=2.0,
-            label=drawing.entries[i]["label"],
-        )
-        for i in sorted(drawn)
-    ] + [
-        plt.Line2D(
-            [], [],
-            color="black",
-            linestyle=linestyle,
-            linewidth=2.0,
-            label=label,
-        )
-        for label, linestyle in overlays.items()
-    ]
-    legend_on(drawing, fig, handles, -0.15 / n_rows)
-    return save_and_close(fig, drawing.output_dir, name, vprint)
-
-
-def draw_bar_figure(drawing, name, stats, envs):
-    """Draw one bar figure, a row per environment of `envs` and a column per
-    statistic of `stats`, and return the number of figures written.
-
-    Statistics and environments no entry recorded are left out, and a subplot
-    with no bar to draw is left blank."""
-
-    summaries = {
-        (env, stat, i): summarize(run_scores(decoded, "auc"))
-        for env in envs
-        for stat in stats
-        for i in range(len(drawing.entries))
-        if (decoded := curve_of(drawing, env, stat, i)) is not None
-    }
-    stats = [s for s in stats if any(k[1] == s for k in summaries)]
-    if not stats:
-        vprint(f"  Nothing recorded for {name}, skipping.")
-        return 0
-    drawn = sorted({i for _, _, i in summaries})
-    envs = [env for env in envs if any(k[0] == env for k in summaries)]
-
-    n_rows, n_cols = len(envs), len(stats)
-    fig, axs = plt.subplots(
-        n_rows,
-        n_cols,
-        figsize=(SUBPLOT_W * n_cols, SUBPLOT_H * n_rows),
-        squeeze=False,
-    )
-    fig.subplots_adjust(hspace=0.35, wspace=0.3)
-    for r, env in enumerate(envs):
-        ylabel = drawing.env_labels.get(str(env), str(env))
-        for c, stat in enumerate(stats):
-            ax = axs[r][c]
-            if r == 0:
-                title = drawing.stat_labels.get(stat, stat)
-                ax.set_title(title, fontsize=FONT_SIZE, **tex_kwargs(title))
-            cell = [(drawing.entries[i], summaries.get((env, stat, i))) for i in drawn]
-            if all(summary is None for _, summary in cell):
-                ax.set_axis_off()
-                continue
-            draw_bars(
-                ax,
-                cell,
-                ylabel=ylabel if c == 0 else "",
-                bar_width=args.bar_width,
-                font_size=FONT_SIZE,
-                annotate=True,
-            )
-            set_3_ticks(ax, which="y")
-
-    legend_on(
-        drawing,
-        fig,
-        [
-            mpatches.Patch(
-                facecolor=drawing.entries[i]["color"],
-                hatch=drawing.entries[i]["hatch"],
-                edgecolor="black",
-                linewidth=0.6,
-                label=drawing.entries[i]["label"],
-            )
-            for i in drawn
-        ],
-        -0.1 / n_rows,
-    )
+    cause_legend(fig, [ax for row in axs for ax in row if ax.axison])
     return save_and_close(fig, drawing.output_dir, name, vprint)
 
 
@@ -638,7 +628,7 @@ def draw_config(config_name, cfg):
     if not groups:
         print(f"WARNING: {config_name} declares no environments to plot, skipping.")
         return 0
-    stat_labels, env_labels, stat_ylims, _score_bounds = plot_labels(cfg)
+    _stat_labels, env_labels, _stat_ylims, _score_bounds = plot_labels(cfg)
 
     ignored_keys = ignored_cfg_keys(cfg)
     if ignored_keys:
@@ -659,9 +649,7 @@ def draw_config(config_name, cfg):
         name=config_name,
         cfg=cfg,
         entries=entries,
-        stat_labels=stat_labels,
         env_labels=env_labels,
-        stat_ylims=stat_ylims,
         ignored_keys=ignored_keys,
         matched=matched,
         env_stem=env_stem,
@@ -681,13 +669,10 @@ def draw_config(config_name, cfg):
         if not present:
             continue
         suffix = f"_{group_name}" if group_name else ""
-        for figure, rows in CURVE_FIGURES.items():
-            written += draw_curve_figure(drawing, f"{figure}{suffix}", rows, present)
-        for figure, stats in BAR_FIGURES.items():
-            written += draw_bar_figure(drawing, f"{figure}{suffix}", stats, present)
+        written += draw_cause_figure(drawing, f"reselection_causes{suffix}", present)
+        written += draw_cause_steps_figure(drawing, f"reselection_causes_steps{suffix}", present)
+    written += write_cause_legend(output_dir)
 
-    for path in write_legend(drawing.entries, drawing.cfg, drawing.output_dir, FONT_SIZE):
-        vprint(f"  Saved: {path}")
     print(
         f"\n{drawing.name}: {len(drawing.entries)} configuration(s), "
         f"{len(groups)} environment group(s) -> {drawing.output_dir}"

@@ -1,128 +1,116 @@
-"""Shortest distances between the states of a tabular environment, read off its
-own transition graph, and the goal selections of a replay-memory dump whose
-goal could not be reached from the state it was selected at or was the best
-pick among the goals in reach."""
+"""Goal selections of a goal-conditioned actor read from a replay-memory dump:
+the goal candidates the actor scored at each selection, replayed from the seeds
+of the run, the selections whose goal was the best pick among those candidates,
+and the cause of each goal reselection under the true visit Q-function.
 
-import json
-from collections import deque
+The arrays over the steps of a dump are `state` and `goal`, the counter bins of
+its `obs` and `goal_obs`, and `act`, `goal_act`, `has_goal` and `act_source` as
+stored, with `selected` marking the steps stored with `goal_selection` and
+`done` the steps that ended an episode (`term` or `trunc`)."""
 
 import numpy as np
+
+from src.actor import ACT_RANDOM
+from src.utils.misc import random_argmax
 
 # The actor clips candidate counts to this before dividing (src/actor.py), which is
 # what keeps a never-visited tile finite rather than infinitely attractive.
 COUNT_FLOOR = 1e-3
 
-# A tile has to have been visited more than this to count as an available goal: the
-# actor draws its candidates from the replay memory, so a tile that never reached
-# it was never on offer and does not belong in the best-available score.
-CANDIDATE_MIN_COUNT = 1
-
-_dist_cache: dict = {}
-
-
-def build_distances(env_cfg):
-    """Return `(dist, n_act)`, where `dist` is an (n_states, n_states) float
-    matrix holding in `dist[s, g]` the fewest steps from state `s` to state `g`,
-    `inf` when `g` cannot be got to from `s` at all, and `n_act` is the number of
-    actions.
-
-    The transition graph is read off the environment itself -- `set_state(s)`, step
-    every action, record `get_state()` -- so one-way doorways, absorbing tiles and
-    any other layout quirk are captured without hard-coding the geometry. Returns
-    (None, None) for environments without a tabular `set_state` / `get_state` interface,
-    which is what makes this metric a gridworld one.
-
-    Building an environment costs seconds and many runs share one, so the result is
-    cached on the config it was built from."""
-
-    key = json.dumps(env_cfg, sort_keys=True, default=str)
-    if key in _dist_cache:
-        return _dist_cache[key]
-
-    from src.wrappers import gym_wrappers
-
-    env = gym_wrappers.make_gym_env(**env_cfg)
-    u = env.unwrapped
-    try:
-        if not all(hasattr(u, k) for k in ("set_state", "get_state", "grid_reachable")):
-            _dist_cache[key] = (None, None)
-            return None, None
-        # Action noise would make the enumeration below random. It cannot change
-        # which states are reachable (a noisy action is resampled from the same
-        # action set), so zeroing it out gives the same graph, deterministically.
-        for attr in ("random_action_prob", "slippery_prob", "random_reset_prob"):
-            if hasattr(u, attr):
-                setattr(u, attr, 0.0)
-        env.reset()
-
-        valid = np.asarray(u.grid_reachable).reshape(-1).astype(bool)
-        n_states = int(valid.size)
-        n_act = int(u.action_space.n)
-        succ = np.full((n_states, n_act), -1, dtype=np.int64)
-        term = np.zeros((n_states, n_act), dtype=bool)
-        for s in np.flatnonzero(valid):
-            for a in range(n_act):
-                u.set_state(int(s))
-                _, _, terminated, truncated, _ = env.step(a)
-                succ[s, a] = int(u.get_state())
-                term[s, a] = bool(terminated)
-                if terminated or truncated:
-                    env.reset()
-    finally:
-        env.close()
-
-    # Breadth-first from every tile, so the result is the number of steps to the
-    # goal and not merely whether it can be got to: the discounted reachability the
-    # actor scores with is gamma raised to that distance. All edges cost one step,
-    # so the queue leaves each tile at its shortest distance. A tile found only
-    # through a terminal transition keeps its distance but is not expanded -- the
-    # episode ends on arrival, so nothing beyond it is still available.
-    dist = np.full((n_states, n_states), np.inf)
-    for s in np.flatnonzero(valid):
-        d = np.full(n_states, np.inf)
-        expanded = np.zeros(n_states, dtype=bool)
-        d[s] = 0.0
-        queue = deque([int(s)])
-        while queue:
-            x = queue.popleft()
-            if expanded[x]:
-                continue
-            expanded[x] = True
-            for a in range(n_act):
-                y = int(succ[x, a])
-                if y < 0:
-                    continue
-                if d[x] + 1 < d[y]:
-                    d[y] = d[x] + 1
-                if not term[x, a] and not expanded[y]:
-                    queue.append(y)
-        dist[s] = d
-
-    _dist_cache[key] = (dist, n_act)
-    return dist, n_act
+# Causes of a goal reselection, in the order reselection_causes tests them.
+RESELECTION_CAUSES = (
+    "unreachable_at_selection",
+    "became_unreachable",
+    "random_action",
+    "suboptimal_action",
+    "env_noise",
+    "critic_error",
+)
 
 
-def unreachable_selections(dist, counter, mem):
-    """Return `(state, goal, selected, unreachable)` over the steps of the
-    replay-memory dump `mem`, or None when it stores no goals.
+def replay_candidates(
+    state,
+    act,
+    goal,
+    goal_act,
+    has_goal,
+    act_source,
+    selected,
+    done,
+    rng_seed,
+    batch_size,
+    n_act,
+    n_critics,
+    per_step_selection,
+    goal_value_check,
+    max_size,
+):
+    """Return `(candidates, missing)`, where `candidates` maps every goal
+    selection step of a replay-memory dump to the states of the goal candidates
+    the actor scored there, and `missing` counts the selections whose goal state
+    is not among them.
 
-    `state` and `goal` are the counter bins of `obs` and `goal_obs`, `selected`
-    marks the steps on which the actor selected a goal (`goal_selection`), and
-    `unreachable` marks the selections whose goal tile cannot be reached from the
-    tile the agent was on, by the distances `dist` of build_distances. Goals are
-    compared on states only, since every action is available in every non-wall
-    tile."""
+    The dump holds every step of the run in order, as Experiment.savedata
+    merges it, and the replay memory held at most `max_size` steps, at position
+    step % `max_size`.
 
-    if any(mem.get(k) is None for k in ("obs", "goal_obs", "goal_selection")):
-        return None
-    size = len(mem["obs"])
-    state = np.asarray(counter.bin_index(mem["obs"])).reshape(size)
-    goal = np.asarray(counter.bin_index(mem["goal_obs"])).reshape(size)
-    selected = np.asarray(mem["goal_selection"]).reshape(size).astype(bool)
-    unreachable = np.zeros(size, dtype=bool)
-    idx = np.flatnonzero(selected)
-    unreachable[idx] = ~np.isfinite(dist[state[idx], goal[idx]])
-    return state, goal, selected, unreachable
+    The candidates are drawn by `ReplayMemory.get` with the actor's random
+    generator, and the actions that generator draws do not depend on any value
+    the critic computes, so its draws are replayed here in the order the run made
+    them. Experiment.train seeds it at every episode from
+    `SeedSequence([rng_seed, 0, episode])`, and in an episode it draws:
+    - at the reset, the ensemble member acting in the episode when the critic is
+      an ensemble of `n_critics` members (`n_critics` None otherwise),
+    - at every step, one uniform for the epsilon test, then
+      - for a random action (`act_source` ACT_RANDOM), the action,
+      - otherwise, at a goal selection `batch_size` memory positions below the
+        memory size, min(step, `max_size`), and the tie-break of the goal, and
+        then the tie-break of the action.
+    A position p drawn at step t holds the last step before t stored there,
+    p + `max_size` * ((t - 1 - p) // `max_size`). With `per_step_selection` and
+    without `goal_value_check`, the goal held before the selection is a
+    candidate too: the goal of the previous step, unless that step reached it,
+    i.e. its state is the goal's and its action the goal action."""
+
+    candidates = {}
+    missing = 0
+    size = len(state)
+    tiebreak = np.zeros(1)
+    episode = 0
+    t = 0
+    while t < size:
+        seed_seq = np.random.SeedSequence([rng_seed, 0, episode])
+        _env_seed, actor_seed, _critic_seed = (int(s) for s in seed_seq.generate_state(3))
+        rng = np.random.default_rng(seed=actor_seed)
+        if n_critics is not None:
+            rng.integers(n_critics)
+        start = t
+        while t < size:
+            rng.random()
+            if act_source[t] == ACT_RANDOM:
+                rng.integers(n_act)
+            else:
+                if selected[t]:
+                    pos = rng.integers(min(t, max_size), size=batch_size)
+                    cand = state[pos + max_size * ((t - 1 - pos) // max_size)]
+                    held = (
+                        per_step_selection
+                        and not goal_value_check
+                        and t > start
+                        and has_goal[t - 1]
+                        and not (state[t - 1] == goal[t - 1] and act[t - 1] == goal_act[t - 1])
+                    )
+                    if held:
+                        cand = np.append(cand, goal[t - 1])
+                    candidates[t] = cand
+                    missing += not np.any(cand == goal[t])
+                    random_argmax(tiebreak, rng, axis=-1)
+                random_argmax(tiebreak, rng, axis=-1)
+            t += 1
+            if done[t - 1]:
+                break
+        episode += 1
+    return candidates, missing
 
 
 def perfect_selections(
@@ -132,37 +120,30 @@ def perfect_selections(
     goal,
     act,
     goal_act,
-    selected,
+    candidates,
     score_mode,
     gamma,
 ):
     """Return a bool array over the steps of a replay-memory dump marking the
-    goal selections whose goal maximised the score among the (tile, action)
-    pairs whose tile is in reach.
+    goal selections whose goal maximised the score among the (candidate, action)
+    pairs the actor scored.
 
-    `state`, `goal` and `selected` are as unreachable_selections returns them,
-    and `act` and `goal_act` the actions and goal actions of the steps. Both
-    scores divide by `n`, how often the pair appears in (`state`, `act`)
-    strictly before the step, and differ in the numerator:
+    `dist` holds in `dist[s, g]` the fewest steps from state `s` to state `g`,
+    `inf` when `g` cannot be reached, and `candidates` maps every goal selection
+    step to the states of its candidates (see replay_candidates). Both scores
+    divide by `n`, how often the pair appears in (`state`, `act`) strictly before
+    the step, and differ in the numerator:
 
-        novelty  1 / n, so the best goal is a least-tried action of a tile in reach
+        novelty  1 / n, so the best goal is a least-tried action of a candidate
+                 in reach
         ratio    the actor's own `V / n`, where V is discounted reachability: a
                  goal `d` steps away is worth `gamma ** d`
 
-    The best score is taken over the tiles visited more than CANDIDATE_MIN_COUNT
-    times, since goal candidates are drawn from the replay memory. The goal is
-    scored with the count of its own goal action, and `n` is floored at
-    COUNT_FLOOR as the actor floors it. A goal is perfect when it ties the best
-    score; an unreachable goal never is."""
+    A candidate out of reach scores 0. The goal is scored with the count of its
+    own goal action, and `n` is floored at COUNT_FLOOR as the actor floors it. A
+    goal is perfect when it ties the best score; an unreachable goal never is."""
 
     reach = np.isfinite(dist)
-    # Which tiles are within reach depends only on which room the agent is in, so
-    # `reach` has a handful of distinct rows. Grouping them turns the per-step
-    # maximum into one lookup over one index array instead of a mask over all tiles.
-    rows, row_of = np.unique(reach, axis=0, return_inverse=True)
-    row_of = np.asarray(row_of).reshape(-1)
-    members = [np.flatnonzero(r) for r in rows]
-
     # The numerator of the score, per (state, goal). Out of reach is 0 either way --
     # gamma ** inf is 0 -- so such a tile scores 0 and can never win.
     if score_mode == "ratio":
@@ -176,14 +157,91 @@ def perfect_selections(
     counts = np.zeros((reach.shape[0], n_act), dtype=np.float64)
     for t in range(size):
         s = int(state[t])
-        if selected[t]:
+        cand = candidates.get(t)
+        if cand is not None:
             g = int(goal[t])
-            within = members[row_of[s]]
-            within = within[counts[within].sum(1) > CANDIDATE_MIN_COUNT]
-            if reach[s, g] and within.size:
-                scores = value[s, within, None] / np.maximum(counts[within], COUNT_FLOOR)
+            if reach[s, g]:
+                scores = value[s, cand, None] / np.maximum(counts[cand], COUNT_FLOOR)
                 best = scores.max()
                 score_g = value[s, g] / max(counts[g, goal_act[t]], COUNT_FLOOR)
                 perfect[t] = score_g >= best * (1.0 - 1e-12)
         counts[s, act[t]] += 1.0
     return perfect
+
+
+def reselection_causes(
+    true_visit,
+    state,
+    goal,
+    act,
+    goal_act,
+    has_goal,
+    act_source,
+    selected,
+    done,
+    tol,
+):
+    """Return an int array over the steps of a replay-memory dump holding, at
+    every goal reselection, the index in RESELECTION_CAUSES of its cause, and -1
+    at every other step.
+
+    A reselection is a goal selection whose previous step, in the same episode,
+    held a goal it did not reach and that selects a different goal; a step
+    reaches its goal when its state is the goal's and its action the goal
+    action. The goal replaced, g with goal action a_g, was selected at the last
+    goal selection before the reselection, at state s_sel, and is replaced at
+    state s. With the true visit Q-function `true_visit` (src.oracle.TrueVisitQ),
+    its reachability and V*(x, g) = max_a Q*(x, a | g, a_g), the cause is the
+    first that holds of:
+    - unreachable_at_selection: g is not reachable from s_sel,
+    - became_unreachable: g is not reachable from s,
+    - random_action, suboptimal_action, env_noise: V*(s, g) < V*(s_sel, g) - tol,
+      attributed to the first step k since the selection that lost true value,
+      r_miss + gamma * V*(s_{k+1}, g) < V*(s_k, g) - tol, or to the step that
+      lost the most when no step loses more than `tol`: a random action
+      (`act_source` ACT_RANDOM), an action not optimal under Q*, or else the
+      transition,
+    - critic_error: the true value did not drop."""
+
+    q, reach = true_visit.q, true_visit.reach
+    size = len(state)
+    causes = np.full(size, -1, dtype=np.int64)
+    last_sel = -1
+    for t in range(size):
+        new_episode = t == 0 or done[t - 1]
+        if new_episode:
+            last_sel = -1
+        if not selected[t]:
+            continue
+        p = t - 1
+        replaced = (
+            not new_episode
+            and last_sel >= 0
+            and has_goal[p]
+            and not (state[p] == goal[p] and act[p] == goal_act[p])
+            and (goal[t] != goal[p] or goal_act[t] != goal_act[p])
+        )
+        if replaced:
+            g, a_g = int(goal[p]), int(goal_act[p])
+            s_sel, s_now = int(state[last_sel]), int(state[t])
+            if not reach[s_sel, g]:
+                causes[t] = 0
+            elif not reach[s_now, g]:
+                causes[t] = 1
+            else:
+                v = q[:, g, :, a_g].max(axis=1)
+                if v[s_now] >= v[s_sel] - tol:
+                    causes[t] = 5
+                else:
+                    ks = np.arange(last_sel, t)
+                    loss = v[state[ks]] - (true_visit.reward_miss + true_visit.gamma * v[state[ks + 1]])
+                    faults = np.flatnonzero(loss > tol)
+                    k = int(ks[faults[0]] if faults.size else ks[np.argmax(loss)])
+                    if act_source[k] == ACT_RANDOM:
+                        causes[t] = 2
+                    elif q[state[k], g, act[k], a_g] < v[state[k]] - tol:
+                        causes[t] = 3
+                    else:
+                        causes[t] = 4
+        last_sel = t
+    return causes

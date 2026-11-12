@@ -328,8 +328,8 @@ python plot_violin.py -f data_example -p example -v
 
 <p align="center">
   <img src="assets/train_gridworlds_curves.png" width="380" alt="Example Plots"> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="assets/four_rooms.png" width="300" alt="Example Heatmaps"> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="assets/train_gridworlds_violin.png" width="220" alt="Example Violins">
+  <img src="assets/four_rooms.png" width="250" alt="Example Heatmaps"> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="assets/train_gridworlds_violin.png" width="180" alt="Example Violins">
 </p>
 
 > All plotting scripts take optional arguments for further customization. For

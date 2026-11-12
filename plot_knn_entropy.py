@@ -60,11 +60,11 @@ from src.utils.plot import (
     add_config_group_args,
     assign_groups,
     ci_bounds,
-    composed_mask,
     detect_precision,
     draw_bars,
     ensure_font,
     entry_config,
+    entry_mask,
     env_groups,
     hyperparameter_strings,
     load_plot_configs,
@@ -1020,23 +1020,11 @@ _assigned: dict = {}
 
 
 def runs_of(env, entry, ignored, matched):
-    """Return the runs of one environment that an entry selects: the ones whose
-    whole recorded configuration is the one the entry composes to there.
+    """Return the names of the runs of one environment that an entry selects (see
+    entry_mask)."""
 
-    The comparison covers every key, the ones the entry leaves out included: a
-    run launched with another value for one of those is a different
-    configuration, and belongs to whichever entry composes to it.
-
-    `ignored` and `matched` are the pair `assign_groups` returned for this plot
-    config, and have to be that pair: a mask built under one set of exemptions
-    says nothing about a comparison made under another.
-    """
-
-    flat = entry_config(env, entry["selector"], entry["label"])
-    if flat is None:
-        return []
-    mask = composed_mask(df, flat, ignore=ignored, as_str=hp_strings)
-    return list(df.index[mask & matched])
+    mask = entry_mask(df, hp_strings, env, entry["selector"], entry["label"], ignored, matched)
+    return list(df.index[mask])
 
 
 # --- Which runs the plot configs ask for ---

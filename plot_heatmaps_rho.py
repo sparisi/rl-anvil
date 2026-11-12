@@ -57,7 +57,7 @@ from src.utils.matching import (
 )
 from src.utils.misc import make_vprint
 from src.utils.plot import (
-    add_config_group_args, assign_groups, composed_mask, ensure_font, entry_config,
+    add_config_group_args, assign_groups, ensure_font, entry_config, entry_mask,
     env_groups, hyperparameter_strings, load_plot_configs, memory_fractions,
     plot_entries, plot_labels, tex_kwargs as _tex,
 )
@@ -574,18 +574,14 @@ _assigned: dict = {}
 
 
 def reference_run(env, row, ignored, matched):
-    """The one run of `env` whose whole recorded configuration is the one the
-    reference entry `row` composes to there, or None.
+    """The one run of `env` that the reference entry `row` selects (see
+    entry_mask), or None.
 
-    `ignored` and `matched` are the pair `assign_groups` returned for this plot
-    config. A configuration matching several runs of one environment draws the
-    first, since a row holds one memory, and says which ones it passed over."""
+    A configuration matching several runs of one environment draws the first,
+    since a row holds one memory, and says which ones it passed over."""
 
-    flat = entry_config(env, row["selector"], row["label"])
-    if flat is None:
-        return None
-    mask = composed_mask(df, flat, ignore=ignored, as_str=hp_strings)
-    names = list(df.index[mask & matched])
+    mask = entry_mask(df, hp_strings, env, row["selector"], row["label"], ignored, matched)
+    names = list(df.index[mask])
     if not names:
         return None
     if len(names) > 1:

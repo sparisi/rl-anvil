@@ -73,11 +73,11 @@ from src.utils.plot import (
     GROUP_GAP_BAR,
     add_config_group_args,
     assign_groups,
-    composed_mask,
     detect_precision,
     draw_bars,
     ensure_font,
     entry_config,
+    entry_mask,
     env_groups,
     error_shade_plot,
     fitted_rows_cols,
@@ -652,31 +652,11 @@ plt.rcParams["grid.linestyle"] = "--"
 
 
 def runs_of(env, entry, ignored, matched):
-    """Every run of one environment that an entry selects, one per seed: the ones
-    whose whole recorded configuration is the one the entry composes to there.
+    """Return the names of every run of one environment that an entry selects,
+    one per seed (see entry_mask)."""
 
-    The comparison covers every key, the ones the entry leaves out included: a
-    run launched with another value for one of those is a different
-    configuration, and belongs to whichever entry composes to it.
-
-    `ignored` and `matched` are the pair `assign_groups` returned for this plot
-    config, and have to be that pair: a mask built under one set of exemptions
-    says nothing about a comparison made under another."""
-
-    # The shared reading, not one of its own: a configuration then means the same
-    # runs here as in every other figure, and it stays that way when it changes.
-    flat = entry_config(env, entry["selector"], entry["label"])
-    if flat is None:
-        return []
-    # Over the whole frame, as plot_results.py selects: the environment is
-    # composed into `flat`, so its own keys already keep the runs of another one
-    # out, and the two scripts read one configuration the same way.
-    #
-    # The same exemption assign_configs was given above: a key a launch set for
-    # every run alike is not part of what tells two configurations apart, and
-    # holding a run to the YAML's value for it would match nothing.
-    mask = composed_mask(df, flat, ignore=ignored, as_str=hp_strings)
-    return list(df.index[mask & matched])
+    mask = entry_mask(df, hp_strings, env, entry["selector"], entry["label"], ignored, matched)
+    return list(df.index[mask])
 
 
 # -----------------------------------------------------------------------------

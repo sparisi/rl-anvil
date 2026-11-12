@@ -12,7 +12,7 @@ hyperparameter is whichever key the entries name besides `algorithm`, and the
 reference and the ablations may be the same algorithm, since what tells them
 apart is the null rather than the config file.
 
---plot_config names a config, a bare name looked for in configs/plots, or a
+--plot names a config, a bare name looked for in configs/plots, or a
 directory of them; every *.yaml in it is drawn, except those whose first
 non-empty line is `# skip`.
 
@@ -418,7 +418,7 @@ parser.add_argument(
 )
 add_config_group_args(parser)
 parser.add_argument(
-    "-p", "--plot_config",
+    "-p", "--plot",
     required=True,
     metavar="NAME",
     help="Plot config: which configurations become the rows, over which "
@@ -513,7 +513,7 @@ try:
 except ValueError as err:
     parser.error(f"--progression_step {err}")
 
-plot_cfgs = [(name, Path(path), cfg) for name, path, cfg in load_plot_configs(args.plot_config)]
+plot_cfgs = [(name, Path(path), cfg) for name, path, cfg in load_plot_configs(args.plot)]
 vprint(f"\n{len(plot_cfgs)} plot config(s): {[n for n, _, _ in plot_cfgs]}")
 
 

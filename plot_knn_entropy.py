@@ -168,7 +168,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "-p",
-    "--plot_config",
+    "--plot",
     required=True,
     metavar="NAME",
     help=(
@@ -1003,7 +1003,7 @@ df.columns = pd.MultiIndex.from_tuples([("hyperparameter", c) for c in df.column
 # against them for every (environment, entry).
 hp_strings = hyperparameter_strings(df)
 
-plot_cfgs = load_plot_configs(args.plot_config)
+plot_cfgs = load_plot_configs(args.plot)
 vprint(f"\n{len(plot_cfgs)} plot config(s): {[n for n, _, _ in plot_cfgs]}")
 
 # --- Identify environment and algorithm ---

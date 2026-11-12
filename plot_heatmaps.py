@@ -51,7 +51,7 @@ from src.utils.id import flatten_cfg, read_run_cfg
 from src.utils.matching import ignored_cfg_keys, load_config_group, split_config_label
 from src.utils.misc import make_vprint
 from src.utils.plot import (
-    add_config_group_args, assign_groups, composed_mask, ensure_font, entry_config,
+    add_config_group_args, assign_groups, ensure_font, entry_config, entry_mask,
     env_groups, hyperparameter_strings, load_plot_configs, memory_fractions,
     plot_entries, plot_labels, tex_kwargs as _tex,
 )
@@ -395,27 +395,15 @@ _assigned: dict = {}
 
 
 def run_of(env, selector, label, ignored, matched):
-    """The one run of `env` whose whole recorded configuration is the one the
-    entry composes to there, or None.
-
-    The comparison covers every key, the ones the entry leaves out included: a
-    run launched with another value for one of those is a different
-    configuration, and belongs to whichever entry composes to it.
-
-    `ignored` and `matched` are the pair `assign_groups` returned for this plot
-    config, and have to be that pair: a mask built under one set of exemptions
-    says nothing about a comparison made under another.
+    """The one run of `env` that the entry selects (see entry_mask), or None.
 
     A configuration matching several runs of one environment draws the first,
     since a cell holds one map, and says which ones it passed over: two runs of
     one configuration and one environment means a key the plot config does not
     name is varying under it."""
 
-    flat = entry_config(env, selector, label)
-    if flat is None:
-        return None
-    mask = composed_mask(df, flat, ignore=ignored, as_str=hp_strings)
-    names = list(df.index[mask & matched])
+    mask = entry_mask(df, hp_strings, env, selector, label, ignored, matched)
+    names = list(df.index[mask])
     if not names:
         return None
     if len(names) > 1:

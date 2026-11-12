@@ -462,36 +462,47 @@ def entry_config(env: str, selector: dict, label: str) -> dict | None:
     )
 
 
-def entry_rows(frame, as_str, drawing, env, index, entry):
-    """Return the runs of `frame` in one environment that an entry selects: the
-    ones whose whole recorded configuration is the one the entry composes to
-    there.
+def entry_mask(frame, as_str, env, selector, label, ignored, matched):
+    """Return the runs of `frame` in one environment that an entry selects, as a
+    boolean mask: the ones whose whole recorded configuration is the one the
+    entry composes to there, all False when the entry pins another environment.
 
     The comparison covers every key, the ones the entry leaves out included: a
     run launched with another value for one of those is a different
     configuration, and belongs to whichever entry composes to it. `as_str` is
-    hyperparameter_strings(frame). `drawing` holds the keys exempt from matching
-    (`ignored_keys`), the runs placed in an environment (`matched`) and a dict
-    (`rows`) the answer is kept in under (env, index), since the same
+    hyperparameter_strings(frame). `ignored` and `matched` are the pair
+    assign_groups returned for the plot config, and have to be that pair: a mask
+    built under one set of exemptions says nothing about a comparison made under
+    another."""
+
+    flat = entry_config(env, selector, label)
+    if flat is None:
+        return pd.Series(False, index=frame.index)
+    return composed_mask(frame, flat, ignore=ignored, as_str=as_str) & matched
+
+
+def entry_rows(frame, as_str, cache, env, index, entry, ignored, matched):
+    """Return the rows of `frame` that entry_mask selects for `entry` in `env`.
+
+    The answer is kept in `cache` under (env, index), since the same
     (environment, entry) is asked for repeatedly and each answer costs a
-    comparison against every hyperparameter column of the frame."""
+    comparison against every hyperparameter column of the frame. A cache holds
+    the answers of one (`ignored`, `matched`) pair."""
 
     key = (env, index)
-    if key not in drawing.rows:
-        flat = entry_config(env, entry["selector"], entry["label"])
-        drawing.rows[key] = (
-            frame.iloc[0:0] if flat is None
-            else frame[
-                composed_mask(
-                    frame,
-                    flat,
-                    ignore=drawing.ignored_keys,
-                    as_str=as_str,
-                )
-                & drawing.matched
-            ]
-        )
-    return drawing.rows[key]
+    if key not in cache:
+        cache[key] = frame[
+            entry_mask(
+                frame,
+                as_str,
+                env,
+                entry["selector"],
+                entry["label"],
+                ignored,
+                matched,
+            )
+        ]
+    return cache[key]
 
 
 def composed_sweep_mask(

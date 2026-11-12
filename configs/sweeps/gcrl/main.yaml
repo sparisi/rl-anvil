@@ -2,12 +2,14 @@ global_sweep:
   environment:
     - gym_gridworlds/three_rooms_wall_mini_nonuniform
     - gym_gridworlds/four_rooms_stuck_hard
+    - gym_gridworlds/four_rooms_stuck_hard_sticky
     - gym_gridworlds/travel_field_small
     - gymnasium/acrobot
     - gymnasium/mountain_car
     - gymnasium/pendulum_discrete
     - gymnasium/cart_pole
     - gymnasium/lunar_lander
+    - gymnasium/lunar_lander_noisyact
     # - gymnasium/lunar_lander_full
   algorithm:
     - adagoal

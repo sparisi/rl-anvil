@@ -2,6 +2,9 @@
 
 environment:
   id: Gym-Gridworlds/Empty-Loop-3x3-v0
+  wrappers:
+    - id: gym_gridworlds.observation_wrappers.MatrixWrapper
+    - id: gymnasium.wrappers.FlattenObservation
 
 experiment:
   replay_memory:

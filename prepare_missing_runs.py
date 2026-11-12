@@ -31,11 +31,14 @@ The script is written to <folder>/submit_missing_runs.py and relaunches the
 missing seeds through submit_jobs_slurm.submit_jobs(...). Its command line takes
 the parameters of submit_jobs, the cluster among them, and `--extra` the
 overrides to launch every run with, which is where the values of the exempt keys
-go. A recap of every configuration missing seeds is printed at the end: the
-run directories it matches, relative to the data directory, the sources
-declaring it, the missing seeds and its overrides. A configuration matching no
-run is named by the config_id it composes to; when it has keys exempt from
-matching, that config_id is marked as composed before `--extra`.
+go. A recap of every configuration missing seeds is printed at the end, grouped
+by environment, each group headed by the environment YAML (its environment.id
+for a configuration naming none) with its number of configurations and missing
+seeds: for every configuration, the run directories it matches, relative to the
+data directory, the sources declaring it, the missing seeds and its overrides
+other than the environment. A configuration matching no run is named by the
+config_id it composes to; when it has keys exempt from matching, that config_id
+is marked as composed before `--extra`.
 
 Example
 
@@ -292,14 +295,28 @@ for config_id, entry in configs.items():
             where = f"{config_id} (no run on disk; config_id before --extra)"
         else:
             where = f"{config_id} (no run on disk)"
-        recap.append((where, entry["sources"], missing, entry["hp"]))
+        # The environment YAML the configuration names, or its environment.id
+        # when it names none.
+        env = entry["hp"].get("environment", entry["flat"].get("environment.id"))
+        recap.append((value_str(env), where, entry["sources"], missing, entry["hp"]))
 
 path, n_jobs = write_missing_runs_script(args.folder, missing_runs)
 
-print(f"\nMissing runs -- {len(recap)} of {len(configs)} configuration(s), {sum(len(m) for _, _, m, _ in recap)} seed(s)")
-for where, sources, missing, hp in recap:
-    print(f"\n  {where}  [{', '.join(sources)}]")
-    print(f"    seeds: {', '.join(map(str, missing))}")
-    for key, value in hp.items():
-        print(f"    {key}={value}")
+by_env = {}
+for env, *rest in recap:
+    by_env.setdefault(env, []).append(rest)
+
+print(
+    f"\nMissing runs -- {len(recap)} of {len(configs)} configuration(s), "
+    f"{sum(len(r[3]) for r in recap)} seed(s), {len(by_env)} environment(s)"
+)
+for env in sorted(by_env):
+    items = by_env[env]
+    print(f"\n>>> {env} -- {len(items)} configuration(s), {sum(len(missing) for _, _, missing, _ in items)} seed(s)")
+    for where, sources, missing, hp in items:
+        print(f"\n  {where}  [{', '.join(sources)}]")
+        print(f"    seeds: {', '.join(map(str, missing))}")
+        for key, value in hp.items():
+            if key != "environment":
+                print(f"    {key}={value}")
 print(f"\nMissing runs script: {path} ({n_jobs} entries)")

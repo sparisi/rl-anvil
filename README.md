@@ -49,6 +49,8 @@ export SCRATCH=/projappl/project_abc
 setx SCRATCH "C:\scratch\%USERNAME%"  # on Windows
 ```
 
+Only Gymnasium's default environments are installed with this package. Other
+environment suites (e.g., Atari, Minigrid, MuJoCo) must be installed manually.  
 [Gym-Gridworlds](https://github.com/sparisi/gym_gridworlds/) is not a dependency of this
 package, but it is the suggested suite to start with: the environments are minimal, so
 you can quickly try out all of the repo's features on them. They are also what the
@@ -189,6 +191,26 @@ See [Installation](#installation) for how to set it.
 every environment step (`experiment.update_frequency: 1`), over sequences of 8
 transitions for TD(λ), and the target network is soft-copied after every update. Raise
 `experiment.update_frequency` to trade sample efficiency for speed.
+
+Hydra composes the configuration from the `defaults` list of
+[`configs/default.yaml`](configs/default.yaml), in this order: `agent`,
+`algorithm`, `environment`, `wandb`, `hydra`, and last `default.yaml` itself
+(`_self_`). A file later in the list overrides the keys set by an earlier one,
+and command-line overrides are applied after all of them. The `algorithm` and
+`environment` files are declared with `# @package _global_`, so they can set keys
+anywhere in the configuration: an algorithm file changes the agent defaults, and
+an environment file can change the agent and the experiment once more, e.g., the
+encoder and the number of training steps for that environment.
+
+The environment and the algorithm are the two most important groups, because
+runs and plots are grouped by them. A run records the composed configuration,
+not the names of the files it was composed from, so the plotting scripts match
+each run back to the YAMLs that sweeps and plot configs name by their path under
+[`configs/environment/`](configs/environment/) or
+[`configs/algorithm/`](configs/algorithm/). We recommend
+familiarizing yourself with the sweep and plot examples (see
+[Launching Sweeps](#launching-sweeps) and
+[Data Processing and Visualization](#data-processing-and-visualization)).
 
 ### 2. Training and Testing + Reproducibility
 The training routine is handled in [`src/experiment.py`](src/experiment.py).

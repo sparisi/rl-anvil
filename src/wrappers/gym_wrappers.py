@@ -65,7 +65,12 @@ class NormalizeObservationWrapper(gymnasium.ObservationWrapper):
         return observation / self.obs_bound
 
 
-def make_gym_env(train_from_pixels=False, observation_bins=None, action_bins=None, **kwargs):
+def make_gym_env(
+    train_from_pixels=False,
+    observation_bins=None,
+    action_bins=None,
+    **kwargs,
+):
     if train_from_pixels:
         kwargs["render_mode"] = "rgb_array"
     env_name = kwargs["id"]

@@ -51,9 +51,9 @@ from src.utils.id import flatten_cfg, read_run_cfg
 from src.utils.matching import ignored_cfg_keys, load_config_group, split_config_label
 from src.utils.misc import make_vprint
 from src.utils.plot import (
-    add_config_group_args, assign_groups, composed_mask, ensure_font, entry_config,
-    env_groups, load_plot_configs, memory_fractions, plot_entries, plot_labels,
-    tex_kwargs as _tex,
+    add_config_group_args, assign_groups, ensure_font, entry_config, entry_mask,
+    env_groups, hyperparameter_strings, load_plot_configs, memory_fractions,
+    plot_entries, plot_labels, save_and_close, tex_kwargs as _tex,
 )
 from src.utils.heatmaps import (
     CBAR_SUBPLOT_SIZE, add_colorbar, arr_range, auto_dpi, cbar_groups, cbar_hspace,
@@ -371,6 +371,9 @@ if not flat_cfgs:
 
 df = pd.DataFrame.from_dict(flat_cfgs, orient="index")
 df.columns = pd.MultiIndex.from_tuples([("hyperparameter", c) for c in df.columns])
+# Every hyperparameter column as value_str renders it, once: run_of compares
+# against them for every (environment, entry).
+hp_strings = hyperparameter_strings(df)
 
 plot_cfgs = load_plot_configs(args.plot_config)
 vprint(f"\n{len(plot_cfgs)} plot config(s): {[n for n, _, _ in plot_cfgs]}")
@@ -392,26 +395,15 @@ _assigned: dict = {}
 
 
 def run_of(env, selector, label, ignored, matched):
-    """The one run of `env` whose whole recorded configuration is the one the
-    entry composes to there, or None.
-
-    The comparison covers every key, the ones the entry leaves out included: a
-    run launched with another value for one of those is a different
-    configuration, and belongs to whichever entry composes to it.
-
-    `ignored` and `matched` are the pair `assign_groups` returned for this plot
-    config, and have to be that pair: a mask built under one set of exemptions
-    says nothing about a comparison made under another.
+    """The one run of `env` that the entry selects (see entry_mask), or None.
 
     A configuration matching several runs of one environment draws the first,
     since a cell holds one map, and says which ones it passed over: two runs of
     one configuration and one environment means a key the plot config does not
     name is varying under it."""
 
-    flat = entry_config(env, selector, label)
-    if flat is None:
-        return None
-    names = list(df.index[composed_mask(df, flat, ignore=ignored) & matched])
+    mask = entry_mask(df, hp_strings, env, selector, label, ignored, matched)
+    names = list(df.index[mask])
     if not names:
         return None
     if len(names) > 1:
@@ -720,18 +712,20 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
                 pct = int(round(frac * 100))
                 suffix = f"_{group_name}" if group_name else ""
                 rotated = "_rotated" if args.rotate else ""
-                fname = key_out / f"all{suffix}_{pct}{rotated}.png"
                 dpi = auto_dpi(
                     arrays.values(),
                     args.max_dpi,
                     args.pixels_per_cell,
                     PANEL_SIZE,
                 )
-                fig.savefig(fname, bbox_inches="tight", pad_inches=0.05, dpi=dpi)
-                plt.close(fig)
-                vprint(
-                    f"  Saved: {fname.relative_to(output_root)}  "
-                    f"({len(labels)} config(s) x {len(present)} environment(s))"
+                save_and_close(
+                    fig,
+                    key_out,
+                    f"all{suffix}_{pct}{rotated}",
+                    vprint,
+                    dpi=dpi,
+                    pad_inches=0.05,
+                    note=f"  ({len(labels)} config(s) x {len(present)} environment(s))",
                 )
 
             # --- One figure per environment, a column per checkpoint, so a row
@@ -818,18 +812,20 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
                 add_colorbars(fig, axs, cell_keys, cell_ranges)
 
                 rotated = "_rotated" if args.rotate else ""
-                fname = key_out / f"{safe_stem(env)}{rotated}.png"
                 dpi = auto_dpi(
                     arrays.values(),
                     args.max_dpi,
                     args.pixels_per_cell,
                     PANEL_SIZE,
                 )
-                fig.savefig(fname, bbox_inches="tight", pad_inches=0.05, dpi=dpi)
-                plt.close(fig)
-                vprint(
-                    f"  Saved: {fname.relative_to(output_root)}  "
-                    f"({len(names)} config(s) x {n_frac})"
+                save_and_close(
+                    fig,
+                    key_out,
+                    f"{safe_stem(env)}{rotated}",
+                    vprint,
+                    dpi=dpi,
+                    pad_inches=0.05,
+                    note=f"  ({len(names)} config(s) x {n_frac})",
                 )
 
 print("\nDone.")

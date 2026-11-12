@@ -367,6 +367,28 @@ class GridAggregationEncoder(nn.Module):
         return self.encoder(x)
 
 
+class PassthroughEncoder(nn.Module):
+    """Wraps an encoder for flat observations: features at `passthrough` indices
+    (e.g., the binary leg contacts of LunarLander) skip the encoder, and are
+    concatenated raw to its output. All other features go through `encoder_cls`.
+    Shape: (..., state_dim) → (batch, encoder_dim + num_passthrough)."""
+
+    def __init__(self, encoder_cls, state_shape, passthrough, **kwargs):
+        super().__init__()
+        assert len(state_shape) == 1, "passthrough requires a flat state_shape"
+        self.state_dim = state_shape[0]
+        mask = np.zeros(self.state_dim, dtype=bool)
+        mask[list(passthrough)] = True
+        # Python lists, not buffers: soft_reset blends buffers as floats.
+        self.raw_idx = np.flatnonzero(mask).tolist()
+        self.enc_idx = np.flatnonzero(~mask).tolist()
+        self.encoder = encoder_cls((len(self.enc_idx),), **kwargs)
+
+    def forward(self, x):
+        x = x.reshape(-1, self.state_dim)
+        return torch.cat([self.encoder(x[:, self.enc_idx]), x[:, self.raw_idx]], dim=-1)
+
+
 # ------------------------------------------------------------------------------
 # ------------------------------ BODY NETWORKS ---------------------------------
 # ------------------------------------------------------------------------------
@@ -527,13 +549,21 @@ class MSENetwork(FunctionApproximator, nn.Module):
         self.reset_optimizer()
 
     def _build_encoder(self):
-        if self._encoder_cfg is None:
+        self._encoder_id = None if self._encoder_cfg is None else self._encoder_cfg.get('id')
+
+        if self._encoder_id is None:
             self._obs_encoder = nn.Identity().to(self.device)
         else:
-            encoder_kwargs = {k: v for k, v in self._encoder_cfg.items() if k != 'id'}
-            self._obs_encoder = getattr(src.approximator, self._encoder_cfg.id)(
-                self.state_shape, **encoder_kwargs,
-            ).to(self.device)
+            encoder_kwargs = {k: v for k, v in self._encoder_cfg.items() if k not in ('id', 'passthrough')}
+            encoder_cls = getattr(src.approximator, self._encoder_id)
+            passthrough = self._encoder_cfg.get('passthrough')
+            if passthrough is None:
+                self._obs_encoder = encoder_cls(self.state_shape, **encoder_kwargs)
+            else:
+                self._obs_encoder = PassthroughEncoder(
+                    encoder_cls, self.state_shape, passthrough, **encoder_kwargs,
+                )
+            self._obs_encoder.to(self.device)
 
         self._obs_encoder.eval()
         self._state_enc_dim = self._obs_encoder(
@@ -543,7 +573,7 @@ class MSENetwork(FunctionApproximator, nn.Module):
 
     def _build_body(self):
         self._body = nn.Sequential(
-            self.Norm(self._state_enc_dim) if self._encoder_cfg is not None else nn.Identity(),
+            self.Norm(self._state_enc_dim) if self._encoder_id is not None else nn.Identity(),
             # This is a Maxout block (Goodfellow et al., 2013)
             LinearN(
                 self._state_enc_dim,
@@ -680,13 +710,19 @@ class MSEGoalNetwork(MSENetwork):
     def _build_encoder(self):
         super()._build_encoder()
 
-        if self._encoder_cfg is None:
+        if self._encoder_id is None:
             self._goal_encoder = nn.Identity().to(self.device)
         else:
-            encoder_kwargs = {k: v for k, v in self._encoder_cfg.items() if k != 'id'}
-            self._goal_encoder = getattr(src.approximator, self._encoder_cfg.id)(
-                self.goal_shape, **encoder_kwargs,
-            ).to(self.device)
+            encoder_kwargs = {k: v for k, v in self._encoder_cfg.items() if k not in ('id', 'passthrough')}
+            encoder_cls = getattr(src.approximator, self._encoder_id)
+            passthrough = self._encoder_cfg.get('passthrough')
+            if passthrough is None:
+                self._goal_encoder = encoder_cls(self.goal_shape, **encoder_kwargs)
+            else:
+                self._goal_encoder = PassthroughEncoder(
+                    encoder_cls, self.goal_shape, passthrough, **encoder_kwargs,
+                )
+            self._goal_encoder.to(self.device)
 
         self._goal_encoder.eval()
         self._goal_enc_dim = self._goal_encoder(
@@ -714,7 +750,7 @@ class MSEGoalNetwork(MSENetwork):
         # Shared body
         body_input_dim = self._hidden_size * 3  # concat (sf, gf, sf * gf)
         self._shared_body = nn.Sequential(
-            self.Norm(body_input_dim) if self._encoder_cfg is not None else nn.Identity(),
+            self.Norm(body_input_dim) if self._encoder_id is not None else nn.Identity(),
             LinearN(
                 body_input_dim,
                 self._hidden_size,

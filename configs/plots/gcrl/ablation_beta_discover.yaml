@@ -10,9 +10,6 @@ configs:
       agent.actor.beta_novelty: 1
       plot.label: "$\\beta = 1$"
     - algorithm: discover
-      agent.actor.beta_novelty: 5
-      plot.label: "$\\beta = 5$"
-    - algorithm: discover
       agent.actor.beta_novelty: 10
       plot.label: "$\\beta = 10$"
     - algorithm: discover

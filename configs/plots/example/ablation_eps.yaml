@@ -6,21 +6,21 @@ configs:
     - algorithm: eps_greedy
       agent.actor.eps.init_value: 1.0
       agent.actor.eps.end_value: 0.5
-      plot.label: "1 → 0.5"
+      plot.label: '$1 \to 0.5$'
     - algorithm: eps_greedy
       agent.actor.eps.init_value: 1.0
       agent.actor.eps.end_value: 0.2
-      plot.label: "1 → 0.2"
+      plot.label: '$1 \to 0.2$'
     - algorithm: eps_greedy
       agent.actor.eps.init_value: 1.0
       agent.actor.eps.end_value: 0.0
-      plot.label: "1 → 0"
+      plot.label: '$1 \to 0$'
   c2:
     - algorithm: eps_greedy
       agent.actor.eps.init_value: 0.5
       agent.actor.eps.end_value: 0.2
-      plot.label: "0.5 → 0.2"
+      plot.label: '$0.5 \to 0.2$'
     - algorithm: eps_greedy
       agent.actor.eps.init_value: 0.5
       agent.actor.eps.end_value: 0.0
-      plot.label: "0.5 → 0"
+      plot.label: '$0.5 \to 0$'

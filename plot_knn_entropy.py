@@ -60,16 +60,17 @@ from src.utils.plot import (
     add_config_group_args,
     assign_groups,
     ci_bounds,
-    composed_mask,
     detect_precision,
     draw_bars,
     ensure_font,
     entry_config,
+    entry_mask,
     env_groups,
+    hyperparameter_strings,
     load_plot_configs,
     plot_labels,
     rows_cols,
-    save_figure,
+    save_and_close,
     set_3_ticks,
     style_entries,
     tex_kwargs,
@@ -609,9 +610,7 @@ def write_legend(entries, plot_cfg, output_dir):
         fig.canvas.draw()
         box = legend.get_window_extent().transformed(fig.dpi_scale_trans.inverted())
         fig.set_size_inches(box.width, box.height)
-        vprint(f"  Saved: {save_figure(fig, output_dir, name)}")
-        plt.close(fig)
-        written += 1
+        written += save_and_close(fig, output_dir, name, vprint)
     return written
 
 
@@ -1000,6 +999,9 @@ if not flat_cfgs:
 
 df = pd.DataFrame.from_dict(flat_cfgs, orient="index")
 df.columns = pd.MultiIndex.from_tuples([("hyperparameter", c) for c in df.columns])
+# Every hyperparameter column as value_str renders it, once: runs_of compares
+# against them for every (environment, entry).
+hp_strings = hyperparameter_strings(df)
 
 plot_cfgs = load_plot_configs(args.plot_config)
 vprint(f"\n{len(plot_cfgs)} plot config(s): {[n for n, _, _ in plot_cfgs]}")
@@ -1018,22 +1020,11 @@ _assigned: dict = {}
 
 
 def runs_of(env, entry, ignored, matched):
-    """Return the runs of one environment that an entry selects: the ones whose
-    whole recorded configuration is the one the entry composes to there.
+    """Return the names of the runs of one environment that an entry selects (see
+    entry_mask)."""
 
-    The comparison covers every key, the ones the entry leaves out included: a
-    run launched with another value for one of those is a different
-    configuration, and belongs to whichever entry composes to it.
-
-    `ignored` and `matched` are the pair `assign_groups` returned for this plot
-    config, and have to be that pair: a mask built under one set of exemptions
-    says nothing about a comparison made under another.
-    """
-
-    flat = entry_config(env, entry["selector"], entry["label"])
-    if flat is None:
-        return []
-    return list(df.index[composed_mask(df, flat, ignore=ignored) & matched])
+    mask = entry_mask(df, hp_strings, env, entry["selector"], entry["label"], ignored, matched)
+    return list(df.index[mask])
 
 
 # --- Which runs the plot configs ask for ---
@@ -1605,9 +1596,7 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
         parts = [p for p in (group_name, stat) if p]
         if n_bins is not None:
             parts.append(f"{n_bins}bins")
-        vprint(f"  Saved: {save_figure(fig, output_dir, '_'.join(parts))}")
-        plt.close(fig)
-        return 1
+        return save_and_close(fig, output_dir, "_".join(parts), vprint)
 
     for group_name, group_envs in groups.items():
         drawn_envs = [e for e in group_envs if e in envs]

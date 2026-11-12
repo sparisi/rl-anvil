@@ -1,0 +1,36 @@
+default:
+  - default
+
+configs:
+  discover:
+    - algorithm: discover
+      agent.actor.beta_novelty: 0.1
+      plot.label: "$\\beta = 0.1$"
+    - algorithm: discover
+      agent.actor.beta_novelty: 1
+      plot.label: "$\\beta = 1$"
+    - algorithm: discover
+      agent.actor.beta_novelty: 10
+      plot.label: "$\\beta = 10$"
+    - algorithm: discover
+      agent.actor.beta_novelty: 100
+      plot.label: "$\\beta = 100$"
+    - algorithm: discover
+      agent.actor.beta_novelty: 1_000
+      plot.label: "$\\beta = 1,000$"
+  sun_ucb_adaptive:
+    - algorithm: sun_ucb_adaptive
+      agent.actor.beta_novelty: 0.1
+      plot.label: "$\\beta = 0.1$"
+    - algorithm: sun_ucb_adaptive
+      agent.actor.beta_novelty: 1
+      plot.label: "$\\beta = 1$"
+    - algorithm: sun_ucb_adaptive
+      agent.actor.beta_novelty: 10
+      plot.label: "$\\beta = 10$"
+    - algorithm: sun_ucb_adaptive
+      agent.actor.beta_novelty: 100
+      plot.label: "$\\beta = 100$"
+    - algorithm: sun_ucb_adaptive
+      agent.actor.beta_novelty: 1_000
+      plot.label: "$\\beta = 1,000$"

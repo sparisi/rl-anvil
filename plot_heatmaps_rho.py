@@ -16,9 +16,6 @@ apart is the null rather than the config file.
 directory of them; every *.yaml in it is drawn, except those whose first
 non-empty line is `# skip`.
 
-`rng_seed` in a plot config is not read: --rng_seed picks which seed's memory is
-drawn, for every config alike.
-
 --colorbar draws the colour scale under the panels it applies to. How many panels
 a bar covers follows --shared_vmap; unset, it is one bar per panel. Panels are
 drawn larger so the bar and its ticks stay legible.
@@ -60,9 +57,9 @@ from src.utils.matching import (
 )
 from src.utils.misc import make_vprint
 from src.utils.plot import (
-    add_config_group_args, assign_groups, composed_mask, ensure_font, entry_config,
-    env_groups, load_plot_configs, memory_fractions, plot_entries, plot_labels,
-    tex_kwargs as _tex,
+    add_config_group_args, assign_groups, ensure_font, entry_config, entry_mask,
+    env_groups, hyperparameter_strings, load_plot_configs, memory_fractions,
+    plot_entries, plot_labels, save_and_close, tex_kwargs as _tex,
 )
 from src.utils.heatmaps import (
     CBAR_SUBPLOT_SIZE, add_border, add_colorbar, arr_range as _arr_range, auto_dpi,
@@ -216,9 +213,8 @@ def ablation_from_entries(plot_cfg, where=""):
     the reference and the ablations may name the same algorithm: what tells them
     apart is the value, not the config file.
 
-    Labels come from `plot.label`, one per row. `rng_seed`, `statistics` and
-    `color_scheme` are not read: the first is a command-line argument, and the
-    other two describe figures this script does not draw."""
+    Labels come from `plot.label`, one per row. `statistics` and `color_scheme`
+    are not read: they describe figures this script does not draw."""
 
     if not (plot_cfg.get("configs") or {}):
         raise SystemExit(f"{where}: no `configs:` to draw.")
@@ -554,6 +550,9 @@ if not flat_cfgs:
 
 df = pd.DataFrame.from_dict(flat_cfgs, orient="index")
 df.columns = pd.MultiIndex.from_tuples([("hyperparameter", c) for c in df.columns])
+# Every hyperparameter column as value_str renders it, once: reference_run
+# compares against them for every (environment, entry).
+hp_strings = hyperparameter_strings(df)
 
 
 # --- Identify environment ---
@@ -575,17 +574,14 @@ _assigned: dict = {}
 
 
 def reference_run(env, row, ignored, matched):
-    """The one run of `env` whose whole recorded configuration is the one the
-    reference entry `row` composes to there, or None.
+    """The one run of `env` that the reference entry `row` selects (see
+    entry_mask), or None.
 
-    `ignored` and `matched` are the pair `assign_groups` returned for this plot
-    config. A configuration matching several runs of one environment draws the
-    first, since a row holds one memory, and says which ones it passed over."""
+    A configuration matching several runs of one environment draws the first,
+    since a row holds one memory, and says which ones it passed over."""
 
-    flat = entry_config(env, row["selector"], row["label"])
-    if flat is None:
-        return None
-    names = list(df.index[composed_mask(df, flat, ignore=ignored) & matched])
+    mask = entry_mask(df, hp_strings, env, row["selector"], row["label"], ignored, matched)
+    names = list(df.index[mask])
     if not names:
         return None
     if len(names) > 1:
@@ -954,16 +950,20 @@ for config_name, config_path, plot_cfg in plot_cfgs:
                 add_colorbars(fig, axs, cell_keys, cell_ranges)
 
                 rot_suffix = "_rotated" if args.rotate else ""
-                fname = key_out / f"all{suffix}{pct_suffix}{rot_suffix}.png"
                 dpi = auto_dpi(
                     list(last_arrays.values()),
                     args.max_dpi,
                     args.pixels_per_cell,
                     SUBPLOT_SIZE,
                 )
-                fig.savefig(fname, bbox_inches="tight", pad_inches=0.05, dpi=dpi)
-                plt.close(fig)
-                vprint(f"  Saved: {fname.relative_to(output_root)}")
+                save_and_close(
+                    fig,
+                    key_out,
+                    f"all{suffix}{pct_suffix}{rot_suffix}",
+                    vprint,
+                    dpi=dpi,
+                    pad_inches=0.05,
+                )
 
         # --- One figure per environment: a column per memory fraction, a row per
         # (algorithm, hyperparameter value).
@@ -1050,15 +1050,19 @@ for config_name, config_path, plot_cfg in plot_cfgs:
                 add_colorbars(fig, axs, cell_keys, cell_ranges)
 
                 rot_suffix = "_rotated" if args.rotate else ""
-                fname = key_out / f"{safe_stem(en)}{rot_suffix}.png"
                 dpi = auto_dpi(
                     list(step_arrays.values()),
                     args.max_dpi,
                     args.pixels_per_cell,
                     SUBPLOT_SIZE,
                 )
-                fig.savefig(fname, bbox_inches="tight", pad_inches=0.05, dpi=dpi)
-                plt.close(fig)
-                vprint(f"  Saved: {fname.relative_to(output_root)}")
+                save_and_close(
+                    fig,
+                    key_out,
+                    f"{safe_stem(en)}{rot_suffix}",
+                    vprint,
+                    dpi=dpi,
+                    pad_inches=0.05,
+                )
 
 print("\nDone.")

@@ -73,18 +73,19 @@ from src.utils.plot import (
     GROUP_GAP_BAR,
     add_config_group_args,
     assign_groups,
-    composed_mask,
     detect_precision,
     draw_bars,
     ensure_font,
     entry_config,
+    entry_mask,
     env_groups,
     error_shade_plot,
     fitted_rows_cols,
+    hyperparameter_strings,
     load_plot_configs,
     plot_labels,
     rows_cols,
-    save_figure,
+    save_and_close,
     set_3_ticks,
     style_entries,
     summarize,
@@ -627,6 +628,9 @@ if not flat_cfgs:
 
 df = pd.DataFrame.from_dict(flat_cfgs, orient="index")
 df.columns = pd.MultiIndex.from_tuples([("hyperparameter", c) for c in df.columns])
+# Every hyperparameter column as value_str renders it, once: runs_of compares
+# against them for every (environment, entry).
+hp_strings = hyperparameter_strings(df)
 
 # Neither the environment nor the algorithm is recorded by a run: both are matched
 # back from their config YAMLs, the file a run's hyperparameters agree with.
@@ -648,30 +652,11 @@ plt.rcParams["grid.linestyle"] = "--"
 
 
 def runs_of(env, entry, ignored, matched):
-    """Every run of one environment that an entry selects, one per seed: the ones
-    whose whole recorded configuration is the one the entry composes to there.
+    """Return the names of every run of one environment that an entry selects,
+    one per seed (see entry_mask)."""
 
-    The comparison covers every key, the ones the entry leaves out included: a
-    run launched with another value for one of those is a different
-    configuration, and belongs to whichever entry composes to it.
-
-    `ignored` and `matched` are the pair `assign_groups` returned for this plot
-    config, and have to be that pair: a mask built under one set of exemptions
-    says nothing about a comparison made under another."""
-
-    # The shared reading, not one of its own: a configuration then means the same
-    # runs here as in every other figure, and it stays that way when it changes.
-    flat = entry_config(env, entry["selector"], entry["label"])
-    if flat is None:
-        return []
-    # Over the whole frame, as plot_results.py selects: the environment is
-    # composed into `flat`, so its own keys already keep the runs of another one
-    # out, and the two scripts read one configuration the same way.
-    #
-    # The same exemption assign_configs was given above: a key a launch set for
-    # every run alike is not part of what tells two configurations apart, and
-    # holding a run to the YAML's value for it would match nothing.
-    return list(df.index[composed_mask(df, flat, ignore=ignored) & matched])
+    mask = entry_mask(df, hp_strings, env, entry["selector"], entry["label"], ignored, matched)
+    return list(df.index[mask])
 
 
 # -----------------------------------------------------------------------------
@@ -1155,9 +1140,7 @@ def draw_curves(
     )
 
     name = METRIC_FILES[metric] + (f"_{group_name}" if group_name else "") + "_curves"
-    vprint(f"  Saved: {save_figure(fig, output_dir, name)}")
-    plt.close(fig)
-    return 1
+    return save_and_close(fig, output_dir, name, vprint)
 
 
 def draw_auc(cfg, entries, selected, group_name, envs, metric, output_dir):
@@ -1208,9 +1191,7 @@ def draw_auc(cfg, entries, selected, group_name, envs, metric, output_dir):
     )
 
     name = METRIC_FILES[metric] + (f"_{group_name}" if group_name else "") + "_auc"
-    vprint(f"  Saved: {save_figure(fig, output_dir, name)}")
-    plt.close(fig)
-    return 1
+    return save_and_close(fig, output_dir, name, vprint)
 
 
 def draw_auc_all(cfg, entries, selected, envs, metric, output_dir):
@@ -1241,9 +1222,7 @@ def draw_auc_all(cfg, entries, selected, envs, metric, output_dir):
     draw_hbars(ax, items)
 
     name = METRIC_FILES[metric] + "_auc_all_envs"
-    vprint(f"  Saved: {save_figure(fig, output_dir, name)}")
-    plt.close(fig)
-    return 1
+    return save_and_close(fig, output_dir, name, vprint)
 
 
 def recap(config_name, entries, selected, envs):

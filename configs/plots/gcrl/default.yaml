@@ -1,5 +1,4 @@
 # @package _global_
-rng_seed: 12
 
 # Keys to be ignored when matching configs
 ignored_cfg_keys:
@@ -51,11 +50,29 @@ statistics:
 # If environments are grouped, they will be plotted separately.
 environments:
   gridworlds_and_control:
-    gym_gridworlds/three_rooms_wall_mini_nonuniform: "ThreeRoom"
-    gym_gridworlds/four_rooms_stuck_hard: "FourRoomStuck"
-    gym_gridworlds/travel_field_small: "GridMaze"
-    gymnasium/mountain_car: "MountainCar"
-    gymnasium/pendulum_discrete: "Pendulum"
-    gymnasium/lunar_lander: "LunarLander"
-    gymnasium/acrobot: "Acrobot"
-    gymnasium/cart_pole: "CartPole"
+    gym_gridworlds/three_rooms_wall_mini_nonuniform:
+      label: "ThreeRoom"
+      score_bounds: &unit_bounds
+        sa_h: [0, 1]
+        sa_%: [0, 1]
+    gym_gridworlds/four_rooms_stuck_hard:
+      label: "FourRoomStuck"
+      score_bounds: *unit_bounds
+    gym_gridworlds/travel_field_small:
+      label: "GridMaze"
+      score_bounds: *unit_bounds
+    gymnasium/mountain_car:
+      label: "MountainCar"
+      score_bounds: *unit_bounds
+    gymnasium/pendulum_discrete:
+      label: "Pendulum"
+      score_bounds: *unit_bounds
+    gymnasium/lunar_lander:
+      label: "LunarLander"
+      score_bounds: *unit_bounds
+    gymnasium/acrobot:
+      label: "Acrobot"
+      score_bounds: *unit_bounds
+    gymnasium/cart_pole:
+      label: "CartPole"
+      score_bounds: *unit_bounds

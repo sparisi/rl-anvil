@@ -2,6 +2,9 @@
 
 environment:
   id: Gym-Gridworlds/TwoRoom-Distract-Middle-2x11-v0
+  wrappers:
+    - id: gym_gridworlds.observation_wrappers.MatrixWrapper
+    - id: gymnasium.wrappers.FlattenObservation
 
 experiment:
   replay_memory:

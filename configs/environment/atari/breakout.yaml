@@ -3,6 +3,16 @@
 environment:
   id: ALE/Breakout-v5
   train_from_pixels: True
+  # https://github.com/Farama-Foundation/Shimmy/blob/main/shimmy/atari_env.py
+  frameskip: 1
+  repeat_action_probability: 0.0
+  full_action_space: False
+  max_num_frames_per_episode: 18_000  # as in Machado et al., 2018
+  obs_type: rgb
+  wrappers:
+    - id: gymnasium.wrappers.AtariPreprocessing
+    - id: gymnasium.wrappers.FrameStackObservation
+      stack_size: 4
 
 experiment:
   warm_up: 10_000

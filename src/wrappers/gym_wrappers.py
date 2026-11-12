@@ -61,6 +61,28 @@ class NormalizeObservationWrapper(gymnasium.ObservationWrapper):
         return observation / self.obs_bound
 
 
+class RandomActionWrapper(gymnasium.ActionWrapper):
+    """
+    Replace the action, with probability `random_action_prob`, by one drawn
+    uniformly from the discrete action space. Both draws use the environment's
+    random generator, so they are seeded with the environment.
+    """
+
+    def __init__(self, env, random_action_prob):
+        super().__init__(env)
+        if not isinstance(env.action_space, gymnasium.spaces.Discrete):
+            raise ValueError(
+                f"RandomActionWrapper needs a Discrete action space, got "
+                f"{type(env.action_space).__name__}."
+            )
+        self.random_action_prob = random_action_prob
+
+    def action(self, action):
+        if self.np_random.random() < self.random_action_prob:
+            return int(self.action_space.start + self.np_random.integers(self.action_space.n))
+        return action
+
+
 def wrapper_class(name):
     """
     Return the wrapper class whose full dotted path is `name`, imported from

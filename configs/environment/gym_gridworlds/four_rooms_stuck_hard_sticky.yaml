@@ -3,8 +3,6 @@
 environment:
   id: Gym-Gridworlds/FourRooms-Stuck-13x13-Hard-v0
   wrappers:
-    - id: gym_gridworlds.observation_wrappers.MatrixWrapper
-    - id: gymnasium.wrappers.FlattenObservation
     - id: gymnasium.wrappers.StickyAction
       repeat_action_probability: 0.2
       repeat_action_duration: 2
@@ -12,9 +10,7 @@ environment:
   start_pos: [[1, 1]]
 
 experiment:
-  replay_memory:
-    rho: null
-  warm_up: 10_000
-  cool_down: 10_000
-  training_steps: 200_000
+  warm_up: 1
+  cool_down: 0
+  training_steps: 20_000
   testing_episodes: 50

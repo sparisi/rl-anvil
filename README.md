@@ -343,8 +343,8 @@ many statistics you display.
 **<ins>Customized Plots.</ins>** Aggregate results with custom labels, axes limits,
 colors, filtered configurations, ... Customizations are defined in [`configs/plots/`](configs/plots).
 ```
-python plot_results.py -f data_example --plot_config=example -v --with_auc
-python plot_heatmaps.py -f data_example --plot_config=example -v --progression_step=0.1 --shared_vmap=same_figure
+python plot_results.py -f data_example --plot=example -v --with_auc
+python plot_heatmaps.py -f data_example --plot=example -v --progression_step=0.1 --shared_vmap=same_figure
 python plot_violin.py -f data_example -p example -v
 ```
 

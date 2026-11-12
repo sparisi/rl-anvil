@@ -126,7 +126,7 @@ parser.add_argument(
 )
 add_config_group_args(parser)
 parser.add_argument(
-    "-p", "--plot_config",
+    "-p", "--plot",
     required=True,
     metavar="NAME",
     help="Plot config: which configurations become the rows, over which "
@@ -375,7 +375,7 @@ df.columns = pd.MultiIndex.from_tuples([("hyperparameter", c) for c in df.column
 # against them for every (environment, entry).
 hp_strings = hyperparameter_strings(df)
 
-plot_cfgs = load_plot_configs(args.plot_config)
+plot_cfgs = load_plot_configs(args.plot)
 vprint(f"\n{len(plot_cfgs)} plot config(s): {[n for n, _, _ in plot_cfgs]}")
 
 # --- Identify environment and algorithm ---

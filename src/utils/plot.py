@@ -972,16 +972,16 @@ def save_figure(fig, folder, name, dpi=300, pad_inches=0.1):
     return path
 
 
-def save_and_close(fig, folder, name, vprint):
-    """Save `fig` as `folder/name.png` (see save_figure), close it, print the
-    path through `vprint` and return 1, or return 0 when the file cannot be
-    written."""
+def save_and_close(fig, folder, name, vprint, dpi=300, pad_inches=0.1, note=""):
+    """Save `fig` as `folder/name.png` with `dpi` and `pad_inches` (see
+    save_figure), close it, print the path followed by `note` through `vprint`
+    and return 1, or return 0 when the file cannot be written."""
 
-    path = save_figure(fig, folder, name)
+    path = save_figure(fig, folder, name, dpi=dpi, pad_inches=pad_inches)
     plt.close(fig)
     if path is None:
         return 0
-    vprint(f"  Saved: {path}")
+    vprint(f"  Saved: {path}{note}")
     return 1
 
 

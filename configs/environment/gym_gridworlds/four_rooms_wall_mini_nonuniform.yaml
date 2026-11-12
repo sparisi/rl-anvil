@@ -2,9 +2,6 @@
 
 environment:
   id: Gym-Gridworlds/FourRooms-Wall-7x7-v0
-  wrappers:
-    - id: gym_gridworlds.observation_wrappers.MatrixWrapper
-    - id: gymnasium.wrappers.FlattenObservation
   infinite_horizon: True
   loop_through_start_pos: True
   non_uniform_start: True

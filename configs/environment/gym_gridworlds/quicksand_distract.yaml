@@ -2,9 +2,6 @@
 
 environment:
   id: Gym-Gridworlds/Quicksand-Distract-4x4-v0
-  wrappers:
-    - id: gym_gridworlds.observation_wrappers.MatrixWrapper
-    - id: gymnasium.wrappers.FlattenObservation
 
 experiment:
   warm_up: 1

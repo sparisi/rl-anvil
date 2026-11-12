@@ -2,9 +2,6 @@
 
 environment:
   id: Gym-Gridworlds/Taxi-6x7-v0
-  wrappers:
-    - id: gym_gridworlds.observation_wrappers.MatrixWithGoalWrapper
-    - id: gymnasium.wrappers.FlattenObservation
 
 experiment:
   warm_up: 1

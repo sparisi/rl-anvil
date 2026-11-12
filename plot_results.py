@@ -865,7 +865,17 @@ def draw_config(config_name, cfg):
         if TIME in df.columns:
             for env in present:
                 for i, entry in enumerate(drawing.entries):
-                    raw = entry_rows(df, hp_strings, drawing, env, i, entry)[TIME].dropna()
+                    rows = entry_rows(
+                        df,
+                        hp_strings,
+                        drawing.rows,
+                        env,
+                        i,
+                        entry,
+                        drawing.ignored_keys,
+                        drawing.matched,
+                    )
+                    raw = rows[TIME].dropna()
                     if raw.empty:
                         continue
                     try:
@@ -882,7 +892,17 @@ def draw_config(config_name, cfg):
             decoded_of = {}
             for env in present:
                 for i, entry in enumerate(drawing.entries):
-                    decoded = series_of(entry_rows(df, hp_strings, drawing, env, i, entry), stat)
+                    rows = entry_rows(
+                        df,
+                        hp_strings,
+                        drawing.rows,
+                        env,
+                        i,
+                        entry,
+                        drawing.ignored_keys,
+                        drawing.matched,
+                    )
+                    decoded = series_of(rows, stat)
                     if decoded is None:
                         continue
                     decoded_of[(env, i)] = decoded

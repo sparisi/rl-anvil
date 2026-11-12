@@ -48,7 +48,6 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import argparse
-import os
 from pathlib import Path
 from tqdm import tqdm
 
@@ -60,7 +59,7 @@ from src.utils.misc import make_vprint
 from src.utils.plot import (
     add_config_group_args, assign_groups, ensure_font, entry_config, entry_mask,
     env_groups, hyperparameter_strings, load_plot_configs, memory_fractions,
-    plot_entries, plot_labels, save_figure, tex_kwargs as _tex,
+    plot_entries, plot_labels, save_and_close, tex_kwargs as _tex,
 )
 from src.utils.heatmaps import (
     CBAR_SUBPLOT_SIZE, add_border, add_colorbar, arr_range as _arr_range, auto_dpi,
@@ -957,16 +956,14 @@ for config_name, config_path, plot_cfg in plot_cfgs:
                     args.pixels_per_cell,
                     SUBPLOT_SIZE,
                 )
-                path = save_figure(
+                save_and_close(
                     fig,
                     key_out,
                     f"all{suffix}{pct_suffix}{rot_suffix}",
+                    vprint,
                     dpi=dpi,
                     pad_inches=0.05,
                 )
-                plt.close(fig)
-                if path is not None:
-                    vprint(f"  Saved: {os.path.relpath(path, output_root)}")
 
         # --- One figure per environment: a column per memory fraction, a row per
         # (algorithm, hyperparameter value).
@@ -1059,15 +1056,13 @@ for config_name, config_path, plot_cfg in plot_cfgs:
                     args.pixels_per_cell,
                     SUBPLOT_SIZE,
                 )
-                path = save_figure(
+                save_and_close(
                     fig,
                     key_out,
                     f"{safe_stem(en)}{rot_suffix}",
+                    vprint,
                     dpi=dpi,
                     pad_inches=0.05,
                 )
-                plt.close(fig)
-                if path is not None:
-                    vprint(f"  Saved: {os.path.relpath(path, output_root)}")
 
 print("\nDone.")

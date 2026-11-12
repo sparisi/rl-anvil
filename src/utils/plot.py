@@ -952,9 +952,10 @@ def tex_kwargs(label):
     )
 
 
-def save_figure(fig, folder, name, dpi=300):
-    """Save `fig` as `folder/name.png` and return the path to it, or None when
-    the file cannot be written.
+def save_figure(fig, folder, name, dpi=300, pad_inches=0.1):
+    """Save `fig` as `folder/name.png`, cropped to its content with `pad_inches`
+    of margin, and return the path to it, or None when the file cannot be
+    written.
 
     The name is sanitized with pathvalidate, which strips the characters a
     filename cannot hold, and the path is normalized so its separators are the
@@ -964,7 +965,7 @@ def save_figure(fig, folder, name, dpi=300):
     name = sanitize_filename(name, platform="auto")
     path = os.path.normpath(os.path.join(folder, name + ".png"))
     try:
-        fig.savefig(path, bbox_inches="tight", pad_inches=0.1, dpi=dpi)
+        fig.savefig(path, bbox_inches="tight", pad_inches=pad_inches, dpi=dpi)
     except OSError as e:
         print(f"WARNING: could not write {path}: {e}")
         return None

@@ -44,6 +44,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import argparse
+import os
 from pathlib import Path
 from tqdm import tqdm
 
@@ -53,7 +54,7 @@ from src.utils.misc import make_vprint
 from src.utils.plot import (
     add_config_group_args, assign_groups, ensure_font, entry_config, entry_mask,
     env_groups, hyperparameter_strings, load_plot_configs, memory_fractions,
-    plot_entries, plot_labels, tex_kwargs as _tex,
+    plot_entries, plot_labels, save_figure, tex_kwargs as _tex,
 )
 from src.utils.heatmaps import (
     CBAR_SUBPLOT_SIZE, add_colorbar, arr_range, auto_dpi, cbar_groups, cbar_hspace,
@@ -701,19 +702,25 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
                 pct = int(round(frac * 100))
                 suffix = f"_{group_name}" if group_name else ""
                 rotated = "_rotated" if args.rotate else ""
-                fname = key_out / f"all{suffix}_{pct}{rotated}.png"
                 dpi = auto_dpi(
                     arrays.values(),
                     args.max_dpi,
                     args.pixels_per_cell,
                     PANEL_SIZE,
                 )
-                fig.savefig(fname, bbox_inches="tight", pad_inches=0.05, dpi=dpi)
-                plt.close(fig)
-                vprint(
-                    f"  Saved: {fname.relative_to(output_root)}  "
-                    f"({len(labels)} config(s) x {len(present)} environment(s))"
+                path = save_figure(
+                    fig,
+                    key_out,
+                    f"all{suffix}_{pct}{rotated}",
+                    dpi=dpi,
+                    pad_inches=0.05,
                 )
+                plt.close(fig)
+                if path is not None:
+                    vprint(
+                        f"  Saved: {os.path.relpath(path, output_root)}  "
+                        f"({len(labels)} config(s) x {len(present)} environment(s))"
+                    )
 
             # --- One figure per environment, a column per checkpoint, so a row
             # reads left to right as the visitation building up. Only worth
@@ -799,18 +806,24 @@ for config_name, _cfg_path, plot_cfg in plot_cfgs:
                 add_colorbars(fig, axs, cell_keys, cell_ranges)
 
                 rotated = "_rotated" if args.rotate else ""
-                fname = key_out / f"{safe_stem(env)}{rotated}.png"
                 dpi = auto_dpi(
                     arrays.values(),
                     args.max_dpi,
                     args.pixels_per_cell,
                     PANEL_SIZE,
                 )
-                fig.savefig(fname, bbox_inches="tight", pad_inches=0.05, dpi=dpi)
-                plt.close(fig)
-                vprint(
-                    f"  Saved: {fname.relative_to(output_root)}  "
-                    f"({len(names)} config(s) x {n_frac})"
+                path = save_figure(
+                    fig,
+                    key_out,
+                    f"{safe_stem(env)}{rotated}",
+                    dpi=dpi,
+                    pad_inches=0.05,
                 )
+                plt.close(fig)
+                if path is not None:
+                    vprint(
+                        f"  Saved: {os.path.relpath(path, output_root)}  "
+                        f"({len(names)} config(s) x {n_frac})"
+                    )
 
 print("\nDone.")

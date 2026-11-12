@@ -247,8 +247,9 @@ def plot_entries(plot_cfg: dict, with_directives: bool = False):
               plot.label: "..."             # what to call them
               plot.color: "purple"          # what to draw it in
 
-    A group is a family drawn in one hue (see style_entries). An entry that names no hyperparameter would select every run, so
-    it is dropped and reported rather than drawn.
+    A group is a family drawn in one hue (see style_entries). An entry that names
+    no hyperparameter would select every run, so it is dropped and reported
+    rather than drawn.
 
     Every key under `plot.` is a directive rather than a hyperparameter, so it is
     taken out of the selector and returned separately, under the name it was
@@ -459,6 +460,38 @@ def entry_config(env: str, selector: dict, label: str) -> dict | None:
     return composed_config(
         tuple(format_override(k, v) for k, v in sorted(overrides.items()))
     )
+
+
+def entry_rows(frame, as_str, drawing, env, index, entry):
+    """Return the runs of `frame` in one environment that an entry selects: the
+    ones whose whole recorded configuration is the one the entry composes to
+    there.
+
+    The comparison covers every key, the ones the entry leaves out included: a
+    run launched with another value for one of those is a different
+    configuration, and belongs to whichever entry composes to it. `as_str` is
+    hyperparameter_strings(frame). `drawing` holds the keys exempt from matching
+    (`ignored_keys`), the runs placed in an environment (`matched`) and a dict
+    (`rows`) the answer is kept in under (env, index), since the same
+    (environment, entry) is asked for repeatedly and each answer costs a
+    comparison against every hyperparameter column of the frame."""
+
+    key = (env, index)
+    if key not in drawing.rows:
+        flat = entry_config(env, entry["selector"], entry["label"])
+        drawing.rows[key] = (
+            frame.iloc[0:0] if flat is None
+            else frame[
+                composed_mask(
+                    frame,
+                    flat,
+                    ignore=drawing.ignored_keys,
+                    as_str=as_str,
+                )
+                & drawing.matched
+            ]
+        )
+    return drawing.rows[key]
 
 
 def composed_sweep_mask(
@@ -989,8 +1022,10 @@ def write_legend_handles(handles, plot_cfg, output_dir, font_size):
         box = legend.get_window_extent().transformed(
             fig_legend.dpi_scale_trans.inverted())
         fig_legend.set_size_inches(box.width, box.height)
-        paths.append(save_figure(fig_legend, output_dir, name))
+        path = save_figure(fig_legend, output_dir, name)
         plt.close(fig_legend)
+        if path is not None:
+            paths.append(path)
     return paths
 
 
@@ -1082,6 +1117,51 @@ def area_over_span(values, x):
     if len(values) < 2:
         return float(values[0])
     return float(np.sum((values[1:] + values[:-1]) * np.diff(x)) / (2.0 * (x[-1] - x[0])))
+
+
+def run_scores(decoded, kind, last_k=1):
+    """Return one score per seed of a configuration, from its series_of output:
+    the mean of the last `last_k` finite points of its curve (`final`), or its
+    area over the recorded steps divided by their span (`auc`, see
+    area_over_span). A seed with no finite point is left out."""
+
+    series, x = decoded[0], decoded[1]
+    scores = []
+    for column in series.columns:
+        run = series[column].to_numpy(dtype=float)
+        kept = np.isfinite(run)
+        finite = run[kept]
+        if not finite.size:
+            continue
+        if kind == "auc":
+            scores.append(area_over_span(finite, x[kept]))
+        else:
+            scores.append(float(finite[-last_k:].mean()))
+    return scores
+
+
+def missing_bounds(score_bounds, envs, stat):
+    """Return the environments of `envs` with no normalization bounds for `stat`
+    in `score_bounds` (see plot_labels), or with an empty one."""
+
+    return [
+        env for env in envs
+        if (b := score_bounds.get((str(env), stat))) is None or b[1] == b[0]
+    ]
+
+
+def norm_bounds(score_bounds, envs, stat):
+    """Return the normalization bounds of each environment of `envs` for `stat`
+    in `score_bounds` (see plot_labels), as (low, high) arrays, or None when an
+    environment has none or an empty one (see missing_bounds)."""
+
+    if missing_bounds(score_bounds, envs, stat):
+        return None
+    bounds = [score_bounds[(str(env), stat)] for env in envs]
+    return (
+        np.array([b[0] for b in bounds], dtype=float),
+        np.array([b[1] for b in bounds], dtype=float),
+    )
 
 
 # Sample std (ddof=1), as a confidence interval over a sample of seeds requires.

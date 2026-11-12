@@ -87,21 +87,22 @@ from src.utils.plot import (
     STEPS_STAT,
     TIME,
     add_config_group_args,
-    area_over_span,
     assign_groups,
     ci_bounds,
-    composed_mask,
     detect_precision,
     draw_bars,
     ensure_font,
-    entry_config,
+    entry_rows,
     env_groups,
     error_shade_plot,
     fitted_rows_cols,
     hyperparameter_strings,
     load_plot_configs,
+    missing_bounds,
+    norm_bounds,
     plot_labels,
     rows_cols,
+    run_scores,
     save_figure,
     series_of,
     set_3_ticks,
@@ -269,7 +270,7 @@ vprint(f"\nLoaded parquet file from: {parquet_path}")
 if all(isinstance(c, str) and c.startswith("(") for c in df.columns):
     df.columns = pd.MultiIndex.from_tuples([literal_eval(c) for c in df.columns])
 
-# Every hyperparameter column as value_str renders it, once: rows_of compares
+# Every hyperparameter column as value_str renders it, once: entry_rows compares
 # against them for every (environment, entry).
 hp_strings = hyperparameter_strings(df)
 
@@ -296,36 +297,6 @@ plt.rcParams["axes.axisbelow"] = False
 plt.rcParams["grid.linestyle"] = "--"
 
 written = 0
-
-
-def rows_of(drawing, env, index, entry):
-    """The runs of one environment that an entry selects: the ones whose whole
-    recorded configuration is the one the entry composes to there.
-
-    The comparison covers every key, the ones the entry leaves out included: a
-    run launched with another value for one of those is a different
-    configuration, and belongs to whichever entry composes to it.
-
-    Kept in `drawing.rows`: the same (environment, entry) is asked for once for
-    the timings and once per statistic, and each answer costs a comparison
-    against every hyperparameter column of the frame."""
-
-    key = (env, index)
-    if key not in drawing.rows:
-        flat = entry_config(env, entry["selector"], entry["label"])
-        drawing.rows[key] = (
-            df.iloc[0:0] if flat is None
-            else df[
-                composed_mask(
-                    df,
-                    flat,
-                    ignore=drawing.ignored_keys,
-                    as_str=hp_strings,
-                )
-                & drawing.matched
-            ]
-        )
-    return drawing.rows[key]
 
 
 def bar_values(decoded):
@@ -356,7 +327,7 @@ def bar_values(decoded):
     return {
         "peak": peak,
         "steps": steps,
-        "auc": summarize(run_scores(decoded, "auc")),
+        "auc": summarize(run_scores(decoded, "auc", args.rliable_last_k)),
     }
 
 
@@ -416,7 +387,7 @@ class Drawing:
 
     `summaries`, `rliable` and `time_table` are filled as the figures are drawn
     and read back by the tables and the recap; `drawn_envs` is which environments each
-    group actually had runs for; `rows` is the cache rows_of keeps."""
+    group actually had runs for; `rows` is the cache entry_rows keeps."""
 
     name: str
     cfg: dict
@@ -444,40 +415,6 @@ class Drawing:
 
 
 RLIABLE_SCORES = {"final": "Final", "auc": "AUC"}
-
-
-def run_scores(decoded, kind):
-    """One score per seed of a configuration: the mean of the last
-    --rliable_last_k finite points of its curve (`final`), or its area over the
-    recorded steps divided by their span (`auc`, the area bar_values reports)."""
-
-    series, x = decoded[0], decoded[1]
-    scores = []
-    for column in series.columns:
-        run = series[column].to_numpy(dtype=float)
-        kept = np.isfinite(run)
-        finite = run[kept]
-        if not finite.size:
-            continue
-        if kind == "auc":
-            scores.append(area_over_span(finite, x[kept]))
-        else:
-            scores.append(float(finite[-args.rliable_last_k:].mean()))
-    return scores
-
-
-def norm_bounds(drawing, envs, stat):
-    """The `score_bounds` of each environment for `stat` (its `ylim` when it
-    declares none), as (low, high) arrays, or None when an environment has none
-    or an empty one."""
-
-    bounds = [drawing.score_bounds.get((str(env), stat)) for env in envs]
-    if any(b is None or b[1] == b[0] for b in bounds):
-        return None
-    return (
-        np.array([b[0] for b in bounds], dtype=float),
-        np.array([b[1] for b in bounds], dtype=float),
-    )
 
 
 def complete_entries(drawing, present, stat, decoded_of, drawn):
@@ -510,9 +447,10 @@ def draw_iqm_curve(drawing, name, present, stat, decoded_of, drawn):
     fraction of it otherwise. A seed with no value at one of the points is
     dropped."""
 
-    bounds = norm_bounds(drawing, present, stat)
+    bounds = norm_bounds(drawing.score_bounds, present, stat)
     if bounds is None:
-        vprint(f"  No score_bounds or ylim for {stat} in every environment, no IQM curve.")
+        missing = missing_bounds(drawing.score_bounds, present, stat)
+        vprint(f"  No score_bounds or ylim for {stat} in {missing}, no IQM curve.")
         return 0
     low, high = bounds
     fractions = np.linspace(0.0, 1.0, args.iqm_points)
@@ -603,8 +541,11 @@ def draw_iqm_curve(drawing, name, present, stat, decoded_of, drawn):
         ],
         -0.15,
     )
-    vprint(f"  Saved: {save_figure(fig, drawing.output_dir, f'{name}_curves_iqm')}")
+    path = save_figure(fig, drawing.output_dir, f"{name}_curves_iqm")
     plt.close(fig)
+    if path is None:
+        return 0
+    vprint(f"  Saved: {path}")
     return 1
 
 
@@ -622,7 +563,10 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
 
     scores = {}
     for i in complete_entries(drawing, present, stat, decoded_of, drawn):
-        per_env = [run_scores(decoded_of[(env, i)], kind) for env in present]
+        per_env = [
+            run_scores(decoded_of[(env, i)], kind, args.rliable_last_k)
+            for env in present
+        ]
         if all(per_env):
             scores[i] = stack_runs(per_env)
     if not scores:
@@ -687,16 +631,19 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
         ax.tick_params(axis="both", labelsize=FONT_SIZE - 2, pad=1)
         xlabel = f"P(X > Y), {score_label} {ylabel}"
         ax.set_xlabel(xlabel, fontsize=FONT_SIZE, **tex_kwargs(xlabel))
-        vprint(f"  Saved: {save_figure(fig, drawing.output_dir, f'{stem}_poi')}")
+        path = save_figure(fig, drawing.output_dir, f"{stem}_poi")
         plt.close(fig)
-        written += 1
+        if path is not None:
+            vprint(f"  Saved: {path}")
+            written += 1
 
     # --- Aggregate metrics and performance profile -----------------------------
-    bounds = norm_bounds(drawing, present, stat)
+    bounds = norm_bounds(drawing.score_bounds, present, stat)
     if bounds is None:
+        missing = missing_bounds(drawing.score_bounds, present, stat)
         vprint(
-            f"  No score_bounds or ylim for {stat} in every environment, no "
-            f"rliable aggregates or profile."
+            f"  No score_bounds or ylim for {stat} in {missing}, no rliable "
+            f"aggregates or profile."
         )
         return written
     low, high = bounds
@@ -765,9 +712,11 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
         va="top",
         **tex_kwargs(xlabel),
     )
-    vprint(f"  Saved: {save_figure(fig, drawing.output_dir, f'{stem}_aggregate')}")
+    path = save_figure(fig, drawing.output_dir, f"{stem}_aggregate")
     plt.close(fig)
-    written += 1
+    if path is not None:
+        vprint(f"  Saved: {path}")
+        written += 1
 
     # Over the normalized range the score bounds map to.
     taus = np.linspace(0.0, 1.0, 101)
@@ -825,9 +774,11 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
         ],
         -0.2,
     )
-    vprint(f"  Saved: {save_figure(fig, drawing.output_dir, f'{stem}_profile')}")
+    path = save_figure(fig, drawing.output_dir, f"{stem}_profile")
     plt.close(fig)
-    written += 1
+    if path is not None:
+        vprint(f"  Saved: {path}")
+        written += 1
     return written
 
 
@@ -870,7 +821,7 @@ def draw_config(config_name, cfg):
         vprint(f"Keys exempt from config matching: {sorted(ignored_keys)}")
     # The environment label alone decides which runs are drawable; the algorithm
     # label is assigned for the figures to read. An entry here is a whole composed
-    # configuration, so the comparison `rows_of` makes already holds every key an
+    # configuration, so the comparison `entry_rows` makes already holds every key an
     # algorithm YAML declares, at the value the configuration composes to, and
     # holds the interpolated ones the YAML comparison drops. A YAML declaring a
     # default a sweep overrode agrees with the runs it launched on every key but
@@ -931,7 +882,7 @@ def draw_config(config_name, cfg):
         if TIME in df.columns:
             for env in present:
                 for i, entry in enumerate(drawing.entries):
-                    raw = rows_of(drawing, env, i, entry)[TIME].dropna()
+                    raw = entry_rows(df, hp_strings, drawing, env, i, entry)[TIME].dropna()
                     if raw.empty:
                         continue
                     try:
@@ -948,7 +899,7 @@ def draw_config(config_name, cfg):
             decoded_of = {}
             for env in present:
                 for i, entry in enumerate(drawing.entries):
-                    decoded = series_of(rows_of(drawing, env, i, entry), stat)
+                    decoded = series_of(entry_rows(df, hp_strings, drawing, env, i, entry), stat)
                     if decoded is None:
                         continue
                     decoded_of[(env, i)] = decoded
@@ -1062,12 +1013,11 @@ def draw_config(config_name, cfg):
                     ],
                     -0.15,
                 )
-                vprint(
-                    f"  Saved: "
-                    f"{save_figure(fig, drawing.output_dir, f'{name}_curves')}"
-                )
+                path = save_figure(fig, drawing.output_dir, f"{name}_curves")
                 plt.close(fig)
-                written += 1
+                if path is not None:
+                    vprint(f"  Saved: {path}")
+                    written += 1
 
             # --- The peak of each curve, and what it cost to get there ------
             if args.bars_peak:
@@ -1150,12 +1100,11 @@ def draw_config(config_name, cfg):
                     ],
                     -0.1,
                 )
-                vprint(
-                    f"  Saved: "
-                    f"{save_figure(fig, drawing.output_dir, f'{name}_peak_bar')}"
-                )
+                path = save_figure(fig, drawing.output_dir, f"{name}_peak_bar")
                 plt.close(fig)
-                written += 1
+                if path is not None:
+                    vprint(f"  Saved: {path}")
+                    written += 1
 
             # --- One bar per configuration, over the whole group ------------
             # A bar figure, so it is written with the other bars.
@@ -1196,12 +1145,11 @@ def draw_config(config_name, cfg):
                     ],
                     -0.25,
                 )
-                vprint(
-                    f"  Saved: "
-                    f"{save_figure(fig, drawing.output_dir, f'{name}_auc')}"
-                )
+                path = save_figure(fig, drawing.output_dir, f"{name}_auc")
                 plt.close(fig)
-                written += 1
+                if path is not None:
+                    vprint(f"  Saved: {path}")
+                    written += 1
 
             # --- Aggregates over the runs of every environment (rliable) ----
             if args.curves_iqm:
@@ -1303,12 +1251,11 @@ def draw_config(config_name, cfg):
                         ],
                         -0.2,
                     )
-                    vprint(
-                        f"  Saved: "
-                        f"{save_figure(fig, drawing.output_dir, f'{env_name}_curves')}"
-                    )
+                    path = save_figure(fig, drawing.output_dir, f"{env_name}_curves")
                     plt.close(fig)
-                    written += 1
+                    if path is not None:
+                        vprint(f"  Saved: {path}")
+                        written += 1
 
                 if args.bars_peak:
                     stack = 2 if args.steps_to_peak else 1
@@ -1379,12 +1326,11 @@ def draw_config(config_name, cfg):
                         ],
                         -0.1,
                     )
-                    vprint(
-                        f"  Saved: "
-                        f"{save_figure(fig, drawing.output_dir, f'{env_name}_peak_bar')}"
-                    )
+                    path = save_figure(fig, drawing.output_dir, f"{env_name}_peak_bar")
                     plt.close(fig)
-                    written += 1
+                    if path is not None:
+                        vprint(f"  Saved: {path}")
+                        written += 1
 
     write_table(drawing)
     write_rliable_tables(drawing)

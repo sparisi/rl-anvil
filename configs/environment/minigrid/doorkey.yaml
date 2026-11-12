@@ -1,0 +1,16 @@
+# @package _global_
+
+environment:
+  id: MiniGrid-DoorKey-8x8-v0  # (default) 7x7x3 partial obs
+  wrappers:
+    # - id: minigrid.wrappers.FullyObsWrapper  # (optional) WxHx3 full obs, size depends on the grid
+    # - id: minigrid.wrappers.RGBImgObsWrapper  # (optional) RGB-like full obs
+    # - id: minigrid.wrappers.RGBImgPartialObsWrapper  # (optional) RGB-like partial obs
+    - id: minigrid.wrappers.ImgObsWrapper  # (mandatory) removes the 'mission' field
+    - id: gymnasium.wrappers.FlattenObservation
+
+experiment:
+  warm_up: 10_000
+  cool_down: 10_000
+  training_steps: 1_000_000
+  testing_episodes: 50

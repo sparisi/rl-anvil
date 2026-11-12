@@ -1,16 +1,12 @@
+import importlib
+
 import numpy as np
 import gymnasium
 from gymnasium import logger
+from omegaconf import DictConfig, OmegaConf
 from gymnasium.wrappers import (
-    AtariPreprocessing,
-    FlattenObservation,
     AddRenderObservation,
     ResizeObservation,
-    TimeLimit,
-    TransformObservation,
-    DiscretizeAction,
-    DiscretizeObservation,
-    FilterObservation,
 )
 
 
@@ -65,86 +61,93 @@ class NormalizeObservationWrapper(gymnasium.ObservationWrapper):
         return observation / self.obs_bound
 
 
-def make_gym_env(train_from_pixels=False, observation_bins=None, action_bins=None, **kwargs):
+def wrapper_class(name):
+    """
+    Return the wrapper class whose full dotted path is `name`, imported from
+    its module. Raise ValueError if `name` has no module.
+
+    Example
+
+        wrapper_class("gymnasium.wrappers.DiscretizeAction")
+        wrapper_class("gym_gridworlds.observation_wrappers.MatrixWrapper")
+    """
+
+    module, _, cls = name.rpartition(".")
+    if not module:
+        raise ValueError(
+            f"Wrapper '{name}' has no module: give the full dotted path of the "
+            f"class, e.g., gymnasium.wrappers.{name}."
+        )
+    return getattr(importlib.import_module(module), cls)
+
+
+def apply_wrappers(env, wrappers):
+    """
+    Wrap `env` with every wrapper of `wrappers`, in order. Each is a mapping
+    whose `id` is the full dotted path of the wrapper class (see
+    wrapper_class) and whose other keys are passed to it as keyword arguments.
+    """
+
+    for spec in wrappers or []:
+        if isinstance(spec, DictConfig):
+            spec = OmegaConf.to_container(spec, resolve=True)
+        spec = dict(spec)
+        env = wrapper_class(spec.pop("id"))(env, **spec)
+    return env
+
+
+def make_gym_env(train_from_pixels=False, wrappers=None, **kwargs):
+    """
+    Make the environment `kwargs["id"]` with the other keys of `kwargs` and
+    wrap it with `wrappers` (see apply_wrappers). With `train_from_pixels`, the
+    environment renders as an RGB array, and except for Atari and MiniGrid its
+    observations are then replaced by the render, resized to 84x84 and with
+    channels first. MinAtar observations otherwise get their channels first.
+    """
+
     if train_from_pixels:
         kwargs["render_mode"] = "rgb_array"
     env_name = kwargs["id"]
 
-    # https://github.com/Farama-Foundation/Shimmy/blob/main/shimmy/atari_env.py
+    # Packages that register their environments with gymnasium when imported
     if "ALE" in env_name:  # eg, ALE/Breakout-v5
         import ale_py
         gymnasium.register_envs(ale_py)
-        env = gymnasium.make(
+    if "MiniGrid" in env_name:  # eg, MiniGrid-DoorKey-8x8-v0
+        import minigrid
+    if "Vizdoom" in env_name:  # eg, VizdoomHealthGatheringSupreme-v0
+        from vizdoom import gymnasium_wrapper
+    if "MiniWorld" in env_name:  # eg, MiniWorld-Hallway-v0
+        import miniworld
+    if "PyFlyt" in env_name:  # eg, PyFlyt/QuadX-Hover-v0
+        import PyFlyt.gym_envs
+    if "Gym-MinAtar" in env_name:  # eg, Gym-MinAtar/Breakout-v1
+        import gym_minatar
+    if "Gym-Gridworlds" in env_name:  # eg, Gym-Gridworlds/Empty-2x2-v0
+        import gym_gridworlds
+    if "PointMaze" in env_name:  # eg, PointMaze_Medium-v3
+        import gymnasium_robotics
+
+    # OGBench must call its own make
+    if "OGBench" in env_name:  # eg, OGBench/antmaze-large-navigate-v0
+        import ogbench
+        kwargs.pop("id")
+        env = ogbench.make_env_and_datasets(
+            env_name[len("OGBench/"):],
+            env_only=True,
             **kwargs,
-            frameskip=1,
-            repeat_action_probability=0.0,
-            full_action_space=False,
-            max_num_frames_per_episode=18_000,  # as in Machado et al., 2018
-            obs_type="rgb",
         )
-        env = AtariPreprocessing(env)  # (optional)
-        env = gymnasium.wrappers.FrameStackObservation(env, 4)
+    # Every other environment simply calls gymnasium.make
+    else:
+        env = gymnasium.make(**kwargs)
 
-    elif "MiniGrid" in env_name:  # eg, MiniGrid-DoorKey-8x8-v0
-        from minigrid import wrappers as minigrid_wrappers
-        env = gymnasium.make(**kwargs)  # (default) 7x7x3 partial obs
-        # env = minigrid_wrappers.FullyObsWrapper(env) # (optional) WxHx3 full obs, size depends on the grid
-        # env = minigrid_wrappers.RGBImgObsWrapper(env) # (optional) RGB-like full obs
-        # env = minigrid_wrappers.RGBImgPartialObsWrapper(env) # (optional) RGB-like partial obs
-        env = minigrid_wrappers.ImgObsWrapper(env)  # (mandatory) removes the 'mission' field
+    env = apply_wrappers(env, wrappers)
 
-    else:  # eg, Pendulum-v1, HalfCheetah-v4, dm_control/cheetah-run-v0, highway-v0, FetchReach-v3, PandaReach-v3, ...
-        if "Vizdoom" in env_name:  # eg, VizdoomHealthGatheringSupreme-v0
-            from vizdoom import gymnasium_wrapper
-        if "MiniWorld" in env_name:  # eg, MiniWorld-Hallway-v0
-            import miniworld
-        if "PyFlyt" in env_name:  # eg, PyFlyt/QuadX-Hover-v0
-            import PyFlyt.gym_envs
-        if "Gym-MinAtar" in env_name:  # eg, Gym-MinAtar/Breakout-v1
-            import gym_minatar
-        if "Gym-Gridworlds" in env_name:  # eg, Gym-Gridworlds/Empty-2x2-v0
-            import gym_gridworlds
-            from gym_gridworlds.observation_wrappers import (
-                MatrixWrapper,
-                MatrixWithGoalWrapper,
-                ContinuousObservationWrapper,
-            )
-        if "PointMaze" in env_name:  # eg, PointMaze_Medium-v3
-            import gymnasium_robotics
-        if "OGBench" in env_name:  # eg, OGBench/antmaze-large-navigate-v0
-            import ogbench
-            env_name = env_name[len("OGBench/"):]
-            kwargs.pop("id")
-            env = ogbench.make_env_and_datasets(env_name, env_only=True, **kwargs)
-        else:
-            env = gymnasium.make(**kwargs)
-
-        if isinstance(env.action_space, gymnasium.spaces.Box):
-            env = DiscretizeAction(env, bins=action_bins)
-
-        if "PointMaze" in env_name:
-            env = FilterObservation(env, ["observation"])
-
-        if train_from_pixels:
-            env = AddRenderObservation(env, render_only=True)
-            env = ResizeObservation(env, (84, 84))
-            env = ChannelsFirstWrapper(env)
-        else:
-            if "Gym-Gridworlds" in env_name:
-                pass
-                # if "Taxi" in env_name or "CleanDirt" in env_name:
-                #     env = MatrixWithGoalWrapper(env)
-                # else:
-                #     env = MatrixWrapper(env)
-                #     # env = ContinuousObservationWrapper(env)
-                # env = FlattenObservation(env)
-            elif "Gym-MinAtar" in env_name:
-                env = ChannelsFirstWrapper(env)
-            # elif isinstance(env.observation_space, gymnasium.spaces.Box):
-            #     env = FlattenObservation(env)
-            #     env = DiscretizeObservation(env, bins=observation_bins)
-            else:
-                env = FlattenObservation(env)
-                # env = NormalizeObservationWrapper(env)
+    if train_from_pixels and "ALE" not in env_name and "MiniGrid" not in env_name:
+        env = AddRenderObservation(env, render_only=True)
+        env = ResizeObservation(env, (84, 84))
+        env = ChannelsFirstWrapper(env)
+    elif "Gym-MinAtar" in env_name:
+        env = ChannelsFirstWrapper(env)
 
     return env

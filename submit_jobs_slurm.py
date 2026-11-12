@@ -265,6 +265,7 @@ DEFAULT_OVERRIDES = [
 # tasks.
 TIMEOUTS_ENV = {
     "gymnasium/lunar_lander": 500,
+    "gymnasium/lunar_lander_noisyact": 500,
     "gymnasium/lunar_lander_full": 2300,
     "gymnasium/cart_pole": 280,
     "gymnasium/pendulum_discrete": 215,
@@ -272,6 +273,7 @@ TIMEOUTS_ENV = {
     "gymnasium/mountain_car": 300,
     "gym_gridworlds/three_rooms_wall_mini_nonuniform": 110,
     "gym_gridworlds/four_rooms_stuck_hard": 290,
+    "gym_gridworlds/four_rooms_stuck_hard_sticky": 290,
     "gym_gridworlds/travel_field_small": 310,
 }
 
@@ -311,6 +313,7 @@ TIMEOUTS_ADJUST_ALGO = {
 BASE_MEM_MB = 1250
 PER_SEED_MEM_MB = {
     "gymnasium/lunar_lander": 850,
+    "gymnasium/lunar_lander_noisyact": 850,
     "gymnasium/lunar_lander_full": 1500,
     "gymnasium/cart_pole": 650,
     "gymnasium/pendulum_discrete": 650,
@@ -318,6 +321,7 @@ PER_SEED_MEM_MB = {
     "gymnasium/mountain_car": 550,
     "gym_gridworlds/three_rooms_wall_mini_nonuniform": 500,
     "gym_gridworlds/four_rooms_stuck_hard": 600,
+    "gym_gridworlds/four_rooms_stuck_hard_sticky": 600,
     "gym_gridworlds/travel_field_small": 900,
 }
 

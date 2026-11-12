@@ -48,6 +48,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import argparse
+import os
 from pathlib import Path
 from tqdm import tqdm
 
@@ -59,7 +60,7 @@ from src.utils.misc import make_vprint
 from src.utils.plot import (
     add_config_group_args, assign_groups, ensure_font, entry_config, entry_mask,
     env_groups, hyperparameter_strings, load_plot_configs, memory_fractions,
-    plot_entries, plot_labels, tex_kwargs as _tex,
+    plot_entries, plot_labels, save_figure, tex_kwargs as _tex,
 )
 from src.utils.heatmaps import (
     CBAR_SUBPLOT_SIZE, add_border, add_colorbar, arr_range as _arr_range, auto_dpi,
@@ -950,16 +951,22 @@ for config_name, config_path, plot_cfg in plot_cfgs:
                 add_colorbars(fig, axs, cell_keys, cell_ranges)
 
                 rot_suffix = "_rotated" if args.rotate else ""
-                fname = key_out / f"all{suffix}{pct_suffix}{rot_suffix}.png"
                 dpi = auto_dpi(
                     list(last_arrays.values()),
                     args.max_dpi,
                     args.pixels_per_cell,
                     SUBPLOT_SIZE,
                 )
-                fig.savefig(fname, bbox_inches="tight", pad_inches=0.05, dpi=dpi)
+                path = save_figure(
+                    fig,
+                    key_out,
+                    f"all{suffix}{pct_suffix}{rot_suffix}",
+                    dpi=dpi,
+                    pad_inches=0.05,
+                )
                 plt.close(fig)
-                vprint(f"  Saved: {fname.relative_to(output_root)}")
+                if path is not None:
+                    vprint(f"  Saved: {os.path.relpath(path, output_root)}")
 
         # --- One figure per environment: a column per memory fraction, a row per
         # (algorithm, hyperparameter value).
@@ -1046,15 +1053,21 @@ for config_name, config_path, plot_cfg in plot_cfgs:
                 add_colorbars(fig, axs, cell_keys, cell_ranges)
 
                 rot_suffix = "_rotated" if args.rotate else ""
-                fname = key_out / f"{safe_stem(en)}{rot_suffix}.png"
                 dpi = auto_dpi(
                     list(step_arrays.values()),
                     args.max_dpi,
                     args.pixels_per_cell,
                     SUBPLOT_SIZE,
                 )
-                fig.savefig(fname, bbox_inches="tight", pad_inches=0.05, dpi=dpi)
+                path = save_figure(
+                    fig,
+                    key_out,
+                    f"{safe_stem(en)}{rot_suffix}",
+                    dpi=dpi,
+                    pad_inches=0.05,
+                )
                 plt.close(fig)
-                vprint(f"  Saved: {fname.relative_to(output_root)}")
+                if path is not None:
+                    vprint(f"  Saved: {os.path.relpath(path, output_root)}")
 
 print("\nDone.")

@@ -1,0 +1,20 @@
+default:
+  - gcrl/default
+
+configs:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      plot.label: "SUN"
+
+statistics:
+  v_err_unreach_max: "Max Err. (Unreach.)"
+  v_err_unreach: "Err. (Unreach.)"
+  v_err_reach: "Err. (Reach.)"
+  bound_holds_%: "Bound Holds"
+  sel_unreach_bound_holds_%: "Unreach. Sel. (Holds)"
+  sel_unreach_bound_fails_%: "Unreach. Sel. (Fails)"
+
+environments:
+  gridworlds:
+    gym_gridworlds/three_rooms_wall_mini_nonuniform: "ThreeRoom"
+    gym_gridworlds/four_rooms_stuck_hard: "FourRoomStuck"

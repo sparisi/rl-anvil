@@ -33,3 +33,17 @@ configs:
 statistics:
   sa_h: "Entropy"
   sa_%: "Coverage"
+
+environments:
+  gridworlds:
+    gym_gridworlds/three_rooms_wall_mini_nonuniform:
+      label: "ThreeRoom"
+      score_bounds: &unit_bounds
+        sa_h: [0, 1]
+        sa_%: [0, 1]
+    gym_gridworlds/four_rooms_stuck_hard:
+      label: "FourRoomStuck"
+      score_bounds: *unit_bounds
+    gym_gridworlds/four_rooms_stuck_hard_sticky:
+      label: "FourRoomStuck (Sticky)"
+      score_bounds: *unit_bounds

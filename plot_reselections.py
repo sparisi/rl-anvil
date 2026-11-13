@@ -26,7 +26,10 @@ under configs/plots without the extension:
                     --cause_bins equal-width bins of steps, each bar the mean
                     number of reselections per seed per 1,000 training steps
                     in the bin, stacked by cause in the same colours. Its axes
-                    carry round ticks (see round_ticks).
+                    carry round ticks (see round_ticks). The statistics of
+                    OVERLAY_STATS the runs logged are drawn over the bars on a
+                    log-scale right axis, as the mean over seeds with a 95%
+                    confidence band.
 
 The legend of the causes is also written alone, once per plot config, as
 reselection_causes_legend.png in the same directory, whatever --no_legend says.
@@ -54,6 +57,8 @@ from dataclasses import dataclass, field
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.patches as mpatches
+import matplotlib.patheffects as pe
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -73,10 +78,12 @@ from src.utils.plot import (
     ensure_font,
     entry_rows,
     env_groups,
+    error_shade_plot,
     hyperparameter_strings,
     load_plot_configs,
     plot_labels,
     save_and_close,
+    series_of,
     style_entries,
     tex_kwargs,
 )
@@ -118,6 +125,19 @@ CAUSE_STYLE = {
     "env_noise": ("Environment noise", "#2166ac", "white"),
     "critic_error": ("Approximation error", "#bababa", "black"),
 }
+# Statistic, label and colour of each curve drawn over the bars of
+# reselection_causes_steps: the absolute error of the difference
+# V(s, g, a_g) - V(s_sel, g, a_g), with V(s, g, a_g) = max_a Q(s, a | g, a_g),
+# that the value check compares against 0, logged at every check with
+# results.true_visit_check, and the visit critic's training loss.
+OVERLAY_STATS = (
+    ("v_err_check_diff", r"$|\Delta V_\theta - \Delta V^*|$ (value check)", "black"),
+    ("loss_visit", "TD loss", "white"),
+)
+# Line width of the curves of OVERLAY_STATS, and the black outline drawn around
+# the white ones.
+OVERLAY_WIDTH = 2.0
+OUTLINE = [pe.Stroke(linewidth=OVERLAY_WIDTH + 1.0, foreground="black"), pe.Normal()]
 # A segment of a bar narrower than this fraction is drawn without its
 # percentage.
 CAUSE_LABEL_MIN = 0.04
@@ -345,16 +365,27 @@ def cause_counts(drawing, env, index):
     return counts, len(runs), max(len(c) for c in runs)
 
 
-def add_cause_legend(fig, **kwargs):
-    """Draw the legend of the causes of CAUSE_STYLE on `fig`, three columns
-    without a frame, placed by the fig.legend keyword arguments `kwargs`."""
+def add_cause_legend(fig, overlays=(), **kwargs):
+    """Draw the legend of the causes of CAUSE_STYLE, followed by the curves of
+    OVERLAY_STATS named in `overlays`, on `fig`, three columns without a frame,
+    placed by the fig.legend keyword arguments `kwargs`."""
 
+    curves = [(label, color) for stat, label, color in OVERLAY_STATS if stat in overlays]
     fig.legend(
         [
             mpatches.Patch(facecolor=color, edgecolor="white")
             for _label, color, _text in CAUSE_STYLE.values()
+        ] + [
+            Line2D(
+                [],
+                [],
+                color=color,
+                linewidth=OVERLAY_WIDTH,
+                **({"path_effects": OUTLINE} if color == "white" else {}),
+            )
+            for _label, color in curves
         ],
-        [label for label, _color, _text in CAUSE_STYLE.values()],
+        [label for label, _color, _text in CAUSE_STYLE.values()] + [label for label, _color in curves],
         ncol=3,
         frameon=False,
         fontsize=FONT_SIZE - 2,
@@ -362,9 +393,10 @@ def add_cause_legend(fig, **kwargs):
     )
 
 
-def cause_legend(fig, axes):
-    """Draw the legend of the causes of CAUSE_STYLE under where `axes` and their
-    tick labels end, measured, unless --no_legend."""
+def cause_legend(fig, axes, overlays=()):
+    """Draw the legend of the causes of CAUSE_STYLE and of the curves of
+    OVERLAY_STATS named in `overlays` under where `axes` and their tick labels
+    end, measured, unless --no_legend."""
 
     if args.no_legend:
         return
@@ -372,7 +404,7 @@ def cause_legend(fig, axes):
     renderer = fig.canvas.get_renderer()
     bottom = min(ax.get_tightbbox(renderer).y0 for ax in axes)
     top = fig.transFigure.inverted().transform((0, bottom))[1] - 0.02
-    add_cause_legend(fig, loc="upper center", bbox_to_anchor=(0.5, top))
+    add_cause_legend(fig, overlays, loc="upper center", bbox_to_anchor=(0.5, top))
 
 
 def write_cause_legend(output_dir):
@@ -542,7 +574,12 @@ def draw_cause_steps_figure(drawing, name, envs):
     the mean number of reselections per seed per 1,000 training steps in the
     bin, stacked by cause in the order and the colours of CAUSE_STYLE. Both axes
     carry round ticks (see round_ticks). A subplot with no reselection is left
-    blank."""
+    blank.
+
+    Over the bars, every statistic of OVERLAY_STATS the entry's runs logged is
+    drawn on a log-scale right axis against its logged steps, as the mean over
+    seeds with a 95% confidence band (see error_shade_plot), and added to the
+    legend."""
 
     hists = {}
     for env in envs:
@@ -572,7 +609,7 @@ def draw_cause_steps_figure(drawing, name, envs):
         figsize=(CAUSE_HIST_W * n_cols, CAUSE_HIST_H * n_rows),
         squeeze=False,
     )
-    fig.subplots_adjust(hspace=0.35, wspace=0.3)
+    overlays = set()
     for r, i in enumerate(drawn):
         ylabel = "Reselections / 1k Steps"
         if several:
@@ -599,6 +636,30 @@ def draw_cause_steps_figure(drawing, name, envs):
                     linewidth=0.5,
                 )
                 bottom += height
+            twin = None
+            rows = rows_of(drawing, env, i)
+            for stat, label, color in OVERLAY_STATS:
+                series = series_of(rows, stat)
+                if series is None:
+                    continue
+                if twin is None:
+                    twin = ax.twinx()
+                    twin.set_yscale("log")
+                    twin.grid(False)
+                values, x, _steps, _seeds = series
+                error_shade_plot(
+                    twin,
+                    values.to_numpy().T,
+                    x,
+                    color=color,
+                    linewidth=OVERLAY_WIDTH,
+                    **({"path_effects": OUTLINE} if color == "white" else {}),
+                )
+                overlays.add(stat)
+            if twin is not None:
+                twin.tick_params(axis="y", labelsize=FONT_SIZE - 2, pad=1)
+                if c == n_cols - 1:
+                    twin.set_ylabel("Error / Loss", fontsize=FONT_SIZE)
             ax.set_xlim(edges[0], edges[-1])
             round_ticks(ax, "x", STEP_TICK_BINS)
             ax.xaxis.set_major_formatter(lambda v, _pos: f"{v / 1000:g}k")
@@ -612,7 +673,8 @@ def draw_cause_steps_figure(drawing, name, envs):
                 **tex_kwargs(ylabel),
             )
 
-    cause_legend(fig, [ax for row in axs for ax in row if ax.axison])
+    fig.subplots_adjust(hspace=0.35, wspace=0.5 if overlays else 0.3)
+    cause_legend(fig, [ax for row in axs for ax in row if ax.axison], overlays)
     return save_and_close(fig, drawing.output_dir, name, vprint)
 
 

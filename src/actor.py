@@ -667,7 +667,7 @@ class GoalConditioned(EpsilonGreedy):
             stats["resel_oracle_keep_%"] = self._oracle_kept_old
         self._oracle_stats.update(**stats)
 
-    def _oracle_check(self, obs, fired):
+    def _oracle_check(self, obs, fired, curr_value, sel_value):
         """
         Record one evaluation of the value check at `obs` against the true
         visit Q-function. The true value of the goal held dropped if
@@ -675,13 +675,23 @@ class GoalConditioned(EpsilonGreedy):
         against. `check_precision_%` is recorded when the check fired, as
         whether the true value dropped; `check_recall_%` is recorded when the
         true value dropped, as whether the check fired.
+
+        `curr_value` and `sel_value` are the learned values the check compared,
+        V(obs, g) and V(_sel_obs, g). At every check, their absolute errors
+        against the true values are recorded as `v_err_check_curr` and
+        `v_err_check_sel`, and the absolute error of their difference
+        V(obs, g) - V(_sel_obs, g) as `v_err_check_diff`.
         """
 
         g, a_g = self.goal["obs"], self.goal["act"]
         v_curr = self.true_visit(obs, g)[:, a_g].max()
         v_sel = self.true_visit(self._sel_obs, g)[:, a_g].max()
         dropped = v_curr < v_sel - ORACLE_TOL
-        stats = {}
+        stats = {
+            "v_err_check_curr": abs(float(curr_value) - v_curr),
+            "v_err_check_sel": abs(float(sel_value) - v_sel),
+            "v_err_check_diff": abs(float(curr_value - sel_value) - (v_curr - v_sel)),
+        }
         if fired:
             stats["check_precision_%"] = dropped
         if dropped:
@@ -841,7 +851,7 @@ class GoalConditioned(EpsilonGreedy):
                         sel_value = q_sel[..., self.goal["act"]].max()
                         fired = curr_value < sel_value
                         if self.true_visit is not None:
-                            self._oracle_check(obs, fired)
+                            self._oracle_check(obs, fired, curr_value, sel_value)
                         if fired:
                             self.reset_goal()  # Sets goal to None, triggering `should_select` below
                 else:

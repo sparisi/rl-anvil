@@ -2,6 +2,7 @@ global_sweep:
   environment:
     - gym_gridworlds/three_rooms_wall_mini_nonuniform
     - gym_gridworlds/four_rooms_stuck_hard
+    - gym_gridworlds/four_rooms_stuck_hard_sticky
   algorithm: [sun_ratio_adaptive]
   results.true_visit_check: True
   results.save_memory: True

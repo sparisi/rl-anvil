@@ -580,7 +580,7 @@ def draw_cause_steps_figure(drawing, name, envs):
         for c, env in enumerate(envs):
             ax = axs[r][c]
             if r == 0:
-                title = drawing.env_labels.get(str(env), str(env))
+                title = drawing.env_labels.get(str(env), str(env)).replace("\n", " ")
                 ax.set_title(title, fontsize=FONT_SIZE, **tex_kwargs(title))
             if (env, i) not in hists:
                 ax.set_axis_off()

@@ -15,7 +15,7 @@ under configs/plots without the extension:
                     selected, became unreachable, lost true value to a random
                     action, to a suboptimal action or to the environment's
                     noise, or kept its true value while the value check fired
-                    (critic error). Each reselection has one cause (see
+                    (approximation error). Each reselection has one cause (see
                     src.utils.reachability.reselection_causes).
   reselection_causes_<group>.tex
                     the same numbers as a booktabs LaTeX tabular: the number
@@ -115,8 +115,8 @@ CAUSE_STYLE = {
     "became_unreachable": ("Became unreachable", "#ef8a62", "black"),
     "random_action": ("Random action", "#d1e5f0", "black"),
     "suboptimal_action": ("Suboptimal action", "#4393c3", "white"),
-    "env_noise": ("Env. noise", "#2166ac", "white"),
-    "critic_error": ("Critic error", "#bababa", "black"),
+    "env_noise": ("Environment noise", "#2166ac", "white"),
+    "critic_error": ("Approximation error", "#bababa", "black"),
 }
 # A segment of a bar narrower than this fraction is drawn without its
 # percentage.

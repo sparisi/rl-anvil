@@ -2,6 +2,15 @@ default:
   - default
 
 configs:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      plot.label: "SUN (Multipl.)"
+  sun_novelty_adaptive:
+    - algorithm: sun_novelty_adaptive
+      plot.label: "Novelty-Only"
+  sun_reachability_adaptive:
+    - algorithm: sun_reachability_adaptive
+      plot.label: "Reach.-Only"
   discover:
     - algorithm: discover
       agent.actor.beta_novelty: 0.1

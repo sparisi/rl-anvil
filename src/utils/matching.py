@@ -89,7 +89,9 @@ def value_str(v) -> str:
     render element-wise, since a list hyperparameter comes back from parquet as
     an unhashable numpy array repr'd without commas; a dict renders its items
     sorted by key, since cfg.yaml is written with sorted keys and a composed
-    config keeps the order of its YAML; every null spelling collapses to
+    config keeps the order of its YAML, and leaves out its items holding a null,
+    since parquet stores a list of dicts with every key any of them has and
+    fills the missing ones with null; every null spelling collapses to
     `NULL_STR`, so an absent key and a recorded null read alike. A string that
     parses as a number normalizes as that number, so a value a PyYAML reader
     returned as a string, such as `1e-3`, matches the number."""
@@ -97,7 +99,7 @@ def value_str(v) -> str:
     if isinstance(v, (list, tuple, np.ndarray)):
         return "[" + ", ".join(value_str(x) for x in v) + "]"
     if isinstance(v, dict):
-        items = sorted(v.items(), key=lambda kv: str(kv[0]))
+        items = sorted(((k, x) for k, x in v.items() if not is_null(x)), key=lambda kv: str(kv[0]))
         return "{" + ", ".join(f"{k}: {value_str(x)}" for k, x in items) + "}"
     if is_null(v):
         return NULL_STR

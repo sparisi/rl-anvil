@@ -131,8 +131,8 @@ CAUSE_STYLE = {
 # that the value check compares against 0, logged at every check with
 # results.true_visit_check, and the visit critic's training loss.
 OVERLAY_STATS = (
-    ("v_err_check_diff", r"$|\Delta V_\theta - \Delta V^*|$ (value check)", "black"),
-    ("loss_visit", "TD loss", "white"),
+    ("v_err_check_diff", r"$|\Delta V_\theta - \Delta V^*|$ at reselection check", "black"),
+    ("loss_visit", "Training TD loss", "white"),
 )
 # Line width of the curves of OVERLAY_STATS, and the black outline drawn around
 # the white ones.

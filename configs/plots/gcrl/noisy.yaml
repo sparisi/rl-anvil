@@ -1,0 +1,19 @@
+default:
+  - default
+
+environments:
+  noisy:
+    gym_gridworlds/four_rooms_stuck_hard:
+      label: "FourRoomStuck"
+      score_bounds: &unit_bounds
+        sa_h: [0, 1]
+        sa_%: [0, 1]
+    gym_gridworlds/four_rooms_stuck_hard_sticky:
+      label: "FourRoomStuck (Sticky Act.)"
+      score_bounds: *unit_bounds
+    gymnasium/lunar_lander:
+      label: "LunarLander"
+      score_bounds: *unit_bounds
+    gymnasium/lunar_lander_noisyact:
+      label: "LunarLander (Random Act.)"
+      score_bounds: *unit_bounds

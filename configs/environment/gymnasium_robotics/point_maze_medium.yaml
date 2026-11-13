@@ -1,0 +1,14 @@
+# @package _global_
+
+environment:
+  id: PointMaze_Medium-v3
+  wrappers:
+    - id: gymnasium.wrappers.FilterObservation
+      filter_keys: [observation]
+    - id: gymnasium.wrappers.FlattenObservation
+
+experiment:
+  warm_up: 10_000
+  cool_down: 10_000
+  training_steps: 1_000_000
+  testing_episodes: 50

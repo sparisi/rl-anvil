@@ -2,7 +2,9 @@
 
 environment:
   id: Pendulum-v1
-  action_bins: 8
+  wrappers:
+    - id: gymnasium.wrappers.DiscretizeAction
+      bins: 8
 
 experiment:
   warm_up: 10_000

@@ -3,6 +3,7 @@ import tempfile
 from contextlib import contextmanager
 import numpy as np
 import random
+from tqdm import tqdm
 
 # The process umask, read once at import, before any thread starts: os.umask
 # both sets and returns the mask, so reading it sets it to 0 for a moment, and a
@@ -222,11 +223,12 @@ _WARNED: set = set()
 
 
 def warn_once(message):
-    """Print `message` the first time it is given and never again."""
+    """Print `message` with tqdm.write the first time it is given and never
+    again."""
 
     if message not in _WARNED:
         _WARNED.add(message)
-        print(message)
+        tqdm.write(str(message))
 
 
 @contextmanager
@@ -250,12 +252,13 @@ def atomic_open(path: str, mode: str = "wb"):
 
 
 def make_vprint(verbose):
-    """Return a function that prints its arguments as print does when `verbose`
-    is true, and does nothing otherwise."""
+    """Return a function that, when `verbose` is true, joins its arguments with
+    spaces and prints them with tqdm.write, and does nothing otherwise. Keyword
+    arguments go to tqdm.write (`end`, `file`)."""
 
     def vprint(*args, **kwargs):
         if verbose:
-            print(*args, **kwargs)
+            tqdm.write(" ".join(str(a) for a in args), **kwargs)
 
     return vprint
 

@@ -32,4 +32,8 @@ configs:
       plot.label: "DISCOVER"
 
 environments:
-  gymnasium/mountain_car: "Mountain Car"
+  gymnasium/mountain_car:
+    label: "Mountain Car"
+    score_bounds:
+      sa_h: [0, 1]
+      sa_%: [0, 1]

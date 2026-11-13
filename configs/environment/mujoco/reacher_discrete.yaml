@@ -2,7 +2,9 @@
 
 environment:
   id: Reacher-v5
-  action_bins: 4
+  wrappers:
+    - id: gymnasium.wrappers.DiscretizeAction
+      bins: 4
 
 experiment:
   warm_up: 10_000

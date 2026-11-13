@@ -25,15 +25,15 @@ that run's own curve.
                 over its seeds. A run is timed once, whatever statistics it
                 recorded, so these bars ignore the statistic dropdown -- and
                 `time` itself is not one of the statistics it offers.
-  Violin AUC    one violin per subplot: the density over the score of every run
-  Violin max    the subplot pools -- one point per seed of every curve in it,
-  Violin final  i.e. over the global_sweep combinations -- with the quartile box,
-                a dot per run, and the mean over the best of them annotated. The
-                three differ only in what a run scores: the area under its curve,
-                its best point, or its last.
+  Violin AUC    one violin per subplot: the density over the curves the subplot
+  Violin max    pools, i.e. the global_sweep combinations, each scored by the
+  Violin final  mean over its seeds -- with the quartile bar, the median and a
+                dot per curve. The three differ only in what a run scores: the
+                area under its curve, its best point, or its last.
 
 Every row ends in an extra "all" subplot, pooling every run of that row. In the
-violin modes it is their density; in the curve and bar modes it is their average.
+violin modes it is the density over the means of every curve of the row; in the
+curve and bar modes it is their average.
 
 The "avg. AUC" tab that follows the environments is the AUC bars with the
 environment averaged away, "rliable" aggregates the runs of every environment
@@ -58,9 +58,11 @@ plot_results.py's, which normalizes by fixed bounds.
 After the environment tabs comes "parameters", which regroups the same
 runs by one hyperparameter at a time, chosen from a dropdown. A row of its grid
 is an environment and the last row pools them; a column is one of the three scores
-(AUC, max, final); and a cell holds a violin per value that hyperparameter takes.
-Only runs whose sweep entry VARIES it are counted (configurations that do not
-declare the parameter or do not vary it are ignored).
+(AUC, max, final); and a cell holds a violin per value that hyperparameter takes,
+over the curves holding that value, each scored by the mean over its seeds, with
+a dot per curve. Only runs whose sweep entry VARIES it are counted
+(configurations that do not declare the parameter or do not vary it are
+ignored).
 
 "Log scale" puts the y axis into a symlog.
 
@@ -184,13 +186,6 @@ parser.add_argument(
     default=[],
     metavar="KEY=VALUE",
     help="Drop matching rows.",
-)
-parser.add_argument(
-    "--top_fraction",
-    type=float,
-    default=0.2,
-    help="Fraction of the best runs a violin's annotated mean is taken over. "
-         "0 to annotate the mean over all of them.",
 )
 parser.add_argument(
     "--with_rliable",
@@ -1354,7 +1349,15 @@ def build_param_spec(rows):
     # A hyperparameter belongs in the dropdown only if the runs disagree about
     # it: one that came out the same everywhere is a single violin and nothing to
     # compare it with.
-    reserved = ("_env", "statistic", "_run", "score_auc", "score_max", "score_final")
+    reserved = (
+        "_env",
+        "statistic",
+        "_unit",
+        "_run",
+        "score_auc",
+        "score_max",
+        "score_final",
+    )
     candidates = {}
     for key in sorted({k for r in rows for k in r if k not in reserved}):
         values = sorted_values({r[key] for r in rows if key in r})
@@ -1370,13 +1373,19 @@ def build_param_spec(rows):
     # hyperparameter it varies -- and nothing at all for the ones it does not, so
     # `_val` comes out null there and the run drops out.
     #
-    # The jitter is computed here, from the golden-ratio sequence over the record
-    # index: an expression using random() would re-scatter the dots on every
-    # signal change.
+    # `_unit` numbers the curve a run belongs to, by its environment, block, row,
+    # column and curve: a violin is over the mean of each curve's runs, with a
+    # dot per curve.
+    #
+    # The jitter is computed here, from the golden-ratio sequence over `_unit`,
+    # so a curve's runs share it: an expression using random() would re-scatter
+    # the dots on every signal change.
+    unit_index = {u: k for k, u in enumerate(dict.fromkeys(r["_unit"] for r in rows))}
     values = []
-    for i, r in enumerate(rows):
+    for r in rows:
         rec = {k: r[k] for k in reserved}
-        rec["_j"] = ((i * 0.6180339887498949) % 1.0) - 0.5
+        rec["_unit"] = unit_index[r["_unit"]]
+        rec["_j"] = ((rec["_unit"] * 0.6180339887498949) % 1.0) - 0.5
         for key, seen in candidates.items():
             if key in r:
                 rec[f"hp_{names[key]}"] = r[key]
@@ -1451,6 +1460,15 @@ def build_param_spec(rows):
                 "fold": ["score_auc", "score_max", "score_final"],
                 "as": ["_score_kind", "score"],
             },
+            # Each curve's score: the mean over its runs, with how many runs it
+            # is over. The violins, quartiles and dots are all over these.
+            {
+                "aggregate": [
+                    {"op": "mean", "field": "score", "as": "score"},
+                    {"op": "valid", "field": "score", "as": "_n"},
+                ],
+                "groupby": ["_env", "_score_kind", "_unit", "_i", "_j", "_val"],
+            },
         ],
         "facet": {
             "row": {
@@ -1477,8 +1495,8 @@ def build_param_spec(rows):
             "height": CELL_HEIGHT,
             "layer": [
                 # One violin per slot, each normalised by its own peak so a value
-                # with two runs is as wide as one with twenty -- the shape is the
-                # point, and the dots say how many there were.
+                # with two curves is as wide as one with twenty -- the shape is
+                # the point, and the dots say how many there were.
                 {
                     "transform": [
                         {
@@ -1539,8 +1557,8 @@ def build_param_spec(rows):
                         {
                             "mark": {
                                 "type": "rule",
-                                "strokeWidth": 7,
-                                "color": "#4d4d4d",
+                                "strokeWidth": 2,
+                                "color": "#d62728",
                                 "clip": True,
                             },
                             "encoding": {
@@ -1552,8 +1570,8 @@ def build_param_spec(rows):
                         {
                             "mark": {
                                 "type": "rule",
-                                "strokeWidth": 1.5,
-                                "color": "white",
+                                "strokeWidth": 3,
+                                "color": "black",
                                 "clip": True,
                             },
                             "encoding": {
@@ -1564,7 +1582,7 @@ def build_param_spec(rows):
                         },
                     ],
                 },
-                # The runs themselves, scattered across the slot.
+                # The curve means themselves, scattered across the slot.
                 {
                     "transform": [
                         {"calculate": "datum._i + 0.3 * datum._j", "as": "_dot_x"},
@@ -1574,7 +1592,9 @@ def build_param_spec(rows):
                         "filled": True,
                         "size": 14,
                         "opacity": 0.7,
-                        "color": "#262626",
+                        "color": "white",
+                        "stroke": "black",
+                        "strokeWidth": 0.6,
                         "clip": True,
                     },
                     "encoding": {
@@ -1585,9 +1605,10 @@ def build_param_spec(rows):
                             {
                                 "field": "score",
                                 "type": "quantitative",
-                                "title": "score",
+                                "title": "mean score",
                                 "format": ".3f",
                             },
+                            {"field": "_n", "type": "quantitative", "title": "runs"},
                         ],
                     },
                 },
@@ -1622,9 +1643,18 @@ def build_spec(
     # again: one violin per configuration says how each did, and this one says
     # how the row did.
     #
-    # Only the violins are copied. A density is over the runs themselves, so the
-    # rows have to be here to be counted; the pooled curve and bar were averaged
-    # in Python (see pooled_rows) and arrive already summarised.
+    # A violin row's `_unit_i` numbers the curve it belongs to by its block, row,
+    # column and curve, so its runs are averaged together in the pooled column
+    # too, where curves of different columns share a name.
+    violin = long_df["_kind"] == "violin"
+    units = long_df.loc[violin, ["_block", "_row", "_col", "_curve"]]
+    long_df = long_df.assign(
+        _unit_i=units.groupby(list(units.columns), sort=False, dropna=False).ngroup(),
+    )
+
+    # Only the violins are copied. A violin is over the mean of each curve's
+    # runs, so the runs have to be here to be averaged; the pooled curve and bar
+    # were averaged in Python (see pooled_rows) and arrive already summarised.
     pooled = long_df[long_df["_kind"] == "violin"].assign(_col=ALL_COL)
     long_df = pd.concat([long_df, pooled], ignore_index=True)
 
@@ -1712,23 +1742,15 @@ def build_spec(
     # its widest, with the quartile box on its centre line.
     v_mid = f"(({x_lo}) + ({x_len}) / 2)"
     v_half = f"0.4 * ({x_len})"
-    # The runs are scattered across the middle of it rather than stacked on the
-    # centre line, so runs that scored alike stay countable. The offsets are the
-    # golden-ratio sequence over (curve, run) rather than random(): a Vega
-    # expression is re-evaluated on every signal change, and dots that jump when
-    # a dropdown moves read as new data.
+    # The curve means are scattered across the middle of it rather than stacked
+    # on the centre line, so curves that scored alike stay countable. The offsets
+    # are the golden-ratio sequence over the curve's `_unit_i` rather than
+    # random(): a Vega expression is re-evaluated on every signal change, and
+    # dots that jump when a dropdown moves read as new data.
     jitter = (
-        f"{v_mid} + 0.3 * ({x_len}) * ((((datum._curve_i * 7 + datum._run)"
+        f"{v_mid} + 0.3 * ({x_len}) * ((((datum._unit_i)"
         f" * 0.6180339887498949) % 1) - 0.5)"
     )
-    # What the annotation reports: tune within this configuration and keep the
-    # best, rather than the average of choosing at random. Rounded up, so a small
-    # violin still keeps one run.
-    kept = (
-        f"max(1, ceil(datum._n * {args.top_fraction}))" if args.top_fraction > 0
-        else "datum._n"
-    )
-    share = "all" if args.top_fraction <= 0 else f"top {args.top_fraction:.0%}"
 
     def labelled(options):
         """What a dropdown shows for its options: the value 'All', which the
@@ -1844,8 +1866,8 @@ def build_spec(
     # The pooled one is already averaged over every curve of the row, so there is
     # nothing left for a dropdown to select from.
     time_all_filter = f"p_mode === '{TIME_BARS}' && datum._kind === 'time_all'"
-    # One point per run, seeds included, which is what the density is over -- so
-    # the seed dropdown does not narrow it either.
+    # Every run, seeds included, which is what each curve's mean is taken over --
+    # so the seed dropdown does not narrow it either.
     # `(p_mode || '')`, not `p_mode`: a select binding is momentarily null while
     # the dropdown changes, and indexof() of null throws -- which aborts the
     # dataflow in the middle of the update and leaves the cells it had not
@@ -1871,6 +1893,17 @@ def build_spec(
             ),
             "as": "score",
         }
+    ]
+    # Each curve's score: the mean over its runs, with how many runs it is over.
+    curve_means = [
+        *pick_score,
+        {
+            "aggregate": [
+                {"op": "mean", "field": "score", "as": "score"},
+                {"op": "valid", "field": "score", "as": "_n"},
+            ],
+            "groupby": ["_unit_i", "_curve"],
+        },
     ]
 
     # A scale's `type` is the one thing a Vega-Lite param cannot drive, so the log
@@ -2505,10 +2538,9 @@ def build_spec(
                             },
                         },
                     },
-                    # One violin per cell: the density over every run the cell pools,
-                    # which is the global_sweep combinations and the seeds under
-                    # them. The bars beside it are one number per curve; this is
-                    # the spread those numbers came from.
+                    # One violin per cell: the density over the curves the cell
+                    # pools, which are the global_sweep combinations, each scored
+                    # by the mean over its seeds.
                     #
                     # The density is normalised by its own peak and laid out as
                     # x/x2 about the middle of the span, so the shape is symmetric
@@ -2517,7 +2549,7 @@ def build_spec(
                     {
                         "transform": [
                             {"filter": violin_filter},
-                            *pick_score,
+                            *curve_means,
                             {"calculate": "datum.score", "as": "_score"},
                             # An empty groupby, not a missing one: the facet
                             # pushes its own fields into it, which is what makes
@@ -2571,11 +2603,12 @@ def build_spec(
                             "color": {"value": "#7f7f7f"},
                         },
                     },
-                    # The quartiles down the middle of it and the median across them.
+                    # The quartiles of the curve means down the middle of it and
+                    # their median across them.
                     {
                         "transform": [
                             {"filter": violin_filter},
-                            *pick_score,
+                            *curve_means,
                             {"calculate": "datum.score", "as": "_score"},
                             {
                                 "aggregate": [
@@ -2597,8 +2630,8 @@ def build_spec(
                             {
                                 "mark": {
                                     "type": "rule",
-                                    "strokeWidth": 7,
-                                    "color": "#4d4d4d",
+                                    "strokeWidth": 2,
+                                    "color": "#d62728",
                                     "clip": True,
                                 },
                                 "encoding": {
@@ -2620,8 +2653,8 @@ def build_spec(
                             {
                                 "mark": {
                                     "type": "rule",
-                                    "strokeWidth": 1.5,
-                                    "color": "white",
+                                    "strokeWidth": 3,
+                                    "color": "black",
                                     "clip": True,
                                 },
                                 "encoding": {
@@ -2642,10 +2675,10 @@ def build_spec(
                             },
                         ],
                     },
-                    # The runs themselves, at the height each scored: a density
-                    # drawn over six points looks like a distribution it has not
-                    # earned. Which curve a dot belongs to is in its tooltip --
-                    # the dots are one colour.
+                    # The curve means themselves, at the height each scored: a
+                    # density drawn over six points looks like a distribution it
+                    # has not earned. Which curve a dot belongs to is in its
+                    # tooltip -- the dots are one colour.
                     layer(
                         violin_filter,
                         {
@@ -2653,6 +2686,8 @@ def build_spec(
                             "filled": True,
                             "size": 14,
                             "opacity": 0.7,
+                            "stroke": "black",
+                            "strokeWidth": 0.6,
                             "clip": True,
                         },
                         "score",
@@ -2661,121 +2696,19 @@ def build_spec(
                             (
                                 "score",
                                 "quantitative",
-                                {"title": "score", "format": ".3f"},
+                                {"title": "mean score", "format": ".3f"},
                             ),
+                            ("_n", "quantitative", {"title": "runs"}),
                         ),
-                        calc=[*pick_score, {"calculate": jitter, "as": "_dot_x"}],
+                        calc=[*curve_means, {"calculate": jitter, "as": "_dot_x"}],
                         x={
                             "field": "_dot_x",
                             "type": "quantitative",
                             "title": None,
                             "scale": x_scale,
                         },
-                        color={"value": "#262626"},
+                        color={"value": "white"},
                     ),
-                    # The mean over the best of them, at the height it describes
-                    # and against a line across the cell -- a mean means nothing
-                    # without the axis. Pinned to the left edge in pixels: the
-                    # text is wider than the room beside a violin, and a cell has
-                    # no margin to spill into.
-                    {
-                        "transform": [
-                            {"filter": violin_filter},
-                            *pick_score,
-                            {"calculate": "datum.score", "as": "_score"},
-                            {
-                                "window": [{"op": "rank", "as": "_rank"}],
-                                "sort": [
-                                    {"field": "_score", "order": "descending"},
-                                ],
-                                "groupby": [],
-                            },
-                            {
-                                "joinaggregate": [
-                                    {"op": "count", "as": "_n"},
-                                ],
-                                "groupby": [],
-                            },
-                            {"filter": f"datum._rank <= {kept}"},
-                            {
-                                "aggregate": [
-                                    # Two means over the same runs: one where the
-                                    # line goes, one to read out. They differ only
-                                    # when "Log scale" is on, and the number quoted
-                                    # is the one in the units of the statistic.
-                                    {
-                                        "op": "mean",
-                                        "field": "_score",
-                                        "as": "_top",
-                                    },
-                                    {
-                                        "op": "mean",
-                                        "field": "score",
-                                        "as": "_top_raw",
-                                    },
-                                    {"op": "count", "as": "_top_n"},
-                                ],
-                                "groupby": [],
-                            },
-                        ],
-                        "layer": [
-                            {
-                                "mark": {
-                                    "type": "rule",
-                                    "strokeDash": [3, 2],
-                                    "strokeWidth": 0.8,
-                                    "color": "#262626",
-                                    "opacity": 0.8,
-                                    "clip": True,
-                                },
-                                "encoding": {
-                                    "y": {
-                                        "field": "_top",
-                                        "type": "quantitative",
-                                        "scale": y_scale,
-                                        "axis": y_axis,
-                                    },
-                                },
-                            },
-                            # Two marks rather than one two-line one: a text
-                            # channel takes a field, and a field holding two
-                            # lines would be read as one comma-joined string.
-                            *[
-                                {
-                                    "transform": [
-                                        {"calculate": expr, "as": "_label"},
-                                    ],
-                                    "mark": {
-                                        "type": "text",
-                                        "align": "left",
-                                        "baseline": "top",
-                                        "dx": 3,
-                                        "dy": dy,
-                                        "fontSize": 8,
-                                        "color": "#262626",
-                                        "clip": True,
-                                    },
-                                    "encoding": {
-                                        "y": {
-                                            "field": "_top",
-                                            "type": "quantitative",
-                                            "scale": y_scale,
-                                            "axis": y_axis,
-                                        },
-                                        "x": {"value": 0},
-                                        "text": {
-                                            "field": "_label",
-                                            "type": "nominal",
-                                        },
-                                    },
-                                }
-                                for expr, dy in (
-                                    (f"'{share} of ' + datum._top_n", 2),
-                                    ("'mean ' + format(datum._top_raw, '.4g')", 12),
-                                )
-                            ],
-                        ],
-                    },
                 ],
             },
             "resolve": {"scale": {"y": y_resolve, "color": "shared"}},
@@ -3050,6 +2983,10 @@ for env in envs_present:
                         {
                             "_env": env_name,
                             "statistic": stat,
+                            "_unit": (
+                                f"{env_name}|{block.index}|{base['_row']}"
+                                f"|{base['_col']}|{base['_curve']}"
+                            ),
                             "_run": r["_run"],
                             "score_auc": r["score_auc"],
                             "score_max": r["score_max"],

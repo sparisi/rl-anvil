@@ -3,8 +3,7 @@
 environment:
   id:  # e.g., Acrobot-v1, Gym-Gridworlds/FourRooms-13x13-v0, MountainCar-v0, ...
   train_from_pixels:  # True or False (optional)
-  action_bins:  # (optional) to discretize continuous environments
-  observation_bins:  # (optional) to discretize continuous environments
+  wrappers:  # (optional) list of {id: full path of the wrapper class, <argument>: <value>}, e.g., {id: gymnasium.wrappers.DiscretizeAction, bins: 8}
   # Any other parameters added here will be forwarded to gymnasium.make(...)
 
 meta:

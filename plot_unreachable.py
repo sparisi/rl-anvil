@@ -18,10 +18,15 @@ A figure each for two metrics, both a percentage of the goal selections and
 binned over the memory (`--points` bins):
 
     Unreachable Goals  the goal could not be reached from where the agent stood
-    Perfect Goals      the goal was the best pick among the (tile, action) pairs
-                       whose tile is within reach and already in the replay memory.
-                       `--goal_score` chooses what best means: 1 / n, a least-tried
-                       action of a tile (default), or the actor's own V / n
+    Perfect Goals      the goal was the best pick among the (candidate, action)
+                       pairs the actor scored at the selection, its candidates
+                       replayed from the seeds of the run (see
+                       src.utils.reachability.replay_candidates). `--goal_score`
+                       chooses what best means: 1 / n, a least-tried action of a
+                       candidate in reach (default), or the actor's own V / n
+
+A warning names every dump in which the goal of a selection is not among its
+replayed candidates.
 
 Which configurations are drawn, what they are called and which environments they
 are drawn over comes from a plot config, read exactly as plot_results.py reads it,
@@ -32,7 +37,8 @@ Bins where no goal was selected are NaN, leaving a gap. --log_scale draws the sa
 figure on a log y axis instead, where bins at exactly 0% drop out too, a log scale
 having no room for them.
 
-Output goes to <data_dir>/<output>/goals/<plot config>/:
+Output goes to <data_dir>/<output>/<plot config>/, the path of the plot config
+under configs/plots without the extension:
 
     unreachable_goals_curves.png  the unreachable-goal figure
     perfect_goals_curves.png      the perfect-goal figure
@@ -45,7 +51,7 @@ Output goes to <data_dir>/<output>/goals/<plot config>/:
 
 Example
 
-    python plot_unreachable_goals.py -f data_gcrl -p gcrl/all --with_auc -v
+    python plot_unreachable.py -f data_gcrl -p gcrl_selections/unreachable --with_auc -v
 """
 
 import argparse
@@ -73,18 +79,19 @@ from src.utils.plot import (
     GROUP_GAP_BAR,
     add_config_group_args,
     assign_groups,
-    composed_mask,
     detect_precision,
     draw_bars,
     ensure_font,
     entry_config,
+    entry_mask,
     env_groups,
     error_shade_plot,
     fitted_rows_cols,
+    hyperparameter_strings,
     load_plot_configs,
     plot_labels,
     rows_cols,
-    save_figure,
+    save_and_close,
     set_3_ticks,
     style_entries,
     summarize,
@@ -92,6 +99,7 @@ from src.utils.plot import (
     write_legend,
 )
 from src.utils.heatmaps import env_context
+from src.utils.reachability import COUNT_FLOOR, perfect_selections, replay_candidates
 
 FONT_SIZE = 12
 SUBPLOT_W = 2.6  # inches per subplot
@@ -128,14 +136,18 @@ METRIC_AUC_TITLES = {
     "perfect": "Avg. Perfect Goal %",
 }
 
-# The actor clips candidate counts to this before dividing (src/actor.py), which is
-# what keeps a never-visited tile finite rather than infinitely attractive.
-COUNT_FLOOR = 1e-3
-
-# A tile has to have been visited more than this to count as an available goal: the
-# actor draws its candidates from the replay memory, so a tile that never reached
-# it was never on offer and does not belong in the best-available score.
-CANDIDATE_MIN_COUNT = 1
+# The memory keys a dump is reduced from.
+MEMORY_KEYS = (
+    "obs",
+    "act",
+    "term",
+    "trunc",
+    "goal_obs",
+    "goal_act",
+    "goal_selection",
+    "has_goal",
+    "act_source",
+)
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -146,7 +158,7 @@ parser.add_argument(
          "memory.npz in it.",
 )
 parser.add_argument(
-    "-p", "--plot_config",
+    "-p", "--plot",
     required=True,
     metavar="NAME",
     help="Plot config: which configurations to draw, and over which environments. "
@@ -157,9 +169,8 @@ parser.add_argument(
 parser.add_argument(
     "-o", "--output",
     default="plots",
-    help="Output root, under the data directory. Figures go in <root>/goals/<plot "
-         "config>, so one data directory holds the output of every plotting script "
-         "without one overwriting another.",
+    help="Output root, under the data directory. Figures go in <root>/<the "
+         "path of the plot config under configs/plots, without .yaml>.",
 )
 add_config_group_args(parser)
 parser.add_argument(
@@ -178,9 +189,10 @@ parser.add_argument(
     "--goal_score",
     default="novelty",
     choices=["novelty", "ratio"],
-    help="Which score a perfect goal is the argmax of, over the tiles in reach: "
-         "'novelty' is 1 / n, i.e. a least-visited tile; 'ratio' is the actor's own "
-         "V / n, with V the discounted reachability gamma ** (steps to reach it).",
+    help="Which score a perfect goal is the argmax of, over the goal candidates "
+         "the actor scored at the selection: 'novelty' is 1 / n, i.e. a "
+         "least-visited candidate in reach; 'ratio' is the actor's own V / n, with "
+         "V the discounted reachability gamma ** (steps to reach it).",
 )
 parser.add_argument(
     "--gamma",
@@ -349,33 +361,37 @@ def goal_curves(
     n_points,
     gamma,
     score_mode,
+    replay,
 ):
-    """Return two per-bin percentages of the goal SELECTIONS, and their totals.
+    """Return two per-bin percentages of the goal SELECTIONS, their totals, the
+    number of selections, the size of the dump, and the number of selections
+    whose goal is not among their replayed candidates; or None when `replay` is
+    None, the dump lacks a key of MEMORY_KEYS or it holds no step after
+    `warmup`.
 
     unreachable  the goal tile could not be reached from the tile the agent was on
-    perfect      the goal maximised `score_mode` among the tiles in reach
+    perfect      the goal maximised `score_mode` among the candidates the actor
+                 scored at the selection (see perfect_selections)
 
-    A goal is a (tile, action) pair, as in the actor (src/actor.py). Both scores
-    divide by `n`, how often the pair appears in (`obs`, `act`) strictly before the
-    step -- the true count these runs select on, as it stood then rather than at the
-    end -- and differ in the numerator:
+    A goal is a (tile, action) pair, as in the actor (src/actor.py). The
+    candidates of every selection are replayed from the seeds of the run by
+    replay_candidates, with the settings `replay` holds as its keyword arguments
+    (rng_seed, batch_size, n_critics, per_step_selection, goal_value_check,
+    max_size). Both scores divide by `n`, how often the pair appears in (`obs`,
+    `act`) strictly before the step -- the true count these runs select on, as
+    it stood then rather than at the end -- and differ in the numerator:
 
-        novelty  1 / n, so the best goal is a least-tried action of a tile in reach
+        novelty  1 / n, so the best goal is a least-tried action of a candidate
+                 in reach
         ratio    the actor's own `V / n`, where V is discounted reachability: a
                  goal `d` steps away is worth `gamma ** d`
 
     Whether V is `gamma ** d` or `gamma ** (d - 1)` makes no difference -- a
-    constant factor across every candidate cannot move the argmax.
-
-    Every (tile, action) pair whose tile is in reach is scored, as the actor
-    scores its candidates. The best score is taken over tiles visited more than
-    CANDIDATE_MIN_COUNT times in total, since goal
-    candidates are drawn from the replay memory and a tile the agent has not put
-    there cannot be picked. The goal itself is scored with the count of its own
-    goal action, whatever its tile's count, so selecting a barely-seen tile still
-    gets credit. `n` is floored at COUNT_FLOOR the way the actor floors it. A goal
-    is perfect when it ties the best score available, since pairs often share it
-    and any of them is an equally good pick; an unreachable goal never is.
+    constant factor across every candidate cannot move the argmax. The goal
+    itself is scored with the count of its own goal action, and `n` is floored
+    at COUNT_FLOOR the way the actor floors it. A goal is perfect when it ties
+    the best score of its candidates, since pairs often share it and any of them
+    is an equally good pick; an unreachable goal never is.
 
     Both metrics share the same denominator (every goal selection), so the two
     read against each other. The selections are the steps marked with
@@ -385,56 +401,47 @@ def goal_curves(
     that picks per step are both measured on the decisions they made. Bins with
     no selection stay NaN, leaving a gap rather than reading as 0%."""
 
-    reach = np.isfinite(dist)
-    obs = mem.get("obs")
-    act = mem.get("act")
-    goal_obs = mem.get("goal_obs")
-    goal_act = mem.get("goal_act")
-    goal_selection = mem.get("goal_selection")
-    if obs is None or act is None or goal_obs is None or goal_act is None or goal_selection is None:
+    if replay is None or any(mem.get(k) is None for k in MEMORY_KEYS):
         return None
-    size = len(obs)
+    size = len(mem["obs"])
     if warmup >= size:
         return None
 
-    state = np.asarray(counter.bin_index(obs)).reshape(size)
-    goal = np.asarray(counter.bin_index(goal_obs)).reshape(size)
-    act = np.asarray(act).reshape(size).astype(np.int64)
-    goal_act = np.asarray(goal_act).reshape(size).astype(np.int64)
-    active = np.asarray(goal_selection).reshape(size).astype(bool)
+    reach = np.isfinite(dist)
+    state = np.asarray(counter.bin_index(mem["obs"])).reshape(size)
+    goal = np.asarray(counter.bin_index(mem["goal_obs"])).reshape(size)
+    act = np.asarray(mem["act"]).reshape(size).astype(np.int64)
+    goal_act = np.asarray(mem["goal_act"]).reshape(size).astype(np.int64)
+    active = np.asarray(mem["goal_selection"]).reshape(size).astype(bool)
 
     unreachable = np.zeros(size, dtype=bool)
     idx = np.flatnonzero(active)
     unreachable[idx] = ~reach[state[idx], goal[idx]]
 
-    # Which tiles are within reach depends only on which room the agent is in, so
-    # `reach` has a handful of distinct rows. Grouping them turns the per-step
-    # maximum into one lookup over one index array instead of a mask over all tiles.
-    rows, row_of = np.unique(reach, axis=0, return_inverse=True)
-    members = [np.flatnonzero(r) for r in rows]
-
-    # The numerator of the score, per (state, goal). Out of reach is 0 either way --
-    # gamma ** inf is 0 -- so such a tile scores 0 and can never win.
-    if score_mode == "ratio":
-        with np.errstate(over="ignore"):
-            value = np.power(gamma, dist)
-    else:
-        value = reach.astype(np.float64)
-
-    perfect = np.zeros(size, dtype=bool)
-    counts = np.zeros((reach.shape[0], n_act), dtype=np.float64)
-    for t in range(size):
-        s = int(state[t])
-        if active[t]:
-            g = int(goal[t])
-            within = members[row_of[s]]
-            within = within[counts[within].sum(1) > CANDIDATE_MIN_COUNT]
-            if reach[s, g] and within.size:
-                scores = value[s, within, None] / np.maximum(counts[within], COUNT_FLOOR)
-                best = scores.max()
-                score_g = value[s, g] / max(counts[g, goal_act[t]], COUNT_FLOOR)
-                perfect[t] = score_g >= best * (1.0 - 1e-12)
-        counts[s, act[t]] += 1.0
+    sel_steps, cand, missing = replay_candidates(
+        state,
+        act,
+        goal,
+        goal_act,
+        np.asarray(mem["has_goal"]).reshape(size).astype(bool),
+        np.asarray(mem["act_source"]).reshape(size),
+        active,
+        np.asarray(mem["term"]).reshape(size).astype(bool) | np.asarray(mem["trunc"]).reshape(size).astype(bool),
+        n_act=n_act,
+        **replay,
+    )
+    perfect = perfect_selections(
+        dist,
+        n_act,
+        state,
+        goal,
+        act,
+        goal_act,
+        sel_steps,
+        cand,
+        score_mode,
+        gamma,
+    )
 
     edges = np.linspace(warmup, size, n_points + 1).astype(int)
     flags = {"unreachable": unreachable, "perfect": perfect}
@@ -448,7 +455,7 @@ def goal_curves(
                 y[i] = 100.0 * flag[lo:hi].sum() / n_sel
         curves[name] = y
     totals = {name: int(flag[warmup:].sum()) for name, flag in flags.items()}
-    return curves, totals, int(active[warmup:].sum()), size
+    return curves, totals, int(active[warmup:].sum()), size, missing
 
 
 # -----------------------------------------------------------------------------
@@ -497,7 +504,7 @@ def cache_path(
         "counts": "state_action",
         "gamma": args.gamma,
         "score": args.goal_score,
-        "min_count": CANDIDATE_MIN_COUNT,
+        "candidates": "replayed_batch",
         "floor": COUNT_FLOOR,
         "env": env_cfg,
     }, sort_keys=True, default=str)
@@ -535,7 +542,7 @@ def cache_write(path, result):
 def curves_for_file(task):
     """One dump's curves, from the cache when it is there. Returns (result, hit)."""
 
-    mem_file, env_cfg, dist, n_act, counter, warmup, n_points = task
+    mem_file, env_cfg, dist, n_act, counter, warmup, n_points, replay = task
     path = cache_path(mem_file, env_cfg, warmup, n_points) if cache_dir else None
     if path is not None:
         hit = cache_read(path)
@@ -543,14 +550,11 @@ def curves_for_file(task):
             return hit, True
     try:
         with np.load(mem_file) as data:
-            mem = {
-                k: data[k] for k in data.files
-                if k in ("obs", "act", "goal_obs", "goal_act", "goal_selection")
-            }
+            mem = {k: data[k] for k in data.files if k in MEMORY_KEYS}
     except Exception as e:
         vprint(f"  WARNING: skipping unreadable {mem_file}: {e}")
         return None, False
-    result = goal_curves(
+    reduced = goal_curves(
         dist,
         n_act,
         counter,
@@ -559,10 +563,17 @@ def curves_for_file(task):
         n_points,
         args.gamma,
         args.goal_score,
+        replay,
     )
-    if result is None:
+    if reduced is None:
         vprint(f"  WARNING: {mem_file} stores no goals, skipping")
         return None, False
+    result, missing = reduced[:4], reduced[4]
+    if missing:
+        print(
+            f"WARNING: {mem_file}: the goals of {missing} selection(s) are not "
+            f"among their replayed candidates."
+        )
     if path is not None:
         try:
             cache_write(path, result)
@@ -575,7 +586,7 @@ def curves_for_file(task):
 # ----- The runs --------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-plot_cfgs = load_plot_configs(args.plot_config)
+plot_cfgs = load_plot_configs(args.plot)
 vprint(f"\n{len(plot_cfgs)} plot config(s): {[n for n, _, _ in plot_cfgs]}")
 
 root = Path(args.folder)
@@ -627,6 +638,9 @@ if not flat_cfgs:
 
 df = pd.DataFrame.from_dict(flat_cfgs, orient="index")
 df.columns = pd.MultiIndex.from_tuples([("hyperparameter", c) for c in df.columns])
+# Every hyperparameter column as value_str renders it, once: runs_of compares
+# against them for every (environment, entry).
+hp_strings = hyperparameter_strings(df)
 
 # Neither the environment nor the algorithm is recorded by a run: both are matched
 # back from their config YAMLs, the file a run's hyperparameters agree with.
@@ -648,30 +662,11 @@ plt.rcParams["grid.linestyle"] = "--"
 
 
 def runs_of(env, entry, ignored, matched):
-    """Every run of one environment that an entry selects, one per seed: the ones
-    whose whole recorded configuration is the one the entry composes to there.
+    """Return the names of every run of one environment that an entry selects,
+    one per seed (see entry_mask)."""
 
-    The comparison covers every key, the ones the entry leaves out included: a
-    run launched with another value for one of those is a different
-    configuration, and belongs to whichever entry composes to it.
-
-    `ignored` and `matched` are the pair `assign_groups` returned for this plot
-    config, and have to be that pair: a mask built under one set of exemptions
-    says nothing about a comparison made under another."""
-
-    # The shared reading, not one of its own: a configuration then means the same
-    # runs here as in every other figure, and it stays that way when it changes.
-    flat = entry_config(env, entry["selector"], entry["label"])
-    if flat is None:
-        return []
-    # Over the whole frame, as plot_results.py selects: the environment is
-    # composed into `flat`, so its own keys already keep the runs of another one
-    # out, and the two scripts read one configuration the same way.
-    #
-    # The same exemption assign_configs was given above: a key a launch set for
-    # every run alike is not part of what tells two configurations apart, and
-    # holding a run to the YAML's value for it would match nothing.
-    return list(df.index[composed_mask(df, flat, ignore=ignored) & matched])
+    mask = entry_mask(df, hp_strings, env, entry["selector"], entry["label"], ignored, matched)
+    return list(df.index[mask])
 
 
 # -----------------------------------------------------------------------------
@@ -761,10 +756,25 @@ for name in needed:
         continue
 
     experiment = run_cfg.get("experiment") or {}
-    replay = experiment.get("replay_memory") or {}
-    warmup = int(replay.get("min_size") or 0)
+    memory_cfg = experiment.get("replay_memory") or {}
+    warmup = int(memory_cfg.get("min_size") or 0)
     n_points = args.points or int(experiment.get("testing_points") or 100)
     warmup_of[name] = warmup
+    # What replay_candidates needs to replay the actor's draws, None for an actor
+    # that selects no goal. The seed is the name of the seed directory, as
+    # process_data.py reads it.
+    agent = run_cfg.get("agent") or {}
+    actor_cfg = agent.get("actor") or {}
+    replay = None
+    if "batch_size_goal" in actor_cfg:
+        replay = {
+            "rng_seed": int(mem_files[name].parent.name),
+            "batch_size": int(actor_cfg["batch_size_goal"]),
+            "n_critics": (agent.get("critic") or {}).get("n_critics"),
+            "per_step_selection": bool(actor_cfg.get("per_step_selection", False)),
+            "goal_value_check": bool(actor_cfg.get("goal_value_check", False)),
+            "max_size": int(memory_cfg["max_size"]),
+        }
     tasks.append((
         name,
         (
@@ -775,6 +785,7 @@ for name in needed:
             counter,
             warmup,
             n_points,
+            replay,
         ),
     ))
 
@@ -1155,9 +1166,7 @@ def draw_curves(
     )
 
     name = METRIC_FILES[metric] + (f"_{group_name}" if group_name else "") + "_curves"
-    vprint(f"  Saved: {save_figure(fig, output_dir, name)}")
-    plt.close(fig)
-    return 1
+    return save_and_close(fig, output_dir, name, vprint)
 
 
 def draw_auc(cfg, entries, selected, group_name, envs, metric, output_dir):
@@ -1208,9 +1217,7 @@ def draw_auc(cfg, entries, selected, group_name, envs, metric, output_dir):
     )
 
     name = METRIC_FILES[metric] + (f"_{group_name}" if group_name else "") + "_auc"
-    vprint(f"  Saved: {save_figure(fig, output_dir, name)}")
-    plt.close(fig)
-    return 1
+    return save_and_close(fig, output_dir, name, vprint)
 
 
 def draw_auc_all(cfg, entries, selected, envs, metric, output_dir):
@@ -1241,9 +1248,7 @@ def draw_auc_all(cfg, entries, selected, envs, metric, output_dir):
     draw_hbars(ax, items)
 
     name = METRIC_FILES[metric] + "_auc_all_envs"
-    vprint(f"  Saved: {save_figure(fig, output_dir, name)}")
-    plt.close(fig)
-    return 1
+    return save_and_close(fig, output_dir, name, vprint)
 
 
 def recap(config_name, entries, selected, envs):
@@ -1301,7 +1306,7 @@ for config_name, _path, cfg in plot_cfgs:
         continue
 
     _stat_labels, env_labels, _ylims, _score_bounds = plot_labels(cfg)
-    output_dir = os.path.join(args.folder, args.output, "goals", config_name)
+    output_dir = os.path.join(args.folder, args.output, config_name)
     os.makedirs(output_dir, exist_ok=True)
 
     for group_name, group_envs in groups.items():
@@ -1354,5 +1359,5 @@ for config_name, _path, cfg in plot_cfgs:
 
 print(
     f"\n{len(layout)} plot config(s), {written} figure(s) -> "
-    f"{os.path.join(args.folder, args.output, 'goals')}"
+    f"{os.path.join(args.folder, args.output)}"
 )

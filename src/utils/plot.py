@@ -247,9 +247,9 @@ def plot_entries(plot_cfg: dict, with_directives: bool = False):
               plot.label: "..."             # what to call them
               plot.color: "purple"          # what to draw it in
 
-    A group is a family drawn in one hue; what a group is called does not reach
-    the figure. An entry that names no hyperparameter would select every run, so
-    it is dropped and reported rather than drawn.
+    A group is a family drawn in one hue (see style_entries). An entry that names
+    no hyperparameter would select every run, so it is dropped and reported
+    rather than drawn.
 
     Every key under `plot.` is a directive rather than a hyperparameter, so it is
     taken out of the selector and returned separately, under the name it was
@@ -304,12 +304,16 @@ def style_entries(plot_cfg: dict):
     """The entries a plot config draws, in the order it writes them, each with
     what to draw it in, as a list of dicts with:
 
-        group      the colour group it belongs to
-        selector   what the runs must hold, as {hyperparameter: value}
-        label      what to call them
-        color      the group's hue, shaded by the entry's position in it
-        linestyle  varied within a group as well, so a printout in grey still reads
-        hatch      the same distinction, for bars
+        group       the colour group it belongs to
+        group_label what to call the group: its value in the plot config's
+                    `group_labels`, a mapping of group names to labels, and None
+                    when that mapping leaves it out
+        selector    what the runs must hold, as {hyperparameter: value}
+        label       what to call them
+        base_color  the group's palette colour, unshaded
+        color       the group's hue, shaded by the entry's position in it
+        linestyle   varied within a group as well, so a printout in grey still reads
+        hatch       the same distinction, for bars
 
     A group's entries share a hue; a group of one keeps the palette colour
     undarkened, since it has no siblings to reserve brightness for.
@@ -334,6 +338,7 @@ def style_entries(plot_cfg: dict):
     ):
         by_group.setdefault(name, []).append((label, selector, directives))
 
+    group_labels = plot_cfg.get("group_labels") or {}
     hue = {name: i for i, name in enumerate(plot_cfg.get("color_scheme") or [])}
     for name in by_group:
         if name not in hue:
@@ -360,8 +365,10 @@ def style_entries(plot_cfg: dict):
                     )
             entries.append({
                 "group": name,
+                "group_label": group_labels.get(name),
                 "selector": selector,
                 "label": label,
+                "base_color": base,
                 "color": color,
                 "linestyle": LINESTYLES[i % len(LINESTYLES)],
                 "hatch": HATCHES[i % len(HATCHES)],
@@ -369,11 +376,23 @@ def style_entries(plot_cfg: dict):
     return entries
 
 
+def hyperparameter_strings(frame) -> dict:
+    """Return {hyperparameter: its column of `frame` rendered by value_str}, the
+    form composed_mask compares. Computed once, it serves every composed_mask
+    call on the same frame."""
+
+    return {
+        c[1]: frame[c].map(value_str)
+        for c in frame.columns if c[0] == "hyperparameter"
+    }
+
+
 def composed_mask(
     frame,
     flat,
     assigned: tuple = LABEL_KEYS,
     ignore: frozenset = frozenset(),
+    as_str: dict | None = None,
 ):
     """The rows of `frame` whose whole recorded configuration is `flat`, as a
     boolean mask.
@@ -392,25 +411,25 @@ def composed_mask(
     `ignore` is the same exemption `assign_configs` takes, for keys a launch set
     for every run alike: composing gives them the value the YAMLs declare, which
     is not the value any run holds. A key exempt from one comparison and not the
-    other would let a run be an environment and not be any configuration of it."""
+    other would let a run be an environment and not be any configuration of it.
 
-    recorded = {c[1] for c in frame.columns if c[0] == "hyperparameter"}
+    `as_str` is hyperparameter_strings(frame). Without it, the columns are
+    rendered on every call."""
+
+    if as_str is None:
+        as_str = hyperparameter_strings(frame)
     if any(
-        k not in recorded and not is_null(v) and not exempt_key(k, ignore)
+        k not in as_str and not is_null(v) and not exempt_key(k, ignore)
         for k, v in flat.items()
     ):
         # A key the configuration sets and no run recorded: no row is it.
         return pd.Series(False, index=frame.index)
 
     mask = pd.Series(True, index=frame.index)
-    for col in frame.columns:
-        if (
-            col[0] != "hyperparameter"
-            or col[1] in assigned
-            or exempt_key(col[1], ignore)
-        ):
+    for key, series in as_str.items():
+        if key in assigned or exempt_key(key, ignore):
             continue
-        mask &= frame[col].map(value_str) == value_str(flat.get(col[1]))
+        mask &= series == value_str(flat.get(key))
     return mask
 
 
@@ -441,6 +460,49 @@ def entry_config(env: str, selector: dict, label: str) -> dict | None:
     return composed_config(
         tuple(format_override(k, v) for k, v in sorted(overrides.items()))
     )
+
+
+def entry_mask(frame, as_str, env, selector, label, ignored, matched):
+    """Return the runs of `frame` in one environment that an entry selects, as a
+    boolean mask: the ones whose whole recorded configuration is the one the
+    entry composes to there, all False when the entry pins another environment.
+
+    The comparison covers every key, the ones the entry leaves out included: a
+    run launched with another value for one of those is a different
+    configuration, and belongs to whichever entry composes to it. `as_str` is
+    hyperparameter_strings(frame). `ignored` and `matched` are the pair
+    assign_groups returned for the plot config, and have to be that pair: a mask
+    built under one set of exemptions says nothing about a comparison made under
+    another."""
+
+    flat = entry_config(env, selector, label)
+    if flat is None:
+        return pd.Series(False, index=frame.index)
+    return composed_mask(frame, flat, ignore=ignored, as_str=as_str) & matched
+
+
+def entry_rows(frame, as_str, cache, env, index, entry, ignored, matched):
+    """Return the rows of `frame` that entry_mask selects for `entry` in `env`.
+
+    The answer is kept in `cache` under (env, index), since the same
+    (environment, entry) is asked for repeatedly and each answer costs a
+    comparison against every hyperparameter column of the frame. A cache holds
+    the answers of one (`ignored`, `matched`) pair."""
+
+    key = (env, index)
+    if key not in cache:
+        cache[key] = frame[
+            entry_mask(
+                frame,
+                as_str,
+                env,
+                entry["selector"],
+                entry["label"],
+                ignored,
+                matched,
+            )
+        ]
+    return cache[key]
 
 
 def composed_sweep_mask(
@@ -735,9 +797,10 @@ def record_missing(
     overrides: dict,
     found: list[int],
     expected: int,
-) -> bool:
+) -> list[int]:
     """Note the seeds a configuration is short of in `missing_runs`, the dict
-    write_missing_runs_script writes out. True when something was missing.
+    write_missing_runs_script writes out, and return them, empty when none are
+    missing.
 
     `overrides` is every key that identifies the configuration, `environment` and
     `algorithm` among them if they are known -- submit_jobs takes them as ordinary
@@ -745,12 +808,12 @@ def record_missing(
 
     missing = [s for s in range(expected) if s not in found]
     if not missing:
-        return False
+        return missing
     overrides = {k: native(v) for k, v in overrides.items()}
     key = tuple(sorted((k, value_str(v)) for k, v in overrides.items()))
     _, seeds = missing_runs.setdefault(key, (overrides, []))
     seeds.extend(s for s in missing if s not in seeds)
-    return True
+    return missing
 
 
 # -----------------------------------------------------------------------------
@@ -889,17 +952,37 @@ def tex_kwargs(label):
     )
 
 
-def save_figure(fig, folder, name, dpi=300):
-    """Save `fig` as `folder/name.png` and return the path to it.
+def save_figure(fig, folder, name, dpi=300, pad_inches=0.1):
+    """Save `fig` as `folder/name.png`, cropped to its content with `pad_inches`
+    of margin, and return the path to it, or None when the file cannot be
+    written.
 
     The name is sanitized with pathvalidate, which strips the characters a
     filename cannot hold, and the path is normalized so its separators are the
-    platform's own."""
+    platform's own. A write that fails with an OSError prints a warning naming
+    the path and the error, and the caller goes on to its next figure."""
 
     name = sanitize_filename(name, platform="auto")
     path = os.path.normpath(os.path.join(folder, name + ".png"))
-    fig.savefig(path, bbox_inches="tight", pad_inches=0.1, dpi=dpi)
+    try:
+        fig.savefig(path, bbox_inches="tight", pad_inches=pad_inches, dpi=dpi)
+    except OSError as e:
+        print(f"WARNING: could not write {path}: {e}")
+        return None
     return path
+
+
+def save_and_close(fig, folder, name, vprint, dpi=300, pad_inches=0.1, note=""):
+    """Save `fig` as `folder/name.png` with `dpi` and `pad_inches` (see
+    save_figure), close it, print the path followed by `note` through `vprint`
+    and return 1, or return 0 when the file cannot be written."""
+
+    path = save_figure(fig, folder, name, dpi=dpi, pad_inches=pad_inches)
+    plt.close(fig)
+    if path is None:
+        return 0
+    vprint(f"  Saved: {path}{note}")
+    return 1
 
 
 def write_legend(entries, plot_cfg, output_dir, font_size):
@@ -923,6 +1006,16 @@ def write_legend(entries, plot_cfg, output_dir, font_size):
         )
         for e in entries
     ]
+    return write_legend_handles(handles, plot_cfg, output_dir, font_size)
+
+
+def write_legend_handles(handles, plot_cfg, output_dir, font_size):
+    """Write a legend of `handles` on its own, as legend_horizontal and
+    legend_vertical in `output_dir`, and return the paths written.
+
+    The horizontal is laid out by `legend_rows_cols`; the vertical is always one
+    entry per row."""
+
     if not handles:
         return []
     n_cols = rows_cols(plot_cfg.get("legend_rows_cols"), len(handles))[1]
@@ -954,8 +1047,10 @@ def write_legend(entries, plot_cfg, output_dir, font_size):
         box = legend.get_window_extent().transformed(
             fig_legend.dpi_scale_trans.inverted())
         fig_legend.set_size_inches(box.width, box.height)
-        paths.append(save_figure(fig_legend, output_dir, name))
+        path = save_figure(fig_legend, output_dir, name)
         plt.close(fig_legend)
+        if path is not None:
+            paths.append(path)
     return paths
 
 
@@ -1047,6 +1142,51 @@ def area_over_span(values, x):
     if len(values) < 2:
         return float(values[0])
     return float(np.sum((values[1:] + values[:-1]) * np.diff(x)) / (2.0 * (x[-1] - x[0])))
+
+
+def run_scores(decoded, kind, last_k=1):
+    """Return one score per seed of a configuration, from its series_of output:
+    the mean of the last `last_k` finite points of its curve (`final`), or its
+    area over the recorded steps divided by their span (`auc`, see
+    area_over_span). A seed with no finite point is left out."""
+
+    series, x = decoded[0], decoded[1]
+    scores = []
+    for column in series.columns:
+        run = series[column].to_numpy(dtype=float)
+        kept = np.isfinite(run)
+        finite = run[kept]
+        if not finite.size:
+            continue
+        if kind == "auc":
+            scores.append(area_over_span(finite, x[kept]))
+        else:
+            scores.append(float(finite[-last_k:].mean()))
+    return scores
+
+
+def missing_bounds(score_bounds, envs, stat):
+    """Return the environments of `envs` with no normalization bounds for `stat`
+    in `score_bounds` (see plot_labels), or with an empty one."""
+
+    return [
+        env for env in envs
+        if (b := score_bounds.get((str(env), stat))) is None or b[1] == b[0]
+    ]
+
+
+def norm_bounds(score_bounds, envs, stat):
+    """Return the normalization bounds of each environment of `envs` for `stat`
+    in `score_bounds` (see plot_labels), as (low, high) arrays, or None when an
+    environment has none or an empty one (see missing_bounds)."""
+
+    if missing_bounds(score_bounds, envs, stat):
+        return None
+    bounds = [score_bounds[(str(env), stat)] for env in envs]
+    return (
+        np.array([b[0] for b in bounds], dtype=float),
+        np.array([b[1] for b in bounds], dtype=float),
+    )
 
 
 # Sample std (ddof=1), as a confidence interval over a sample of seeds requires.

@@ -1,5 +1,5 @@
 default:
-  - default
+  - gcrl/default
 
 configs:
   sun_ratio_adaptive:

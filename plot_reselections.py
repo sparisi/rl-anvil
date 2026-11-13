@@ -2,10 +2,11 @@
 results.parquet and the runs' replay-memory dumps, laid out by a plot config.
 
 The plot config names the configurations and the environments to draw, as for
-plot_results.py (see configs/plots/gcrl_oracle/oracle.yaml). Runs are selected
+plot_results.py (see configs/plots/gcrl_selections/reselections.yaml). Runs are selected
 as plot_results.py selects them: a run is drawn only when its whole
 configuration is the one its entry composes to. For every environment group,
-three files are written in <root>/oracle/<plot config>:
+three files are written in <root>/<plot config>, the path of the plot config
+under configs/plots without the extension:
 
   reselection_causes_<group>.png
                     a 100% stacked horizontal bar per environment and entry
@@ -39,7 +40,7 @@ Run with --help for the rest of the options.
 
 Example
 
-    python plot_oracle.py -f data_gcrl_oracle -v
+    python plot_reselections.py -f data_gcrl_oracle -v
 """
 
 import argparse
@@ -59,7 +60,6 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
-from src.actor import ORACLE_TOL
 from src.oracle import TrueVisitQ
 from src.pseudocount import tabular_count
 from src.utils.heatmaps import env_context
@@ -80,7 +80,7 @@ from src.utils.plot import (
     style_entries,
     tex_kwargs,
 )
-from src.utils.reachability import RESELECTION_CAUSES, reselection_causes
+from src.utils.reachability import ORACLE_TOL, RESELECTION_CAUSES, reselection_causes
 from src.wrappers import gym_wrappers
 
 for _stream in (sys.stdout, sys.stderr):
@@ -142,7 +142,7 @@ parser.add_argument(
 parser.add_argument("--parquet", default="results.parquet")
 parser.add_argument(
     "-p", "--plot",
-    default="gcrl_oracle/oracle",
+    default="gcrl_selections/reselections",
     metavar="NAME",
     help=f"Plot config: which configurations to draw, and over which environments. "
          f"A name without .yaml is looked for in {PLOT_CONFIG_DIR}, or give a path; "
@@ -152,8 +152,8 @@ parser.add_argument(
 parser.add_argument(
     "-o", "--output",
     default="plots",
-    help="Output root, under the data directory. Files go in "
-         "<root>/oracle/<plot config>.",
+    help="Output root, under the data directory. Files go in <root>/<the "
+         "path of the plot config under configs/plots, without .yaml>.",
 )
 add_config_group_args(parser)
 parser.add_argument(
@@ -617,7 +617,7 @@ def draw_cause_steps_figure(drawing, name, envs):
 
 
 def draw_config(config_name, cfg):
-    """Draw the figures of one plot config into its own directory and return
+    """Draw the figures of one plot config into <root>/<plot config> and return
     how many were written."""
 
     entries = style_entries(cfg)
@@ -642,7 +642,7 @@ def draw_config(config_name, cfg):
         cache=_assigned,
     )
 
-    output_dir = os.path.join(args.folder, args.output, "oracle", config_name)
+    output_dir = os.path.join(args.folder, args.output, config_name)
     os.makedirs(output_dir, exist_ok=True)
 
     drawing = Drawing(
@@ -687,5 +687,5 @@ for config_name, _plot_cfg_path, config in plot_cfgs:
 
 print(
     f"\n{len(plot_cfgs)} plot config(s), {written} figure(s) -> "
-    f"{os.path.join(args.folder, args.output, 'oracle')}"
+    f"{os.path.join(args.folder, args.output)}"
 )

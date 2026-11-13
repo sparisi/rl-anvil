@@ -11,11 +11,18 @@ stored, with `selected` marking the steps stored with `goal_selection` and
 import numpy as np
 
 from src.actor import ACT_RANDOM
-from src.utils.misc import random_argmax
 
 # The actor clips candidate counts to this before dividing (src/actor.py), which is
 # what keeps a never-visited tile finite rather than infinitely attractive.
 COUNT_FLOOR = 1e-3
+
+# Tolerance of the comparisons between values of the true visit Q-function
+# (src.oracle.TrueVisitQ), passed to reselection_causes as `tol`.
+ORACLE_TOL = 1e-9
+
+# Entries of the (selection, candidate[, action]) arrays replay_candidates and
+# perfect_selections compute at once, which bounds their memory.
+BLOCK = 2_000_000
 
 # Causes of a goal reselection, in the order reselection_causes tests them.
 RESELECTION_CAUSES = (
@@ -45,10 +52,10 @@ def replay_candidates(
     goal_value_check,
     max_size,
 ):
-    """Return `(candidates, missing)`, where `candidates` maps every goal
-    selection step of a replay-memory dump to the states of the goal candidates
-    the actor scored there, and `missing` counts the selections whose goal state
-    is not among them.
+    """Return `(sel_steps, cand, missing)`: the goal selection steps of a
+    replay-memory dump, in order, the states of the goal candidates the actor
+    scored at each of them, an int32 array with a row per selection, and the
+    number of selections whose goal state is not among their candidates.
 
     The dump holds every step of the run in order, as Experiment.savedata
     merges it, and the replay memory held at most `max_size` steps, at position
@@ -66,51 +73,65 @@ def replay_candidates(
       - otherwise, at a goal selection `batch_size` memory positions below the
         memory size, min(step, `max_size`), and the tie-break of the goal, and
         then the tie-break of the action.
+    A tie-break is `random_argmax` over a 1-D array, which draws one uniform
+    through `random_choice`. A step with neither a random action nor a goal
+    selection thus draws two uniforms, and a run of k such steps is replayed as
+    one `rng.random(2 * k)`: the generator draws each uniform from one 64-bit
+    output, as a run of single calls does, and leaves the 32-bit half that
+    `integers` keeps buffered between its draws as it was. The loop visits only
+    the episode starts, the random actions and the goal selections.
+
     A position p drawn at step t holds the last step before t stored there,
     p + `max_size` * ((t - 1 - p) // `max_size`). With `per_step_selection` and
     without `goal_value_check`, the goal held before the selection is a
-    candidate too: the goal of the previous step, unless that step reached it,
-    i.e. its state is the goal's and its action the goal action."""
+    candidate too, as the last column: the goal of the previous step in the
+    episode, unless that step reached it, i.e. its state is the goal's and its
+    action the goal action; a selection without one holds -1 there."""
 
-    candidates = {}
-    missing = 0
     size = len(state)
-    tiebreak = np.zeros(1)
-    episode = 0
-    t = 0
-    while t < size:
-        seed_seq = np.random.SeedSequence([rng_seed, 0, episode])
-        _env_seed, actor_seed, _critic_seed = (int(s) for s in seed_seq.generate_state(3))
-        rng = np.random.default_rng(seed=actor_seed)
-        if n_critics is not None:
-            rng.integers(n_critics)
-        start = t
-        while t < size:
-            rng.random()
-            if act_source[t] == ACT_RANDOM:
-                rng.integers(n_act)
-            else:
-                if selected[t]:
-                    pos = rng.integers(min(t, max_size), size=batch_size)
-                    cand = state[pos + max_size * ((t - 1 - pos) // max_size)]
-                    held = (
-                        per_step_selection
-                        and not goal_value_check
-                        and t > start
-                        and has_goal[t - 1]
-                        and not (state[t - 1] == goal[t - 1] and act[t - 1] == goal_act[t - 1])
-                    )
-                    if held:
-                        cand = np.append(cand, goal[t - 1])
-                    candidates[t] = cand
-                    missing += not np.any(cand == goal[t])
-                    random_argmax(tiebreak, rng, axis=-1)
-                random_argmax(tiebreak, rng, axis=-1)
-            t += 1
-            if done[t - 1]:
-                break
-        episode += 1
-    return candidates, missing
+    sel_steps = np.flatnonzero(selected)
+    events = np.flatnonzero(selected | (act_source == ACT_RANDOM))
+    ends = np.flatnonzero(done) + 1
+    starts = np.concatenate(([0], ends[ends < size]))
+    episode_of = np.searchsorted(starts, events, side="right") - 1
+
+    draws = np.empty((len(sel_steps), batch_size), dtype=np.int32)
+    i_sel, episode, cursor, rng = 0, -1, 0, None
+    for t, ep in zip(events.tolist(), episode_of.tolist()):
+        if ep != episode:
+            episode = ep
+            seed_seq = np.random.SeedSequence([rng_seed, 0, episode])
+            _env_seed, actor_seed, _critic_seed = (int(s) for s in seed_seq.generate_state(3))
+            rng = np.random.default_rng(seed=actor_seed)
+            if n_critics is not None:
+                rng.integers(n_critics)
+            cursor = int(starts[episode])
+        if t > cursor:
+            rng.random(2 * (t - cursor))
+        rng.random()
+        if selected[t]:
+            draws[i_sel] = rng.integers(min(t, max_size), size=batch_size)
+            i_sel += 1
+            rng.random(2)
+        else:
+            rng.integers(n_act)
+        cursor = t + 1
+
+    # Positions to states in place, BLOCK entries at a time.
+    rows = max(1, BLOCK // batch_size)
+    for lo in range(0, len(sel_steps), rows):
+        t = sel_steps[lo:lo + rows, None]
+        pos = draws[lo:lo + rows]
+        draws[lo:lo + rows] = state[pos + max_size * ((t - 1 - pos) // max_size)]
+    cand = draws
+    if per_step_selection and not goal_value_check:
+        p = np.maximum(sel_steps - 1, 0)
+        first = sel_steps == starts[np.searchsorted(starts, sel_steps, side="right") - 1]
+        reached = (state[p] == goal[p]) & (act[p] == goal_act[p])
+        valid = ~first & has_goal[p] & ~reached
+        cand = np.concatenate((cand, np.where(valid, goal[p], -1).astype(np.int32)[:, None]), axis=1)
+    missing = int((~(cand == goal[sel_steps][:, None]).any(axis=1)).sum())
+    return sel_steps, cand, missing
 
 
 def perfect_selections(
@@ -120,7 +141,8 @@ def perfect_selections(
     goal,
     act,
     goal_act,
-    candidates,
+    sel_steps,
+    cand,
     score_mode,
     gamma,
 ):
@@ -129,10 +151,11 @@ def perfect_selections(
     pairs the actor scored.
 
     `dist` holds in `dist[s, g]` the fewest steps from state `s` to state `g`,
-    `inf` when `g` cannot be reached, and `candidates` maps every goal selection
-    step to the states of its candidates (see replay_candidates). Both scores
-    divide by `n`, how often the pair appears in (`state`, `act`) strictly before
-    the step, and differ in the numerator:
+    `inf` when `g` cannot be reached, and `sel_steps` and `cand` are the goal
+    selection steps and the states of their candidates, as replay_candidates
+    returns them (-1 for no candidate). Both scores divide by `n`, how often the
+    pair appears in (`state`, `act`) strictly before the step, and differ in the
+    numerator:
 
         novelty  1 / n, so the best goal is a least-tried action of a candidate
                  in reach
@@ -141,7 +164,13 @@ def perfect_selections(
 
     A candidate out of reach scores 0. The goal is scored with the count of its
     own goal action, and `n` is floored at COUNT_FLOOR as the actor floors it. A
-    goal is perfect when it ties the best score; an unreachable goal never is."""
+    goal is perfect when it ties the best score; an unreachable goal never is.
+
+    Every count is looked up at once: with every step keyed by its pair, pair *
+    size + step, and the keys sorted, the count of pair q before step t is the
+    number of keys in [q * size, q * size + t), found by binary search. The
+    scores are computed for BLOCK (selection, candidate, action) entries at a
+    time."""
 
     reach = np.isfinite(dist)
     # The numerator of the score, per (state, goal). Out of reach is 0 either way --
@@ -154,18 +183,32 @@ def perfect_selections(
 
     size = len(state)
     perfect = np.zeros(size, dtype=bool)
-    counts = np.zeros((reach.shape[0], n_act), dtype=np.float64)
-    for t in range(size):
-        s = int(state[t])
-        cand = candidates.get(t)
-        if cand is not None:
-            g = int(goal[t])
-            if reach[s, g]:
-                scores = value[s, cand, None] / np.maximum(counts[cand], COUNT_FLOOR)
-                best = scores.max()
-                score_g = value[s, g] / max(counts[g, goal_act[t]], COUNT_FLOOR)
-                perfect[t] = score_g >= best * (1.0 - 1e-12)
-        counts[s, act[t]] += 1.0
+    if len(sel_steps) == 0:
+        return perfect
+
+    n_pairs = reach.shape[0] * n_act
+    keys = np.sort((state.astype(np.int64) * n_act + act) * size + np.arange(size))
+    first = np.searchsorted(keys, np.arange(n_pairs, dtype=np.int64) * size)
+
+    def count_before(pair, step):
+        return np.searchsorted(keys, pair * size + step) - first[pair]
+
+    s = state[sel_steps].astype(np.int64)
+    g = goal[sel_steps].astype(np.int64)
+    score_g = value[s, g] / np.maximum(count_before(g * n_act + goal_act[sel_steps], sel_steps), COUNT_FLOOR)
+
+    best = np.empty(len(sel_steps))
+    actions = np.arange(n_act)
+    rows = max(1, BLOCK // (cand.shape[1] * n_act))
+    for lo in range(0, len(sel_steps), rows):
+        hi = lo + rows
+        valid = cand[lo:hi] >= 0
+        c = np.where(valid, cand[lo:hi], 0).astype(np.int64)
+        n = count_before(c[:, :, None] * n_act + actions, sel_steps[lo:hi, None, None])
+        scores = value[s[lo:hi, None], c][:, :, None] / np.maximum(n, COUNT_FLOOR)
+        best[lo:hi] = np.where(valid[:, :, None], scores, -np.inf).max(axis=(1, 2))
+
+    perfect[sel_steps] = reach[s, g] & (score_g >= best * (1.0 - 1e-12))
     return perfect
 
 

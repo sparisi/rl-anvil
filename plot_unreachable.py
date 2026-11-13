@@ -37,7 +37,8 @@ Bins where no goal was selected are NaN, leaving a gap. --log_scale draws the sa
 figure on a log y axis instead, where bins at exactly 0% drop out too, a log scale
 having no room for them.
 
-Output goes to <data_dir>/<output>/goals/<plot config>/:
+Output goes to <data_dir>/<output>/<plot config>/, the path of the plot config
+under configs/plots without the extension:
 
     unreachable_goals_curves.png  the unreachable-goal figure
     perfect_goals_curves.png      the perfect-goal figure
@@ -50,7 +51,7 @@ Output goes to <data_dir>/<output>/goals/<plot config>/:
 
 Example
 
-    python plot_unreachable_goals.py -f data_gcrl -p gcrl/all --with_auc -v
+    python plot_unreachable.py -f data_gcrl -p gcrl_selections/unreachable --with_auc -v
 """
 
 import argparse
@@ -168,9 +169,8 @@ parser.add_argument(
 parser.add_argument(
     "-o", "--output",
     default="plots",
-    help="Output root, under the data directory. Figures go in <root>/goals/<plot "
-         "config>, so one data directory holds the output of every plotting script "
-         "without one overwriting another.",
+    help="Output root, under the data directory. Figures go in <root>/<the "
+         "path of the plot config under configs/plots, without .yaml>.",
 )
 add_config_group_args(parser)
 parser.add_argument(
@@ -418,7 +418,7 @@ def goal_curves(
     idx = np.flatnonzero(active)
     unreachable[idx] = ~reach[state[idx], goal[idx]]
 
-    candidates, missing = replay_candidates(
+    sel_steps, cand, missing = replay_candidates(
         state,
         act,
         goal,
@@ -437,7 +437,8 @@ def goal_curves(
         goal,
         act,
         goal_act,
-        candidates,
+        sel_steps,
+        cand,
         score_mode,
         gamma,
     )
@@ -1305,7 +1306,7 @@ for config_name, _path, cfg in plot_cfgs:
         continue
 
     _stat_labels, env_labels, _ylims, _score_bounds = plot_labels(cfg)
-    output_dir = os.path.join(args.folder, args.output, "goals", config_name)
+    output_dir = os.path.join(args.folder, args.output, config_name)
     os.makedirs(output_dir, exist_ok=True)
 
     for group_name, group_envs in groups.items():
@@ -1358,5 +1359,5 @@ for config_name, _path, cfg in plot_cfgs:
 
 print(
     f"\n{len(layout)} plot config(s), {written} figure(s) -> "
-    f"{os.path.join(args.folder, args.output, 'goals')}"
+    f"{os.path.join(args.folder, args.output)}"
 )

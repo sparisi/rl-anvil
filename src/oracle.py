@@ -5,7 +5,9 @@ it to compare their goal selection and their learned visit Q-function against
 the true ones.
 """
 
+import gymnasium as gym
 import numpy as np
+from gymnasium.wrappers import StickyAction
 from gym_gridworlds.gridworld import (
     ACTION_TO_VEC,
     GOOD,
@@ -42,6 +44,25 @@ class TrueVisitQ:
     random_reset_prob. Subclasses of Gridworld define their own dynamics and
     are rejected, as are random goals, which change the grid at every reset,
     and observation noise, which makes the observation differ from the state.
+
+    A gymnasium StickyAction wrapper is modelled too. At every step outside a
+    series of repeats, with probability p, it starts a series of d steps, d
+    uniform in [d_min, d_max], that execute the last executed action in place
+    of the agent's. The draw does not depend on the agent's action, so the
+    Bellman operator becomes
+
+        Q*(s, a | g, a_g) = r_miss + gamma * sum_s' C(s' | s, a) U(s', a)
+        U(s, a) = (1 - p) V*(s) + p * mean_d F_d(s, a)
+        F_0(s, a) = U(s, a)
+        F_k(s, a) = r_hit                                                  if s = g
+        F_k(s, a) = r_miss + gamma * sum_s' C(s' | s, a) F_{k-1}(s', a)    otherwise
+        V*(s) = max_a Q*(s, a | g, a_g)
+
+    with Q*(g, a_g | g, a_g) = r_hit as above. U(s, a) is the value of cell s
+    after executing a, before the draw of the next step, and F_k(s, a) the
+    value of cell s with k repeats of a left. A repeat in the goal's cell hits,
+    since the visit reward is given for the agent's action. Q* and V* are the
+    values of a cell when the agent's action is executed.
     """
 
     def __init__(
@@ -56,7 +77,8 @@ class TrueVisitQ:
         """
         Args:
             env (gymnasium.Env): the training environment, a base Gridworld
-                observed through MatrixWrapper,
+                observed through MatrixWrapper, with at most one StickyAction
+                wrapper,
             counter (GridworldCount): one-hot counter of the environment, which
                 maps observations to cells,
             gamma (float): discount factor of the visit Q-function,
@@ -85,6 +107,7 @@ class TrueVisitQ:
         self.gamma = gamma
         self.reward_hit = 0.0 if negative_reward else 1.0
         self.reward_miss = -1.0 if negative_reward else 0.0
+        self.sticky_prob, self.sticky_durations = self._sticky(env)
         cont = self._transitions(unwrapped)
         self.q = self._solve(cont, tol, max_iterations)
         self.reach = self._reachability(cont)
@@ -108,6 +131,25 @@ class TrueVisitQ:
         """
 
         return self.reach[self._counter.bin_index(obs), self._counter.bin_index(goal)]
+
+    @staticmethod
+    def _sticky(env):
+        """
+        Return the repeat probability and the (min, max) repeat duration of the
+        StickyAction wrapper of `env`, or (0.0, (1, 1)) without one.
+        """
+
+        found = []
+        while isinstance(env, gym.Wrapper):
+            if isinstance(env, StickyAction):
+                found.append(env)
+            env = env.env
+        if not found:
+            return 0.0, (1, 1)
+        if len(found) > 1:
+            raise ValueError("TrueVisitQ supports at most one StickyAction wrapper.")
+        low, high = found[0].repeat_action_duration_range
+        return float(found[0].repeat_action_probability), (int(low), int(high))
 
     @staticmethod
     def _start_distribution(env):
@@ -204,7 +246,9 @@ class TrueVisitQ:
         """
         Return Q* with shape (n_cells, n_cells, n_actions, n_actions), indexed
         as [s, g, a, a_g], by value iteration on the continuation probabilities
-        `cont` for all goals at once.
+        `cont` for all goals at once. Every iteration updates Q* and U (see the
+        class docstring) from the U of the previous one. Without a
+        StickyAction wrapper, U(s, a) is V*(s).
         """
 
         n_cells, n_actions, _ = cont.shape
@@ -212,15 +256,31 @@ class TrueVisitQ:
         goal = np.arange(n_goals)
         hit_cell = goal // n_actions
         hit_act = goal % n_actions
-        cont = cont.reshape(n_cells * n_actions, n_cells)
+        by_action = np.ascontiguousarray(cont.transpose(1, 0, 2))
+        p = self.sticky_prob
+        low, high = self.sticky_durations
+
+        def backup(y):
+            # r_miss + gamma * sum_s' C(s' | s, a) y[s', a], for every (s, a).
+            return self.reward_miss + self.gamma * np.matmul(by_action, y.transpose(1, 0, 2)).transpose(1, 0, 2)
 
         q = np.zeros((n_cells, n_actions, n_goals))
+        u = np.zeros_like(q)
         for _ in range(max_iterations):
-            v = q.max(axis=1)
-            q_new = self.reward_miss + self.gamma * (cont @ v).reshape(n_cells, n_actions, n_goals)
+            q_new = backup(u)
             q_new[hit_cell, hit_act, goal] = self.reward_hit
-            delta = np.abs(q_new - q).max()
-            q = q_new
+            u_new = np.broadcast_to(q_new.max(axis=1, keepdims=True), q.shape)
+            if p > 0.0:
+                forced = u
+                repeats = np.zeros_like(q)
+                for d in range(1, high + 1):
+                    forced = backup(forced)
+                    forced[hit_cell, :, goal] = self.reward_hit
+                    if d >= low:
+                        repeats += forced
+                u_new = (1.0 - p) * u_new + p * repeats / (high - low + 1)
+            delta = max(np.abs(q_new - q).max(), np.abs(u_new - u).max())
+            q, u = q_new, u_new
             if delta < tol:
                 break
         else:

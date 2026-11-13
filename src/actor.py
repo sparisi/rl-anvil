@@ -562,6 +562,8 @@ class GoalConditioned(EpsilonGreedy):
         if self.true_visit is not None:
             self._oracle_score(obs, goal_obs, n, goal_obs_idx, goal_act)
             self._oracle_values(obs, goal_obs, goal_obs_idx, goal_act, q_visit[None])
+            if isinstance(self, SUN_Ratio):
+                self._oracle_bound(obs, goal_obs, n, goal_obs_idx, q_visit)
 
         self.goal = {
             "obs": goal_obs[goal_obs_idx],
@@ -756,6 +758,49 @@ class GoalConditioned(EpsilonGreedy):
                 stats[f"v_err_unreach{suffix}"] = err[~reach].mean()
                 stats[f"v_err_unreach_max{suffix}"] = err[~reach].max()
         self._oracle_stats.update(**stats)
+
+    def _oracle_bound(self, obs, goal_obs, n, goal_obs_idx, q_visit):
+        """
+        Record whether the perturbation bound of the ratio score V / n rules out
+        the selection of an unreachable goal, over the (candidate, goal action)
+        pairs of the candidates `goal_obs`, with `n` their counts as the score
+        divides by them and `q_visit` the learned visit Q-values it scores.
+
+        With V(obs, g, a_g) = max_a Q(obs, a | g, a_g), R the pairs whose goal
+        is reachable from `obs`, U the others, eta the largest absolute error
+        between the learned and the true V over all pairs and n_U the smallest
+        count in U, the bound holds when
+
+            eta < max over (g, a_g) in R of V*(obs, g, a_g) * n_U / (n_(g, a_g) + n_U),
+
+        and then no pair of U has the best learned score. At every selection
+        with U non-empty, `bound_holds_%` records whether the bound holds, and
+        whether the selected goal is unreachable is recorded as
+        `sel_unreach_bound_holds_%` when it holds and as
+        `sel_unreach_bound_fails_%` when it does not. The bound needs V* = 0 on
+        U, so nothing is recorded when the true visit Q-function rewards a miss
+        with a non-zero value.
+        """
+
+        if self.true_visit.reward_miss != 0.0:
+            return
+        obs_batched = np.broadcast_to(obs[None], goal_obs.shape)
+        v_true = self.true_visit(obs_batched, goal_obs).max(axis=-2)
+        reach = np.broadcast_to(
+            self.true_visit.reachable(obs_batched, goal_obs)[:, None],
+            v_true.shape,
+        )
+        if reach.all():
+            return
+        eta = np.abs(q_visit.max(axis=-2) - v_true).max()
+        n_unreach = n[~reach].min()
+        threshold = (v_true[reach] * n_unreach / (n[reach] + n_unreach)).max(initial=0.0)
+        holds = bool(eta < threshold)
+        key = "sel_unreach_bound_holds_%" if holds else "sel_unreach_bound_fails_%"
+        self._oracle_stats.update(**{
+            "bound_holds_%": holds,
+            key: not reach[goal_obs_idx, 0],
+        })
 
     def explore(self, obs, rng_generator, replay_memory, **kwargs):
         if self.true_visit is not None:

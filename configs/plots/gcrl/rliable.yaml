@@ -1,0 +1,25 @@
+default:
+  - default
+
+configs:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      plot.label: "SUN (Adapt., Multipl.)"
+  sun_ucb_adaptive:
+    - algorithm: sun_ucb_adaptive
+      plot.label: "SUN (Adapt., Additive)"
+  sun_ratio_step:
+    - algorithm: sun_ratio_step
+      plot.label: "SUN (Per-Step, Multipl.)"
+  sun_ratio_episodic:
+    - algorithm: sun_ratio_episodic
+      plot.label: "SUN (Epis., Multipl.)"
+  adagoal:
+    - algorithm: adagoal
+      plot.label: "AdaGoal"
+  discover:
+    - algorithm: discover
+      plot.label: "DISCOVER"
+  random:
+    - algorithm: random
+      plot.label: "Random"

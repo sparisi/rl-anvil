@@ -128,9 +128,11 @@ MEMORY_KEYS = (
 )
 
 # Reselection causes of each memory dump read, by its path (see memory_causes),
-# and the true visit Q-functions built (see true_visit_of).
+# the true visit Q-functions built (see true_visit_of), and read_run_cfg of the
+# cfg.yaml of each run directory, read once for all of its seeds.
 _memory_causes: dict = {}
 _true_visit: dict = {}
+_run_cfgs: dict = {}
 
 # Label, colour and label colour of each cause of RESELECTION_CAUSES, in its
 # order: reds for the goals that were or became unreachable, blues for the true
@@ -324,7 +326,9 @@ def read_memory_causes(run_dir, mem_file):
 
     if not os.path.isfile(mem_file):
         return None
-    _, run_cfg, reason = read_run_cfg(os.path.join(run_dir, "cfg.yaml"))
+    if run_dir not in _run_cfgs:
+        _run_cfgs[run_dir] = read_run_cfg(os.path.join(run_dir, "cfg.yaml"))
+    _, run_cfg, reason = _run_cfgs[run_dir]
     if reason is not None:
         vprint(f"  WARNING: {run_dir}/cfg.yaml {reason}.")
         return None

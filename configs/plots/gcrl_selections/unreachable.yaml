@@ -26,16 +26,13 @@ configs:
   discover:
     - algorithm: discover
       plot.label: "DISCOVER"
-  random:
-    - algorithm: random
-      plot.label: "Random"
 
 statistics:
   sa_h: "Entropy"
   sa_%: "Coverage"
 
 environments:
-  gridworlds:
+  appendix:
     gym_gridworlds/three_rooms_wall_mini_nonuniform:
       label: "ThreeRoom"
       score_bounds: &unit_bounds
@@ -48,12 +45,10 @@ environments:
       label: "FourRoomStuck (Sticky Act.)"
       score_bounds: *unit_bounds
 
-  gridworlds_and_control_main:
+  main:
     gym_gridworlds/three_rooms_wall_mini_nonuniform:
       label: "ThreeRoom"
-      score_bounds: &unit_bounds
-        sa_h: [0, 1]
-        sa_%: [0, 1]
+      score_bounds: *unit_bounds
     gym_gridworlds/four_rooms_stuck_hard:
       label: "FourRoomStuck"
       score_bounds: *unit_bounds

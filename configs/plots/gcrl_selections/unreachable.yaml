@@ -45,5 +45,5 @@ environments:
       label: "FourRoomStuck"
       score_bounds: *unit_bounds
     gym_gridworlds/four_rooms_stuck_hard_sticky:
-      label: "FourRoomStuck (Sticky)"
+      label: "FourRoomStuck (Sticky Act.)"
       score_bounds: *unit_bounds

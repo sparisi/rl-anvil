@@ -48,6 +48,8 @@ under configs/plots without the extension:
                                   written whatever --auc_only says
     legend_horizontal.png         the legend on its own, laid out by the config
     legend_vertical.png           the legend in a single column
+    legend_2_rows.png             the legend over two rows
+    legend_3_rows.png             the legend over three rows
 
 Example
 
@@ -272,9 +274,10 @@ def build_distances(env_cfg):
     `inf` when `g` cannot be got to from `s` at all, and `n_act` is the number of
     actions.
 
-    The transition graph is read off the environment itself -- `set_state(s)`, step
-    every action, record `get_state()` -- so one-way doorways, absorbing tiles and
-    any other layout quirk are captured without hard-coding the geometry. Returns
+    The transition graph is read off the unwrapped environment itself --
+    `set_state(s)`, step every action, record `get_state()` -- so one-way
+    doorways, absorbing tiles and any other layout quirk are captured without
+    hard-coding the geometry. Wrappers are bypassed. Returns
     (None, None) for environments without a tabular `set_state` / `get_state` interface,
     which is what makes this metric a gridworld one.
 
@@ -296,10 +299,12 @@ def build_distances(env_cfg):
         # Action noise would make the enumeration below random. It cannot change
         # which states are reachable (a noisy action is resampled from the same
         # action set), so zeroing it out gives the same graph, deterministically.
+        # The unwrapped environment is stepped, so wrappers that replace the
+        # action, such as StickyAction, do not take part.
         for attr in ("random_action_prob", "slippery_prob", "random_reset_prob"):
             if hasattr(u, attr):
                 setattr(u, attr, 0.0)
-        env.reset()
+        u.reset()
 
         valid = np.asarray(u.grid_reachable).reshape(-1).astype(bool)
         n_states = int(valid.size)
@@ -309,11 +314,11 @@ def build_distances(env_cfg):
         for s in np.flatnonzero(valid):
             for a in range(n_act):
                 u.set_state(int(s))
-                _, _, terminated, truncated, _ = env.step(a)
+                _, _, terminated, truncated, _ = u.step(a)
                 succ[s, a] = int(u.get_state())
                 term[s, a] = bool(terminated)
                 if terminated or truncated:
-                    env.reset()
+                    u.reset()
     finally:
         env.close()
 
@@ -505,6 +510,7 @@ def cache_path(
         "gamma": args.gamma,
         "score": args.goal_score,
         "candidates": "replayed_batch",
+        "graph": "unwrapped",
         "floor": COUNT_FLOOR,
         "env": env_cfg,
     }, sort_keys=True, default=str)
@@ -1349,7 +1355,7 @@ for config_name, _path, cfg in plot_cfgs:
     for metric in METRICS:
         written += draw_auc_all(cfg, entries, selected, all_envs, metric, output_dir)
 
-    for path in write_legend(entries, cfg, output_dir, FONT_SIZE):
+    for path in write_legend(entries, cfg, output_dir, FONT_SIZE, rows=(2, 3)):
         vprint(f"  Saved: {path}")
     recap(config_name, entries, selected, all_envs)
     print(

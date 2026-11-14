@@ -28,11 +28,12 @@ under configs/plots without the extension:
                     in the bin, stacked by cause in the same colours. Its axes
                     carry round ticks (see round_ticks). The statistics of
                     OVERLAY_STATS the runs logged are drawn over the bars on a
-                    log-scale right axis, as the mean over seeds with a 95%
-                    confidence band.
+                    log-scale right axis, as the mean over seeds.
 
-The legend of the causes is also written alone, once per plot config, as
-reselection_causes_legend.png in the same directory, whatever --no_legend says.
+The legend of the causes and of the curves of OVERLAY_STATS is also written
+alone, once per plot config, as reselection_causes_legend.png in the same
+directory, whatever --no_legend says. The decision tree that assigns the causes
+is written once per plot config too, as reselection_causes_tree.png.
 
 The reselections are read from each run's <config_id>/<seed>/memory.npz and
 classified with the true visit Q-function of its environment
@@ -64,6 +65,7 @@ import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
 from matplotlib.ticker import MaxNLocator
+from matplotlib.transforms import Bbox
 
 from src.oracle import TrueVisitQ
 from src.pseudocount import tabular_count
@@ -78,7 +80,6 @@ from src.utils.plot import (
     ensure_font,
     entry_rows,
     env_groups,
-    error_shade_plot,
     hyperparameter_strings,
     load_plot_configs,
     plot_labels,
@@ -131,19 +132,26 @@ CAUSE_STYLE = {
 # that the value check compares against 0, logged at every check with
 # results.true_visit_check, and the visit critic's training loss.
 OVERLAY_STATS = (
-    ("v_err_check_diff", r"$|\Delta V_\theta - \Delta V^*|$ at reselection check", "black"),
-    ("loss_visit", "Training TD loss", "white"),
+    ("v_err_check_diff", "Approx. error", "black"),
+    ("loss_visit", "Training TD error", "white"),
 )
-# Line width of the curves of OVERLAY_STATS, and the black outline drawn around
-# the white ones.
+# Line width of the curves of OVERLAY_STATS, and the outline drawn around each
+# curve, keyed by the curve's color.
 OVERLAY_WIDTH = 2.0
-OUTLINE = [pe.Stroke(linewidth=OVERLAY_WIDTH + 1.0, foreground="black"), pe.Normal()]
+OUTLINE = {
+    "black": [pe.Stroke(linewidth=OVERLAY_WIDTH + 1.0, foreground="white"), pe.Normal()],
+    "white": [pe.Stroke(linewidth=OVERLAY_WIDTH + 1.0, foreground="black"), pe.Normal()],
+}
 # A segment of a bar narrower than this fraction is drawn without its
 # percentage.
 CAUSE_LABEL_MIN = 0.04
 # Inches per bar of reselection_causes, and the width of the figure.
 CAUSE_BAR_H = 0.55
 CAUSE_FIG_W = 8.0
+# Inches spanned by the axis limits of reselection_causes_tree, in width and in
+# height, before the figure is cropped to its boxes and notes.
+TREE_FIG_W = 8.9
+TREE_FIG_H = 5.5
 # Inches per subplot of reselection_causes_steps, in width and in height.
 CAUSE_HIST_W = 3.9
 CAUSE_HIST_H = 2.0
@@ -366,27 +374,37 @@ def cause_counts(drawing, env, index):
 
 
 def add_cause_legend(fig, overlays=(), **kwargs):
-    """Draw the legend of the causes of CAUSE_STYLE, followed by the curves of
-    OVERLAY_STATS named in `overlays`, on `fig`, three columns without a frame,
-    placed by the fig.legend keyword arguments `kwargs`."""
+    """Draw the legend of the causes of CAUSE_STYLE on `fig` without a frame,
+    placed by the fig.legend keyword arguments `kwargs`. Without curves, the
+    causes fill three columns. With the curves of OVERLAY_STATS named in
+    `overlays`, the causes keep the columns they take when the curves follow
+    them in three columns, and the curves fill one more row below them, one per
+    column from the left."""
 
-    curves = [(label, color) for stat, label, color in OVERLAY_STATS if stat in overlays]
+    causes = [
+        (mpatches.Patch(facecolor=color, edgecolor="white"), label)
+        for label, color, _text in CAUSE_STYLE.values()
+    ]
+    curves = [
+        (Line2D([], [], color=color, linewidth=OVERLAY_WIDTH, path_effects=OUTLINE[color]), label)
+        for stat, label, color in OVERLAY_STATS
+        if stat in overlays
+    ]
+    entries, n_cols = causes, 3
+    if curves:
+        blank = (Line2D([], [], linestyle="none"), "")
+        # fig.legend fills its columns top to bottom, so the entries are listed
+        # column by column, each column padded to the same number of rows.
+        n_rows = -(-(len(causes) + len(curves)) // 3)
+        columns = [causes[i:i + n_rows] for i in range(0, len(causes), n_rows)]
+        entries, n_cols = [], len(columns)
+        for j, column in enumerate(columns):
+            entries += column + [blank] * (n_rows - len(column))
+            entries.append(curves[j] if j < len(curves) else blank)
     fig.legend(
-        [
-            mpatches.Patch(facecolor=color, edgecolor="white")
-            for _label, color, _text in CAUSE_STYLE.values()
-        ] + [
-            Line2D(
-                [],
-                [],
-                color=color,
-                linewidth=OVERLAY_WIDTH,
-                **({"path_effects": OUTLINE} if color == "white" else {}),
-            )
-            for _label, color in curves
-        ],
-        [label for label, _color, _text in CAUSE_STYLE.values()] + [label for label, _color in curves],
-        ncol=3,
+        [handle for handle, _label in entries],
+        [label for _handle, label in entries],
+        ncol=n_cols,
         frameon=False,
         fontsize=FONT_SIZE - 2,
         **kwargs,
@@ -408,13 +426,111 @@ def cause_legend(fig, axes, overlays=()):
 
 
 def write_cause_legend(output_dir):
-    """Write the legend of the causes of CAUSE_STYLE alone, as the figures draw
-    it, to reselection_causes_legend.png in `output_dir`, and return the number
-    of figures written."""
+    """Write the legend of the causes of CAUSE_STYLE and of every curve of
+    OVERLAY_STATS alone, as the figures draw it, to
+    reselection_causes_legend.png in `output_dir`, and return the number of
+    figures written."""
 
     fig = plt.figure(figsize=(CAUSE_FIG_W, 0.8))
-    add_cause_legend(fig, loc="center")
+    add_cause_legend(fig, [stat for stat, _label, _color in OVERLAY_STATS], loc="center")
     return save_and_close(fig, output_dir, "reselection_causes_legend", vprint)
+
+
+def write_cause_tree(output_dir):
+    """Write the decision tree reselection_causes follows to assign the cause
+    of a reselection to reselection_causes_tree.png in `output_dir`, and return
+    the number of figures written.
+
+    Every test is a white box and every cause a box in its colours of
+    CAUSE_STYLE, with a note under it on the decision it reflects. Every branch
+    is labelled with the outcome of its test. The figure is cropped to the
+    boxes and the notes, keeping the inches per axis unit of TREE_FIG_W and
+    TREE_FIG_H, and saved without padding."""
+
+    tests = {
+        "sel": (5.0, 5.4, "Goal $g$ dropped at $s_{\\mathrm{now}}$:\nis $g$ reachable from $s_{\\mathrm{sel}}$?"),
+        "now": (6.2, 4.1, "Is $g$ reachable from $s_{\\mathrm{now}}$?"),
+        "drop": (7.6, 2.8, "$V^*(s_{\\mathrm{now}}) < V^*(s_{\\mathrm{sel}})$?"),
+        "step": (5.2, 1.5, "First step losing $V^*$:\nwhat action caused it?"),
+    }
+    causes = {
+        "unreachable_at_selection": (2.9, 4.1, "wrong selection of $s_{\\mathrm{sel}}$\ncorrect reselection"),
+        "became_unreachable": (3.6, 2.8, "correct reselection"),
+        "critic_error": (8.4, 1.5, "critic error in the check"),
+        "random_action": (2.5, 0.2, "$\\varepsilon$-greedy exploratory action"),
+        "suboptimal_action": (5.2, 0.2, "critic error while acting"),
+        "env_noise": (8.2, 0.2, "transition stochasticity"),
+    }
+    edges = (
+        ("sel", "unreachable_at_selection", "no"),
+        ("sel", "now", "yes"),
+        ("now", "became_unreachable", "no"),
+        ("now", "drop", "yes"),
+        ("drop", "critic_error", "no"),
+        ("drop", "step", "yes (correct reselection)"),
+        ("step", "random_action", "random"),
+        ("step", "suboptimal_action", "not optimal under $Q^*$"),
+        ("step", "env_noise", "optimal"),
+    )
+    position = {name: (x, y) for name, (x, y, _text) in {**tests, **causes}.items()}
+
+    fig, ax = plt.subplots(figsize=(TREE_FIG_W, TREE_FIG_H))
+    ax.set_axis_off()
+    ax.set_xlim(1.1, 10.0)
+    ax.set_ylim(-0.6, 6.0)
+    for parent, child, label in edges:
+        (x0, y0), (x1, y1) = position[parent], position[child]
+        ax.plot([x0, x1], [y0, y1], color="0.4", linewidth=1.0, zorder=1)
+        ax.text(
+            (x0 + x1) / 2,
+            (y0 + y1) / 2,
+            label,
+            ha="center",
+            va="center",
+            fontsize=FONT_SIZE - 3,
+            bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none"),
+            zorder=2,
+        )
+    for x, y, text in tests.values():
+        ax.text(
+            x,
+            y,
+            text,
+            ha="center",
+            va="center",
+            fontsize=FONT_SIZE - 1,
+            bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="0.4"),
+            zorder=3,
+        )
+    for cause, (x, y, note) in causes.items():
+        label, color, text_color = CAUSE_STYLE[cause]
+        ax.text(
+            x,
+            y,
+            label,
+            ha="center",
+            va="center",
+            color=text_color,
+            fontsize=FONT_SIZE - 1,
+            bbox=dict(boxstyle="round,pad=0.4", facecolor=color, edgecolor="white"),
+            zorder=3,
+        )
+        ax.text(x, y - 0.28, note, ha="center", va="top", fontsize=FONT_SIZE - 3, style="italic", zorder=3)
+
+    # The axes fill the figure, then the limits and the figure size shrink to
+    # the union of the texts and their boxes at the same inches per unit.
+    fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0)
+    fig.canvas.draw()
+    extents = [
+        t.get_window_extent() if t.get_bbox_patch() is None else t.get_bbox_patch().get_window_extent()
+        for t in ax.texts
+    ]
+    (x0, y0), (x1, y1) = ax.transData.inverted().transform(Bbox.union(extents).get_points())
+    (lx0, lx1), (ly0, ly1) = ax.get_xlim(), ax.get_ylim()
+    fig.set_size_inches(TREE_FIG_W * (x1 - x0) / (lx1 - lx0), TREE_FIG_H * (y1 - y0) / (ly1 - ly0))
+    ax.set_xlim(x0, x1)
+    ax.set_ylim(y0, y1)
+    return save_and_close(fig, output_dir, "reselection_causes_tree", vprint, pad_inches=0.0)
 
 
 def round_ticks(ax, which, n_bins):
@@ -481,6 +597,13 @@ def write_cause_table(drawing, name, bars, several):
     vprint(f"  Saved: {path}")
 
 
+def kilo(n):
+    """Return the count `n` as text, in thousands with three significant
+    digits and a "k" from 1,000 on."""
+
+    return f"{float(f'{n / 1000:.3g}'):g}k" if n >= 1000 else f"{n}"
+
+
 def draw_cause_figure(drawing, name, envs):
     """Draw the causes of the reselections as a 100% stacked horizontal bar per
     (environment, entry) of `envs` with at least one reselection, write the same
@@ -493,8 +616,8 @@ def draw_cause_figure(drawing, name, envs):
     CAUSE_LABEL_MIN wide is labelled with its percentage. At the end of the bar,
     "total = <reselections>" is written over "(<x>% of <training steps>)", x
     being the mean number of reselections per seed as a percentage of the
-    training steps. A bar is named by its environment, and by its entry too
-    when several entries have bars."""
+    training steps, both counts written by kilo. A bar is named by its
+    environment, and by its entry too when several entries have bars."""
 
     bars, runs_steps = [], []
     for env in envs:
@@ -536,7 +659,7 @@ def draw_cause_figure(drawing, name, envs):
         ax.text(
             1.01,
             y,
-            f"total = {total:,}\n({100 * total / (n_runs * n_steps):.1f}% of {n_steps:,})",
+            f"total = {kilo(total)}\n({100 * total / (n_runs * n_steps):.1f}% of {kilo(n_steps)})",
             ha="left",
             va="center",
             fontsize=FONT_SIZE - 3,
@@ -578,8 +701,7 @@ def draw_cause_steps_figure(drawing, name, envs):
 
     Over the bars, every statistic of OVERLAY_STATS the entry's runs logged is
     drawn on a log-scale right axis against its logged steps, as the mean over
-    seeds with a 95% confidence band (see error_shade_plot), and added to the
-    legend."""
+    seeds, and added to the legend."""
 
     hists = {}
     for env in envs:
@@ -647,19 +769,18 @@ def draw_cause_steps_figure(drawing, name, envs):
                     twin.set_yscale("log")
                     twin.grid(False)
                 values, x, _steps, _seeds = series
-                error_shade_plot(
-                    twin,
-                    values.to_numpy().T,
+                twin.plot(
                     x,
+                    values.mean(axis=1).to_numpy(),
                     color=color,
                     linewidth=OVERLAY_WIDTH,
-                    **({"path_effects": OUTLINE} if color == "white" else {}),
+                    path_effects=OUTLINE[color],
                 )
                 overlays.add(stat)
             if twin is not None:
                 twin.tick_params(axis="y", labelsize=FONT_SIZE - 2, pad=1)
                 if c == n_cols - 1:
-                    twin.set_ylabel("Error / Loss", fontsize=FONT_SIZE)
+                    twin.set_ylabel("Errors", fontsize=FONT_SIZE)
             ax.set_xlim(edges[0], edges[-1])
             round_ticks(ax, "x", STEP_TICK_BINS)
             ax.xaxis.set_major_formatter(lambda v, _pos: f"{v / 1000:g}k")
@@ -734,6 +855,7 @@ def draw_config(config_name, cfg):
         written += draw_cause_figure(drawing, f"reselection_causes{suffix}", present)
         written += draw_cause_steps_figure(drawing, f"reselection_causes_steps{suffix}", present)
     written += write_cause_legend(output_dir)
+    written += write_cause_tree(output_dir)
 
     print(
         f"\n{drawing.name}: {len(drawing.entries)} configuration(s), "

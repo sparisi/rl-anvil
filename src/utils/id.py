@@ -303,7 +303,7 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
         # cfg.yaml. Every seed writes the same configuration, so which one lands
         # last does not change the config ID. The int or float types in cfg.yaml
         # are those of the seed that lands last.
-        with atomic_open(yaml_path, "w") as f:
+        with atomic_open(yaml_path, "w", encoding="utf-8") as f:
             f.write(config_for_save(cfg))
 
     # The seed folder is made only once cfg.yaml matches this configuration

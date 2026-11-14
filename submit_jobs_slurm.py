@@ -274,6 +274,7 @@ TIMEOUTS_ENV = {
     "gym_gridworlds/three_rooms_wall_mini_nonuniform": 110,
     "gym_gridworlds/four_rooms_stuck_hard": 290,
     "gym_gridworlds/four_rooms_stuck_hard_sticky": 290,
+    "gym_gridworlds/four_rooms_stuck_hard_no_noise": 290,
     "gym_gridworlds/travel_field_small": 310,
 }
 
@@ -322,6 +323,7 @@ PER_SEED_MEM_MB = {
     "gym_gridworlds/three_rooms_wall_mini_nonuniform": 500,
     "gym_gridworlds/four_rooms_stuck_hard": 600,
     "gym_gridworlds/four_rooms_stuck_hard_sticky": 600,
+    "gym_gridworlds/four_rooms_stuck_hard_no_noise": 600,
     "gym_gridworlds/travel_field_small": 900,
 }
 

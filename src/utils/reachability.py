@@ -1,7 +1,9 @@
 """Goal selections of a goal-conditioned actor read from a replay-memory dump:
 the goal candidates the actor scored at each selection, replayed from the seeds
 of the run, the selections whose goal was the best pick among those candidates,
-and the cause of each goal reselection under the true visit Q-function.
+the cause of each goal reselection under the true visit Q-function, and the
+true progress toward the goal replaced at the reselections attributed to
+approximation error.
 
 The arrays over the steps of a dump are `state` and `goal`, the counter bins of
 its `obs` and `goal_obs`, and `act`, `goal_act`, `has_goal` and `act_source` as
@@ -288,3 +290,33 @@ def reselection_causes(
                         causes[t] = 4
         last_sel = t
     return causes
+
+
+def critic_error_progress(true_visit, state, goal, goal_act, selected, causes):
+    """Return a float array over the steps of a replay-memory dump holding, at
+    every reselection `causes` (as reselection_causes returns them) attributes to
+    critic_error, the steps of true progress toward the goal replaced since its
+    selection, and NaN at every other step.
+
+    The goal replaced, g with goal action a_g, was selected at the last goal
+    selection before the reselection, at state s_sel, and is replaced at state
+    s. With r_hit, r_miss, gamma and V*(x, g) = max_a Q*(x, a | g, a_g) of the
+    true visit Q-function `true_visit` (src.oracle.TrueVisitQ), d(x) solves
+
+        V*(x, g) = r_miss / (1 - gamma) + (r_hit - r_miss / (1 - gamma)) gamma^d(x)
+
+    and the progress is d(s_sel) - d(s). Under deterministic dynamics d(x) is
+    the number of steps from x to the hit of the goal, and the progress an
+    integer."""
+
+    q, gamma = true_visit.q, true_visit.gamma
+    floor = true_visit.reward_miss / (1.0 - gamma)
+    progress = np.full(len(state), np.nan)
+    sel = np.flatnonzero(selected)
+    for t in np.flatnonzero(causes == RESELECTION_CAUSES.index("critic_error")):
+        s_sel = int(state[sel[np.searchsorted(sel, t) - 1]])
+        g, a_g = int(goal[t - 1]), int(goal_act[t - 1])
+        v = q[[s_sel, int(state[t])], g, :, a_g].max(axis=1)
+        d = np.log((v - floor) / (true_visit.reward_hit - floor)) / np.log(gamma)
+        progress[t] = d[0] - d[1]
+    return progress

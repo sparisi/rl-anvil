@@ -30,6 +30,18 @@ under configs/plots without the extension:
                     OVERLAY_STATS the runs logged are drawn over the bars on a
                     log-scale right axis, as the mean over seeds.
 
+When the plot config has a `margin` block, one more file is written there:
+
+  reselection_margin.png
+                    a row per entry: the histogram of reselection_causes_steps
+                    of every environment listed under `margin.histograms`, and
+                    next to it the reselections attributed to approximation
+                    error by the steps of true progress toward the goal
+                    replaced since its selection
+                    (src.utils.reachability.critic_error_progress), per seed per
+                    1,000 training steps on a log scale, a bar per environment
+                    of `margin.environments` (environment: label) at every k.
+
 The legend of the causes and of the curves of OVERLAY_STATS is also written
 alone, once per plot config, as reselection_causes_legend.png in the same
 directory, whatever --no_legend says. The decision tree that assigns the causes
@@ -88,7 +100,12 @@ from src.utils.plot import (
     style_entries,
     tex_kwargs,
 )
-from src.utils.reachability import ORACLE_TOL, RESELECTION_CAUSES, reselection_causes
+from src.utils.reachability import (
+    ORACLE_TOL,
+    RESELECTION_CAUSES,
+    critic_error_progress,
+    reselection_causes,
+)
 from src.wrappers import gym_wrappers
 
 for _stream in (sys.stdout, sys.stderr):
@@ -155,6 +172,14 @@ TREE_FIG_H = 5.5
 # Inches per subplot of reselection_causes_steps, in width and in height.
 CAUSE_HIST_W = 3.9
 CAUSE_HIST_H = 2.0
+# Inches per subplot of reselection_margin in width (its height is
+# CAUSE_HIST_H), the steps of true progress from which its reselections share
+# one bar, the grays of its environments, from dark to light, and the font size
+# of its titles, axis labels and legend (two points smaller).
+MARGIN_W = 5.0
+MARGIN_TAIL = 6
+MARGIN_GRAYS = (0.15, 0.85)
+MARGIN_FONT_SIZE = FONT_SIZE - 1
 # Most intervals between the round ticks (see round_ticks) of a step axis and of
 # a value axis.
 STEP_TICK_BINS = 2
@@ -289,11 +314,13 @@ def true_visit_of(env_cfg, critic_cfg):
 
 
 def read_memory_causes(run_dir, mem_file):
-    """Return the cause of every reselection in the memory dump `mem_file` of a
-    run in `run_dir`, as reselection_causes returns them, or None when the dump
-    or the run's cfg.yaml cannot be read, the dump lacks a key of MEMORY_KEYS,
-    the environment has no tabular counter, or true_visit_of gives no true
-    visit Q-function."""
+    """Return `(causes, progress)` for the memory dump `mem_file` of a run in
+    `run_dir`: the cause of every reselection, as reselection_causes returns
+    them, and the true progress of the reselections attributed to
+    critic_error, as critic_error_progress returns it. Return None when the
+    dump or the run's cfg.yaml cannot be read, the dump lacks a key of
+    MEMORY_KEYS, the environment has no tabular counter, or true_visit_of gives
+    no true visit Q-function."""
 
     if not os.path.isfile(mem_file):
         return None
@@ -317,18 +344,23 @@ def read_memory_causes(run_dir, mem_file):
         return None
     size = len(mem["obs"])
     flat = {k: np.asarray(mem[k]).reshape(size) for k in MEMORY_KEYS if k not in ("obs", "goal_obs")}
-    return reselection_causes(
+    state = np.asarray(counter.bin_index(mem["obs"])).reshape(size)
+    goal = np.asarray(counter.bin_index(mem["goal_obs"])).reshape(size)
+    goal_act = flat["goal_act"].astype(np.int64)
+    selected = flat["goal_selection"].astype(bool)
+    causes = reselection_causes(
         true_visit,
-        np.asarray(counter.bin_index(mem["obs"])).reshape(size),
-        np.asarray(counter.bin_index(mem["goal_obs"])).reshape(size),
+        state,
+        goal,
         flat["act"].astype(np.int64),
-        flat["goal_act"].astype(np.int64),
+        goal_act,
         flat["has_goal"].astype(bool),
         flat["act_source"],
-        flat["goal_selection"].astype(bool),
+        selected,
         flat["term"].astype(bool) | flat["trunc"].astype(bool),
         ORACLE_TOL,
     )
+    return causes, critic_error_progress(true_visit, state, goal, goal_act, selected, causes)
 
 
 def memory_causes(config_id, seed):
@@ -342,21 +374,44 @@ def memory_causes(config_id, seed):
     return _memory_causes[mem_file]
 
 
-def cause_runs(drawing, env, index):
-    """Return the reselection causes of every run entry `index` selects in
-    `env`, one int array over the steps of its memory dump per run (see
-    reselection_causes), leaving out the runs without them (see
-    read_memory_causes)."""
+def memory_runs(drawing, env, index):
+    """Return read_memory_causes of every run entry `index` selects in `env`,
+    leaving out the runs without them."""
 
     rows = rows_of(drawing, env, index)
     if any(c not in rows.columns for c in (CONFIG_ID, SEED)):
         return []
     runs = []
     for config_id, seed in rows[[CONFIG_ID, SEED]].drop_duplicates().itertuples(index=False):
-        causes = memory_causes(config_id, seed)
-        if causes is not None:
-            runs.append(causes)
+        read = memory_causes(config_id, seed)
+        if read is not None:
+            runs.append(read)
     return runs
+
+
+def cause_runs(drawing, env, index):
+    """Return the reselection causes of every run entry `index` selects in
+    `env`, one int array over the steps of its memory dump per run (see
+    reselection_causes), leaving out the runs without them (see
+    read_memory_causes)."""
+
+    return [causes for causes, _progress in memory_runs(drawing, env, index)]
+
+
+def progress_rates(drawing, env, index):
+    """Return the reselections attributed to critic_error in the runs entry
+    `index` selects in `env`, by their steps of true progress (see
+    critic_error_progress) rounded to the nearest integer: one count per k from
+    0 to MARGIN_TAIL - 1 and one for every k from MARGIN_TAIL on, each as the
+    mean number per seed per 1,000 training steps over the steps of their memory
+    dumps. Return None when no run has them (see read_memory_causes)."""
+
+    runs = [progress for _causes, progress in memory_runs(drawing, env, index)]
+    if not runs:
+        return None
+    k = np.rint(np.concatenate([p[~np.isnan(p)] for p in runs])).astype(np.int64)
+    counts = np.bincount(np.clip(k, 0, MARGIN_TAIL), minlength=MARGIN_TAIL + 1)
+    return 1000.0 * counts / sum(len(p) for p in runs)
 
 
 def cause_counts(drawing, env, index):
@@ -454,10 +509,10 @@ def write_cause_tree(output_dir):
         "step": (5.2, 1.5, "First step losing $V^*$:\nwhat action caused it?"),
     }
     causes = {
-        "unreachable_at_selection": (2.9, 4.1, "wrong selection of $s_{\\mathrm{sel}}$\ncorrect reselection"),
+        "unreachable_at_selection": (3.2, 4.1, "wrong selection of $s_{\\mathrm{sel}}$\ncorrect reselection"),
         "became_unreachable": (3.6, 2.8, "correct reselection"),
-        "critic_error": (8.4, 1.5, "critic error in the check"),
-        "random_action": (2.5, 0.2, "$\\varepsilon$-greedy exploratory action"),
+        "critic_error": (8.1, 1.5, "critic error in the check"),
+        "random_action": (2.8, 0.2, "$\\varepsilon$-greedy exploratory action"),
         "suboptimal_action": (5.2, 0.2, "critic error while acting"),
         "env_noise": (8.2, 0.2, "transition stochasticity"),
     }
@@ -687,36 +742,94 @@ def draw_cause_figure(drawing, name, envs):
     return save_and_close(fig, drawing.output_dir, name, vprint)
 
 
+def cause_hist(drawing, env, index):
+    """Return `(edges, heights)` of the reselections of the runs entry `index`
+    selects in `env` over training: --cause_bins equal-width bins of the steps
+    of their memory dumps, and per cause of RESELECTION_CAUSES and bin the mean
+    number of reselections per seed per 1,000 training steps. Return None when
+    no run made a reselection."""
+
+    runs = cause_runs(drawing, env, index)
+    if not runs or not any((c >= 0).any() for c in runs):
+        return None
+    n_steps = max(len(c) for c in runs)
+    edges = np.linspace(0.0, n_steps, args.cause_bins + 1)
+    heights = np.zeros((len(RESELECTION_CAUSES), args.cause_bins))
+    for causes in runs:
+        steps = np.flatnonzero(causes >= 0)
+        for c in range(len(RESELECTION_CAUSES)):
+            heights[c] += np.histogram(steps[causes[steps] == c], bins=edges)[0]
+    return edges, 1000.0 * heights / len(runs) / np.diff(edges)
+
+
+def draw_cause_hist(ax, drawing, env, index, edges, heights):
+    """Draw the histogram `edges`, `heights` of cause_hist on `ax`, stacked by
+    cause in the order and the colours of CAUSE_STYLE, with round ticks on both
+    axes (see round_ticks). Over the bars, draw every statistic of
+    OVERLAY_STATS the runs entry `index` selects in `env` logged, on a
+    log-scale right axis against its logged steps, as the mean over seeds.
+    Return the right axis, None when no statistic was logged, and the set of
+    statistics drawn."""
+
+    bottom = np.zeros(heights.shape[1])
+    for cause, height in zip(RESELECTION_CAUSES, heights):
+        ax.bar(
+            edges[:-1],
+            height,
+            width=edges[1] - edges[0],
+            bottom=bottom,
+            align="edge",
+            color=CAUSE_STYLE[cause][1],
+            edgecolor="white",
+            linewidth=0.5,
+        )
+        bottom += height
+    twin, drawn = None, set()
+    rows = rows_of(drawing, env, index)
+    for stat, _label, color in OVERLAY_STATS:
+        series = series_of(rows, stat)
+        if series is None:
+            continue
+        if twin is None:
+            twin = ax.twinx()
+            twin.set_yscale("log")
+            twin.grid(False)
+        values, x, _steps, _seeds = series
+        twin.plot(
+            x,
+            values.mean(axis=1).to_numpy(),
+            color=color,
+            linewidth=OVERLAY_WIDTH,
+            path_effects=OUTLINE[color],
+        )
+        drawn.add(stat)
+    if twin is not None:
+        twin.tick_params(axis="y", labelsize=FONT_SIZE - 2, pad=1)
+    ax.set_xlim(edges[0], edges[-1])
+    round_ticks(ax, "x", STEP_TICK_BINS)
+    ax.xaxis.set_major_formatter(lambda v, _pos: f"{v / 1000:g}k")
+    ax.tick_params(axis="x", labelsize=FONT_SIZE - 2, pad=-2)
+    ax.tick_params(axis="y", labelsize=FONT_SIZE - 2, pad=1)
+    ax.set_ylim(bottom=0.0)
+    round_ticks(ax, "y", VALUE_TICK_BINS)
+    return twin, drawn
+
+
 def draw_cause_steps_figure(drawing, name, envs):
     """Draw when the reselections happened, a row per entry and a column per
     environment of `envs` with at least one reselection, and return the number
     of figures written.
 
-    A subplot is a histogram over the training steps in --cause_bins
-    equal-width bins of the steps of the memory dumps: the height of a bar is
-    the mean number of reselections per seed per 1,000 training steps in the
-    bin, stacked by cause in the order and the colours of CAUSE_STYLE. Both axes
-    carry round ticks (see round_ticks). A subplot with no reselection is left
-    blank.
-
-    Over the bars, every statistic of OVERLAY_STATS the entry's runs logged is
-    drawn on a log-scale right axis against its logged steps, as the mean over
-    seeds, and added to the legend."""
+    A subplot is the histogram of cause_hist, drawn by draw_cause_hist with the
+    statistics of OVERLAY_STATS over it, which are added to the legend. A
+    subplot with no reselection is left blank."""
 
     hists = {}
     for env in envs:
         for i in range(len(drawing.entries)):
-            runs = cause_runs(drawing, env, i)
-            if not runs or not any((c >= 0).any() for c in runs):
-                continue
-            n_steps = max(len(c) for c in runs)
-            edges = np.linspace(0.0, n_steps, args.cause_bins + 1)
-            heights = np.zeros((len(RESELECTION_CAUSES), args.cause_bins))
-            for causes in runs:
-                steps = np.flatnonzero(causes >= 0)
-                for c in range(len(RESELECTION_CAUSES)):
-                    heights[c] += np.histogram(steps[causes[steps] == c], bins=edges)[0]
-            hists[(env, i)] = (edges, 1000.0 * heights / len(runs) / np.diff(edges))
+            hist = cause_hist(drawing, env, i)
+            if hist is not None:
+                hists[(env, i)] = hist
     if not hists:
         vprint(f"  No reselection for {name}, skipping.")
         return 0
@@ -744,50 +857,10 @@ def draw_cause_steps_figure(drawing, name, envs):
             if (env, i) not in hists:
                 ax.set_axis_off()
                 continue
-            edges, heights = hists[(env, i)]
-            bottom = np.zeros(heights.shape[1])
-            for cause, height in zip(RESELECTION_CAUSES, heights):
-                ax.bar(
-                    edges[:-1],
-                    height,
-                    width=edges[1] - edges[0],
-                    bottom=bottom,
-                    align="edge",
-                    color=CAUSE_STYLE[cause][1],
-                    edgecolor="white",
-                    linewidth=0.5,
-                )
-                bottom += height
-            twin = None
-            rows = rows_of(drawing, env, i)
-            for stat, label, color in OVERLAY_STATS:
-                series = series_of(rows, stat)
-                if series is None:
-                    continue
-                if twin is None:
-                    twin = ax.twinx()
-                    twin.set_yscale("log")
-                    twin.grid(False)
-                values, x, _steps, _seeds = series
-                twin.plot(
-                    x,
-                    values.mean(axis=1).to_numpy(),
-                    color=color,
-                    linewidth=OVERLAY_WIDTH,
-                    path_effects=OUTLINE[color],
-                )
-                overlays.add(stat)
-            if twin is not None:
-                twin.tick_params(axis="y", labelsize=FONT_SIZE - 2, pad=1)
-                if c == n_cols - 1:
-                    twin.set_ylabel("Errors", fontsize=FONT_SIZE)
-            ax.set_xlim(edges[0], edges[-1])
-            round_ticks(ax, "x", STEP_TICK_BINS)
-            ax.xaxis.set_major_formatter(lambda v, _pos: f"{v / 1000:g}k")
-            ax.tick_params(axis="x", labelsize=FONT_SIZE - 2, pad=-2)
-            ax.tick_params(axis="y", labelsize=FONT_SIZE - 2, pad=1)
-            ax.set_ylim(bottom=0.0)
-            round_ticks(ax, "y", VALUE_TICK_BINS)
+            twin, stats = draw_cause_hist(ax, drawing, env, i, *hists[(env, i)])
+            overlays |= stats
+            if twin is not None and c == n_cols - 1:
+                twin.set_ylabel("Errors", fontsize=FONT_SIZE)
             ax.set_ylabel(
                 ylabel if c == 0 else "",
                 fontsize=FONT_SIZE,
@@ -795,6 +868,98 @@ def draw_cause_steps_figure(drawing, name, envs):
             )
 
     fig.subplots_adjust(hspace=0.35, wspace=0.5 if overlays else 0.3)
+    cause_legend(fig, [ax for row in axs for ax in row if ax.axison], overlays)
+    return save_and_close(fig, drawing.output_dir, name, vprint)
+
+
+def draw_margin_figure(drawing, name, margin):
+    """Draw, a row per entry, the histogram of cause_hist of every environment
+    in the `histograms` of the plot config's `margin` block, drawn by
+    draw_cause_hist, and next to them the reselections attributed to
+    critic_error by steps of true progress (see progress_rates) of every
+    environment in its `environments`, which maps an environment to its label.
+    The progress plot has a bar per environment at every k, in the grays of
+    MARGIN_GRAYS from dark to light in the order of `environments`, on a log
+    scale that ends a decade above the decade of the tallest bar, and a legend
+    of the environments in its upper right corner. Return the number of figures
+    written."""
+
+    hist_envs = list(margin.get("histograms") or [])
+    margin_labels = dict(margin.get("environments") or {})
+    rows = []
+    for i in range(len(drawing.entries)):
+        hists = {env: cause_hist(drawing, env, i) for env in hist_envs}
+        rates = {env: progress_rates(drawing, env, i) for env in margin_labels}
+        hists = {env: hist for env, hist in hists.items() if hist is not None}
+        rates = {env: rate for env, rate in rates.items() if rate is not None}
+        if hists or rates:
+            rows.append((i, hists, rates))
+    if not rows:
+        vprint(f"  No reselection for {name}, skipping.")
+        return 0
+    several = len(rows) > 1
+
+    n_cols = len(hist_envs) + 1
+    fig, axs = plt.subplots(
+        len(rows),
+        n_cols,
+        figsize=(MARGIN_W * n_cols, CAUSE_HIST_H * len(rows)),
+        squeeze=False,
+    )
+    grays = [str(g) for g in np.linspace(*MARGIN_GRAYS, len(margin_labels))]
+    width = 0.8 / max(len(margin_labels), 1)
+    x = np.arange(MARGIN_TAIL + 1)
+    overlays = set()
+    for r, (i, hists, rates) in enumerate(rows):
+        hist_ylabel = "Reselections / 1k Steps"
+        margin_ylabel = "Approx. Error\nReselections / 1k Steps"
+        if several:
+            hist_ylabel = f"{drawing.entries[i]['label']}\n{hist_ylabel}"
+            margin_ylabel = f"{drawing.entries[i]['label']}\n{margin_ylabel}"
+        for c, env in enumerate(hist_envs):
+            ax = axs[r][c]
+            if r == 0:
+                title = margin_labels.get(env, drawing.env_labels.get(str(env), str(env))).replace("\n", " ")
+                ax.set_title(title, fontsize=MARGIN_FONT_SIZE, **tex_kwargs(title))
+            if env not in hists:
+                ax.set_axis_off()
+                continue
+            twin, stats = draw_cause_hist(ax, drawing, env, i, *hists[env])
+            overlays |= stats
+            if twin is not None:
+                twin.set_ylabel("Errors", fontsize=MARGIN_FONT_SIZE)
+            ax.set_ylabel(hist_ylabel if c == 0 else "", fontsize=MARGIN_FONT_SIZE, **tex_kwargs(hist_ylabel))
+        ax = axs[r][-1]
+        for j, (env, label) in enumerate(margin_labels.items()):
+            if env not in rates:
+                continue
+            ax.bar(
+                x + (j - (len(margin_labels) - 1) / 2) * width,
+                rates[env],
+                width=width,
+                color=grays[j],
+                edgecolor="black",
+                linewidth=0.8,
+                label=label,
+            )
+        ax.set_yscale("log")
+        peak = max((rate.max() for rate in rates.values()), default=0.0)
+        if peak > 0:
+            ax.set_ylim(top=10.0 ** (np.ceil(np.log10(peak)) + 1))
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(k) for k in range(MARGIN_TAIL)] + [f"$\\geq${MARGIN_TAIL}"])
+        ax.xaxis.grid(False)
+        ax.tick_params(axis="both", labelsize=FONT_SIZE - 2, pad=1)
+        ax.set_xlabel("Net steps toward the goal ($k$)", fontsize=MARGIN_FONT_SIZE)
+        ax.set_ylabel(margin_ylabel, fontsize=MARGIN_FONT_SIZE, **tex_kwargs(margin_ylabel))
+        ax.legend(
+            loc="upper right",
+            borderaxespad=0.1,
+            frameon=False,
+            fontsize=MARGIN_FONT_SIZE - 2,
+        )
+
+    fig.subplots_adjust(hspace=0.35, wspace=0.65)
     cause_legend(fig, [ax for row in axs for ax in row if ax.axison], overlays)
     return save_and_close(fig, drawing.output_dir, name, vprint)
 
@@ -854,6 +1019,8 @@ def draw_config(config_name, cfg):
         suffix = f"_{group_name}" if group_name else ""
         written += draw_cause_figure(drawing, f"reselection_causes{suffix}", present)
         written += draw_cause_steps_figure(drawing, f"reselection_causes_steps{suffix}", present)
+    if cfg.get("margin"):
+        written += draw_margin_figure(drawing, "reselection_margin", cfg["margin"])
     written += write_cause_legend(output_dir)
     written += write_cause_tree(output_dir)
 

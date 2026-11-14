@@ -652,17 +652,21 @@ if not run_dirs:
 NO_SEED = -1  # a configuration that has not saved a memory for any seed
 
 flat_cfgs, run_cfgs, mem_files, run_seeds = {}, {}, {}, {}
+read_cfgs = {}  # cfg.yaml path -> read_run_cfg of it, read once per configuration
 
 
 def read_cfg(cfg_dir, name, mem_file, seed):
     """Put one entry in the frame. A `mem_file` of None is a configuration with
-    nothing to draw yet, and it is here for its hyperparameters alone."""
+    nothing to draw yet, and it is here for its hyperparameters alone. The
+    cfg.yaml of `cfg_dir` is read once and reused for every seed."""
 
     cfg_file = cfg_dir / "cfg.yaml"
     if not cfg_file.is_file():
         missing_cfg.append(cfg_dir.name)
         return
-    _, run_cfg, reason = read_run_cfg(cfg_file)
+    if cfg_file not in read_cfgs:
+        read_cfgs[cfg_file] = read_run_cfg(cfg_file)
+    _, run_cfg, reason = read_cfgs[cfg_file]
     if reason is not None:
         vprint(f"  WARNING: {cfg_file} {reason}.")
         bad_cfg.append(cfg_dir.name)

@@ -985,13 +985,15 @@ def save_and_close(fig, folder, name, vprint, dpi=300, pad_inches=0.1, note=""):
     return 1
 
 
-def write_legend(entries, plot_cfg, output_dir, font_size):
+def write_legend(entries, plot_cfg, output_dir, font_size, rows=()):
     """Write the legend of `entries` on its own, for a figure that has to carry
     one elsewhere, and return the paths written.
 
-    Both shapes are written every time, since which one fits depends on the
+    Every shape is written every time, since which one fits depends on the
     document the figure goes into rather than on the data. The horizontal is laid
-    out by `legend_rows_cols`; the vertical is always one entry per row."""
+    out by `legend_rows_cols`; the vertical is always one entry per row. Every
+    number of rows in `rows` adds a legend laid out over that many rows (see
+    write_legend_handles)."""
 
     # Thick strokes in the curves' linestyles. Dash lengths scale with the line
     # width, so the handle is long enough to hold a full dash-dot period.
@@ -1006,22 +1008,25 @@ def write_legend(entries, plot_cfg, output_dir, font_size):
         )
         for e in entries
     ]
-    return write_legend_handles(handles, plot_cfg, output_dir, font_size)
+    return write_legend_handles(handles, plot_cfg, output_dir, font_size, rows)
 
 
-def write_legend_handles(handles, plot_cfg, output_dir, font_size):
+def write_legend_handles(handles, plot_cfg, output_dir, font_size, rows=()):
     """Write a legend of `handles` on its own, as legend_horizontal and
     legend_vertical in `output_dir`, and return the paths written.
 
     The horizontal is laid out by `legend_rows_cols`; the vertical is always one
-    entry per row."""
+    entry per row. For every number of rows n in `rows`, legend_<n>_rows is
+    written too, with ceil(len(handles) / n) columns filled column by column."""
 
     if not handles:
         return []
     n_cols = rows_cols(plot_cfg.get("legend_rows_cols"), len(handles))[1]
+    shapes = [("legend_horizontal", n_cols), ("legend_vertical", 1)]
+    shapes += [(f"legend_{n}_rows", -(-len(handles) // n)) for n in rows]
 
     paths = []
-    for name, cols in (("legend_horizontal", n_cols), ("legend_vertical", 1)):
+    for name, cols in shapes:
         fig_legend = plt.figure()
         ax_legend = fig_legend.add_subplot(111)
         ax_legend.axis("off")

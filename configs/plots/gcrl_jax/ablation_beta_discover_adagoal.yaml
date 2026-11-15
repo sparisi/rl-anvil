@@ -1,0 +1,32 @@
+# rl-anvil's configs/plots/gcrl/ablation_beta_discover.yaml at 803d261 plus the AdaGoal
+# entry that the paper's Classic control rows and legend carry since 2026-11-14
+# (Overleaf 3d9b6cb; not in rl-anvil's repository at the time of writing).
+default:
+  - default
+
+configs:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      plot.label: "SUN (Multipl.)"
+  adagoal:
+    - algorithm: adagoal
+      plot.label: "AdaGoal"
+  random:
+    - algorithm: random
+      plot.label: "Random"
+  discover:
+    - algorithm: discover
+      agent.actor.beta_novelty: 0.1
+      plot.label: "$\\beta = 0.1$"
+    - algorithm: discover
+      agent.actor.beta_novelty: 1
+      plot.label: "$\\beta = 1$"
+    - algorithm: discover
+      agent.actor.beta_novelty: 10
+      plot.label: "$\\beta = 10$"
+    - algorithm: discover
+      agent.actor.beta_novelty: 100
+      plot.label: "$\\beta = 100$"
+    - algorithm: discover
+      agent.actor.beta_novelty: 1_000
+      plot.label: "$\\beta = 1,000$"

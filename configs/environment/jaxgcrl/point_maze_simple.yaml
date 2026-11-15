@@ -1,0 +1,16 @@
+# @package _global_
+# A JaxGCRL task trained in the SUN JAX repository (sun-jaxgcrl), not by main.py.
+# This file exists so the plotting scripts can place the curves exported from
+# those runs (export_beta_sweep.py): `id` names the task and `training_steps` is
+# the last recorded environment step, the extent of the x axis. The remaining
+# keys are placeholders that the interpolations of configs/default.yaml and of
+# the algorithm YAMLs need in order to compose; they describe no run.
+
+environment:
+  id: JaxGCRL/POINT_MAZE_SIMPLE
+
+experiment:
+  warm_up: 0
+  cool_down: 0
+  training_steps: 5088000
+  testing_episodes: 0

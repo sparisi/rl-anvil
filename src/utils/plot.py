@@ -952,10 +952,10 @@ def tex_kwargs(label):
     )
 
 
-def save_figure(fig, folder, name, dpi=300, pad_inches=0.1):
+def save_figure(fig, folder, name, dpi=300, pad_inches=0.1, bbox_inches="tight"):
     """Save `fig` as `folder/name.png`, cropped to its content with `pad_inches`
-    of margin, and return the path to it, or None when the file cannot be
-    written.
+    of margin, or to the Bbox in inches `bbox_inches` when one is given, and
+    return the path to it, or None when the file cannot be written.
 
     The name is sanitized with pathvalidate, which strips the characters a
     filename cannot hold, and the path is normalized so its separators are the
@@ -965,19 +965,20 @@ def save_figure(fig, folder, name, dpi=300, pad_inches=0.1):
     name = sanitize_filename(name, platform="auto")
     path = os.path.normpath(os.path.join(folder, name + ".png"))
     try:
-        fig.savefig(path, bbox_inches="tight", pad_inches=pad_inches, dpi=dpi)
+        fig.savefig(path, bbox_inches=bbox_inches, pad_inches=pad_inches, dpi=dpi)
     except OSError as e:
         print(f"WARNING: could not write {path}: {e}")
         return None
     return path
 
 
-def save_and_close(fig, folder, name, vprint, dpi=300, pad_inches=0.1, note=""):
-    """Save `fig` as `folder/name.png` with `dpi` and `pad_inches` (see
-    save_figure), close it, print the path followed by `note` through `vprint`
-    and return 1, or return 0 when the file cannot be written."""
+def save_and_close(fig, folder, name, vprint, dpi=300, pad_inches=0.1, note="", bbox_inches="tight"):
+    """Save `fig` as `folder/name.png` with `dpi`, `pad_inches` and
+    `bbox_inches` (see save_figure), close it, print the path followed by
+    `note` through `vprint` and return 1, or return 0 when the file cannot be
+    written."""
 
-    path = save_figure(fig, folder, name, dpi=dpi, pad_inches=pad_inches)
+    path = save_figure(fig, folder, name, dpi=dpi, pad_inches=pad_inches, bbox_inches=bbox_inches)
     plt.close(fig)
     if path is None:
         return 0

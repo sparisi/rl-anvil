@@ -1,0 +1,18 @@
+global_sweep:
+  environment:
+    - gym_gridworlds/three_rooms_wall_mini_nonuniform
+    - gym_gridworlds/four_rooms_stuck_hard
+    - gym_gridworlds/travel_field_small
+    - gymnasium/acrobot
+    - gymnasium/mountain_car
+    - gymnasium/pendulum_discrete
+    - gymnasium/cart_pole
+    - gymnasium/lunar_lander
+  algorithm:
+    - adagoal
+    - discover
+    - random
+    - sun_ratio_adaptive
+    - eps_greedy
+  agent.critic.explore_only: False
+  results.save_memory: True

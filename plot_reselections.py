@@ -30,6 +30,18 @@ under configs/plots without the extension:
                     OVERLAY_STATS the runs logged are drawn over the bars on a
                     log-scale right axis, as the mean over seeds.
 
+The `histograms` block of the plot config maps a group name to a list of
+environments, and each group gets one more reselection_causes_steps_<group>.png
+over those environments alone, without the curves of OVERLAY_STATS, a bar
+figure or a table, with the total reselections as a percentage of the training
+steps in the top right corner of every subplot and the legend of the causes in
+one column inside the first subplot, and its legend of the
+causes alone in one column as
+reselection_causes_steps_<group>_legend_vertical.png and in one row as
+reselection_causes_steps_<group>_legend_horizontal.png. The environments are
+labelled as
+in `environments`.
+
 When the plot config has a `margin` block, one more file is written there:
 
   reselection_margin.png
@@ -167,6 +179,12 @@ CAUSE_LABEL_MIN = 0.04
 # Inches per bar of reselection_causes, and the width of the figure.
 CAUSE_BAR_H = 0.55
 CAUSE_FIG_W = 8.0
+# Inches of margin below the entries of the standalone legends of the causes
+# of write_cause_steps_legends.
+CAUSE_LEGEND_BOTTOM = 0.25
+# Height, as a fraction of the axes, of the top of the legend of the causes
+# drawn inside a subplot of draw_cause_steps_figure.
+INNER_LEGEND_TOP = 0.69
 # Inches spanned by the axis limits of reselection_causes_tree, in width and in
 # height, before the figure is cropped to its boxes and notes.
 TREE_FIG_W = 8.9
@@ -432,10 +450,11 @@ def cause_counts(drawing, env, index):
     return counts, len(runs), max(len(c) for c in runs)
 
 
-def add_cause_legend(fig, overlays=(), **kwargs):
-    """Draw the legend of the causes of CAUSE_STYLE on `fig` without a frame,
-    placed by the fig.legend keyword arguments `kwargs`. Without curves, the
-    causes fill three columns. With the curves of OVERLAY_STATS named in
+def add_cause_legend(fig, overlays=(), n_cols=3, fontsize=FONT_SIZE - 2, **kwargs):
+    """Draw the legend of the causes of CAUSE_STYLE on `fig`, a figure or an
+    axes, without a frame, in `fontsize` points, placed by the legend keyword
+    arguments `kwargs`. Without curves, the
+    causes fill `n_cols` columns. With the curves of OVERLAY_STATS named in
     `overlays`, the causes keep the columns they take when the curves follow
     them in three columns, and the curves fill one more row below them, one per
     column from the left."""
@@ -449,7 +468,7 @@ def add_cause_legend(fig, overlays=(), **kwargs):
         for stat, label, color in OVERLAY_STATS
         if stat in overlays
     ]
-    entries, n_cols = causes, 3
+    entries = causes
     if curves:
         blank = (Line2D([], [], linestyle="none"), "")
         # fig.legend fills its columns top to bottom, so the entries are listed
@@ -465,7 +484,7 @@ def add_cause_legend(fig, overlays=(), **kwargs):
         [label for _handle, label in entries],
         ncol=n_cols,
         frameon=False,
-        fontsize=FONT_SIZE - 2,
+        fontsize=fontsize,
         **kwargs,
     )
 
@@ -493,6 +512,28 @@ def write_cause_legend(output_dir):
     fig = plt.figure(figsize=(CAUSE_FIG_W, 0.8))
     add_cause_legend(fig, [stat for stat, _label, _color in OVERLAY_STATS], loc="center")
     return save_and_close(fig, output_dir, "reselection_causes_legend", vprint)
+
+
+def write_cause_steps_legends(output_dir, name):
+    """Write the legend of the causes of CAUSE_STYLE alone, in one column to
+    <name>_vertical.png and in one row to <name>_horizontal.png in
+    `output_dir`, and return the number of figures written. Each image is
+    cropped to the entries on the top, left and right, and keeps
+    CAUSE_LEGEND_BOTTOM inches of margin below them."""
+
+    n = len(CAUSE_STYLE)
+    written = 0
+    for shape, n_cols, size in (
+        ("vertical", 1, (CAUSE_FIG_W / 3, 0.3 * n)),
+        ("horizontal", n, (CAUSE_FIG_W * 2, 0.5)),
+    ):
+        fig = plt.figure(figsize=size)
+        add_cause_legend(fig, n_cols=n_cols, loc="center", borderpad=0.0)
+        fig.canvas.draw()
+        box = fig.legends[0].get_window_extent().transformed(fig.dpi_scale_trans.inverted())
+        crop = Bbox.from_extents(box.x0, box.y0 - CAUSE_LEGEND_BOTTOM, box.x1, box.y1)
+        written += save_and_close(fig, output_dir, f"{name}_{shape}", vprint, bbox_inches=crop)
+    return written
 
 
 def write_cause_tree(output_dir):
@@ -766,13 +807,13 @@ def cause_hist(drawing, env, index):
     return edges, 1000.0 * heights / len(runs) / np.diff(edges)
 
 
-def draw_cause_hist(ax, drawing, env, index, edges, heights):
+def draw_cause_hist(ax, drawing, env, index, edges, heights, errors=True):
     """Draw the histogram `edges`, `heights` of cause_hist on `ax`, stacked by
     cause in the order and the colours of CAUSE_STYLE, with round ticks on both
-    axes (see round_ticks). Over the bars, draw every statistic of
-    OVERLAY_STATS the runs entry `index` selects in `env` logged, on a
+    axes (see round_ticks). With `errors`, draw over the bars every statistic
+    of OVERLAY_STATS the runs entry `index` selects in `env` logged, on a
     log-scale right axis against its logged steps, as the mean over seeds.
-    Return the right axis, None when no statistic was logged, and the set of
+    Return the right axis, None when no statistic was drawn, and the set of
     statistics drawn."""
 
     bottom = np.zeros(heights.shape[1])
@@ -790,7 +831,7 @@ def draw_cause_hist(ax, drawing, env, index, edges, heights):
         bottom += height
     twin, drawn = None, set()
     rows = rows_of(drawing, env, index)
-    for stat, _label, color in OVERLAY_STATS:
+    for stat, _label, color in OVERLAY_STATS if errors else ():
         series = series_of(rows, stat)
         if series is None:
             continue
@@ -819,14 +860,28 @@ def draw_cause_hist(ax, drawing, env, index, edges, heights):
     return twin, drawn
 
 
-def draw_cause_steps_figure(drawing, name, envs):
+def draw_cause_steps_figure(
+    drawing,
+    name,
+    envs,
+    errors=True,
+    legend=True,
+    total=False,
+    inner_legend=False,
+):
     """Draw when the reselections happened, a row per entry and a column per
     environment of `envs` with at least one reselection, and return the number
     of figures written.
 
     A subplot is the histogram of cause_hist, drawn by draw_cause_hist with the
-    statistics of OVERLAY_STATS over it, which are added to the legend. A
-    subplot with no reselection is left blank."""
+    statistics of OVERLAY_STATS over it when `errors` is set, which are added
+    to the legend. A subplot with no reselection is left blank. Without
+    `legend`, the figure is drawn without the legend under the subplots. With
+    `inner_legend`, the legend of the causes is drawn in one column inside the
+    top left subplot, in its right half below INNER_LEGEND_TOP. With `total`, the top
+    right corner of every subplot reads "Total reselections:" over "<x>% of
+    training steps", x being the mean number of reselections per seed as a percentage
+    of the training steps (see cause_counts)."""
 
     hists = {}
     for env in envs:
@@ -861,8 +916,30 @@ def draw_cause_steps_figure(drawing, name, envs):
             if (env, i) not in hists:
                 ax.set_axis_off()
                 continue
-            twin, stats = draw_cause_hist(ax, drawing, env, i, *hists[(env, i)])
+            twin, stats = draw_cause_hist(ax, drawing, env, i, *hists[(env, i)], errors=errors)
             overlays |= stats
+            if total:
+                counts, n_runs, n_steps = cause_counts(drawing, env, i)
+                ax.text(
+                    0.98,
+                    0.95,
+                    f"Total reselections:\n{100 * counts.sum() / (n_runs * n_steps):.1f}% of training steps",
+                    transform=ax.transAxes,
+                    ha="right",
+                    va="top",
+                    fontsize=FONT_SIZE - 1,
+                )
+            if inner_legend and r == 0 and c == 0:
+                add_cause_legend(
+                    ax,
+                    n_cols=1,
+                    fontsize=FONT_SIZE - 4,
+                    loc="upper right",
+                    bbox_to_anchor=(0.99, INNER_LEGEND_TOP),
+                    borderpad=0.0,
+                    labelspacing=0.3,
+                    handlelength=1.2,
+                )
             if twin is not None and c == n_cols - 1:
                 twin.set_ylabel("Errors", fontsize=FONT_SIZE)
             ax.set_ylabel(
@@ -871,8 +948,9 @@ def draw_cause_steps_figure(drawing, name, envs):
                 **tex_kwargs(ylabel),
             )
 
-    fig.subplots_adjust(hspace=0.35, wspace=0.5 if overlays else 0.3)
-    cause_legend(fig, [ax for row in axs for ax in row if ax.axison], overlays)
+    fig.subplots_adjust(hspace=0.35, wspace=0.5 if overlays else 0.15)
+    if legend:
+        cause_legend(fig, [ax for row in axs for ax in row if ax.axison], overlays)
     return save_and_close(fig, drawing.output_dir, name, vprint)
 
 
@@ -1023,6 +1101,19 @@ def draw_config(config_name, cfg):
         suffix = f"_{group_name}" if group_name else ""
         written += draw_cause_figure(drawing, f"reselection_causes{suffix}", present)
         written += draw_cause_steps_figure(drawing, f"reselection_causes_steps{suffix}", present)
+    for group_name, envs in (cfg.get("histograms") or {}).items():
+        present = [e for e in envs if (drawing.env_stem == e).any()]
+        if present:
+            written += draw_cause_steps_figure(
+                drawing,
+                f"reselection_causes_steps_{group_name}",
+                present,
+                errors=False,
+                legend=False,
+                total=True,
+                inner_legend=True,
+            )
+            written += write_cause_steps_legends(output_dir, f"reselection_causes_steps_{group_name}_legend")
     if cfg.get("margin"):
         written += draw_margin_figure(drawing, "reselection_margin", cfg["margin"])
     written += write_cause_legend(output_dir)

@@ -5,6 +5,9 @@ configs:
   sun_ratio_adaptive:
     - algorithm: sun_ratio_adaptive
       plot.label: "SUN (Multipl.)"
+  adagoal:
+    - algorithm: adagoal
+      plot.label: "AdaGoal"
   random:
     - algorithm: random
       plot.label: "Random"

@@ -12,6 +12,11 @@ environments:
     gym_gridworlds/four_rooms_stuck_hard: "FourRoomStuck"
     gym_gridworlds/four_rooms_stuck_hard_sticky: "FourRoomStuck\n(Sticky Act.)"
 
+histograms:
+  gridworlds_main:
+    - gym_gridworlds/three_rooms_wall_mini_nonuniform
+    - gym_gridworlds/four_rooms_stuck_hard
+
 margin:
   histograms:
     - gym_gridworlds/four_rooms_stuck_hard_no_noise

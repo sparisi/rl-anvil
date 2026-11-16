@@ -282,8 +282,10 @@ TIMEOUTS_ENV = {
 # Algorithms not listed here use a factor of 1.
 TIMEOUTS_ADJUST_ALGO = {
     "random": 0.3,
-    "discover": 1.3,
-    "adagoal": 1.3,
+    "discover_episodic": 1.3,
+    "adagoal_episodic": 1.3,
+    "discover_adaptive": 1.3,
+    "adagoal_adaptive": 1.3,
     "sun_ratio_adaptive": 1.3,
     "sun_ucb_adaptive": 1.3,
     "sun_ratio_step": 1.3,

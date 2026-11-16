@@ -11,11 +11,11 @@ configs:
       agent.critic.explore_only: False
       plot.label: "SUN"
   adagoal:
-    - algorithm: adagoal
+    - algorithm: adagoal_episodic
       agent.critic.explore_only: False
       plot.label: "AdaGoal"
   discover:
-    - algorithm: discover
+    - algorithm: discover_episodic
       agent.critic.explore_only: False
       plot.label: "DISCOVER"
   random:

@@ -29,10 +29,10 @@ configs:
     - algorithm: sun_ratio_adaptive
       plot.label: "SUN"
   adagoal:
-    - algorithm: adagoal
+    - algorithm: adagoal_episodic
       plot.label: "AdaGoal"
   discover:
-    - algorithm: discover
+    - algorithm: discover_episodic
       plot.label: "DISCOVER"
   random:
     - algorithm: random

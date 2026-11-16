@@ -3,23 +3,23 @@ default:
 
 configs:
   discover:
-    - algorithm: discover
+    - algorithm: discover_episodic
       agent.actor.batch_size_goal: 256
       plot.label: "DISCOVER (256)"
-    - algorithm: discover
+    - algorithm: discover_episodic
       agent.actor.batch_size_goal: 2500
       plot.label: "DISCOVER (2,500)"
-    - algorithm: discover
+    - algorithm: discover_episodic
       agent.actor.batch_size_goal: 10_000
       plot.label: "DISCOVER (10,000)"
   adagoal:
-    - algorithm: adagoal
+    - algorithm: adagoal_episodic
       agent.actor.batch_size_goal: 256
       plot.label: "AdaGoal (256)"
-    - algorithm: adagoal
+    - algorithm: adagoal_episodic
       agent.actor.batch_size_goal: 2500
       plot.label: "AdaGoal (2,500)"
-    - algorithm: adagoal
+    - algorithm: adagoal_episodic
       agent.actor.batch_size_goal: 10_000
       plot.label: "AdaGoal (10,000)"
   sun_ratio_episodic:

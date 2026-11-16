@@ -12,8 +12,8 @@ global_sweep:
     - gymnasium/lunar_lander_noisyact
     # - gymnasium/lunar_lander_full
   algorithm:
-    - adagoal
-    - discover
+    - adagoal_episodic
+    - discover_episodic
     - random
     - sun_ratio_adaptive
     - sun_ratio_adaptive_binned

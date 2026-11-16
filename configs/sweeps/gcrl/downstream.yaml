@@ -9,8 +9,8 @@ global_sweep:
     - gymnasium/cart_pole
     - gymnasium/lunar_lander
   algorithm:
-    - adagoal
-    - discover
+    - adagoal_episodic
+    - discover_episodic
     - random
     - sun_ratio_adaptive
     - eps_greedy

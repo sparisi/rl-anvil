@@ -6,19 +6,19 @@ configs:
     - algorithm: sun_ratio_adaptive
       plot.label: "SUN (Multipl.)"
   discover:
-    - algorithm: discover
+    - algorithm: discover_episodic
       agent.actor.beta_novelty: 0.1
       plot.label: "$\\beta = 0.1$"
-    - algorithm: discover
+    - algorithm: discover_episodic
       agent.actor.beta_novelty: 1
       plot.label: "$\\beta = 1$"
-    - algorithm: discover
+    - algorithm: discover_episodic
       agent.actor.beta_novelty: 10
       plot.label: "$\\beta = 10$"
-    - algorithm: discover
+    - algorithm: discover_episodic
       agent.actor.beta_novelty: 100
       plot.label: "$\\beta = 100$"
-    - algorithm: discover
+    - algorithm: discover_episodic
       agent.actor.beta_novelty: 1_000
       plot.label: "$\\beta = 1,000$"
   sun_ucb_adaptive:

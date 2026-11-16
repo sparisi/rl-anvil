@@ -14,14 +14,14 @@ configs:
       plot.label: "SUN (At Success)"
       plot.color: "#0173B2"
   adagoal:
-    - algorithm: adagoal
+    - algorithm: adagoal_episodic
       plot.label: "AdaGoal (Epis.)"
       plot.color: "#DE8F05"
     - algorithm: adagoal_success
       plot.label: "AdaGoal (At Success)"
       plot.color: "#DE8F05"
   discover:
-    - algorithm: discover
+    - algorithm: discover_episodic
       plot.label: "DISCOVER (Epis.)"
       plot.color: "#029E73"
     - algorithm: discover_success

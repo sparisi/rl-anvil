@@ -8,6 +8,7 @@ agent:
     id: QEnsemble
     n_critics: 4
     critics_id: QVisitNetwork
+    aggregation: episodic
     relabeling:
       id: her_future
       K: 4

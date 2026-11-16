@@ -124,6 +124,9 @@ class Critic(ABC):
     def post_step(self, *args, **kwargs):
         pass
 
+    def reset_episode(self, obs, rng_generator=None, *args, **kwargs):
+        pass
+
     def train(self):
         pass
 
@@ -668,6 +671,9 @@ class QEnsemble(Critic):
     - max: Q(s, a) = max_k Q_k(s, a)
     - mean: Q(s, a) = mean Q_k(s, a)
     - random: Q(s, a) = Q_k(s, a) with k random
+    - episodic: Q(s, a) = Q_k(s, a) with k drawn by reset_episode at the start
+      of the episode (store in self.episode_critic_idx), one per environment
+      when the reset observation stacks several
     """
 
     def __init__(
@@ -682,9 +688,11 @@ class QEnsemble(Critic):
     ):
         self.n_critics = n_critics
         assert (
-            aggregation in ("min", "max", "mean", "random")
-        ), f"aggregation must be either min, max, mean, or random (got {aggregation})"
+            aggregation in ("min", "max", "mean", "random", "episodic")
+        ), f"aggregation must be either min, max, mean, random, or episodic (got {aggregation})"
         self.aggregation = aggregation
+        self.obs_shape = obs_space.shape
+        self.episode_critic_idx = None
         critic_cls = globals()[critics_id]
         self.critics = [
             critic_cls(
@@ -717,6 +725,21 @@ class QEnsemble(Critic):
             i = rng_generator.integers(self.n_critics)
             return self.critics[i](*args, **kwargs)
 
+        if self.aggregation == "episodic":
+            idx = self.episode_critic_idx
+            if idx is None:
+                raise RuntimeError("The episodic aggregation needs reset_episode before the first call.")
+            if np.ndim(idx) == 0:  # One environment: one member, call only that
+                return self.critics[idx](*args, **kwargs)
+            else:  # Parallel environments: call all members and ensure environment indexing is correct
+                values = np.stack([c(*args, **kwargs) for c in self.critics], axis=0)
+                if values.shape[1] != len(idx):
+                    raise ValueError(
+                        f"The episodic aggregation holds {len(idx)} environments, but the "
+                        f"values have {values.shape[1]} rows along their leading axis."
+                    )
+                return values[idx, np.arange(len(idx))]
+
         values = np.stack([c(*args, **kwargs) for c in self.critics], axis=0)
         if self.aggregation == "min":
             return values.min(axis=0)
@@ -743,6 +766,19 @@ class QEnsemble(Critic):
     def post_step(self, *args, **kwargs):
         for c in self.critics:
             c.post_step(*args, **kwargs)
+
+    def reset_episode(self, obs, rng_generator=None):
+        """Under the episodic aggregation, draw from `rng_generator` (a new
+        unseeded one when None) the member that answers for the episode: one
+        int when `obs` is the reset observation of one environment, one per
+        environment when it stacks several along its leading axis. Other
+        aggregations draw nothing."""
+
+        if self.aggregation == "episodic":
+            if rng_generator is None:
+                rng_generator = self.rng_generator()
+            n_envs = np.shape(obs)[0] if np.ndim(obs) > len(self.obs_shape) else None
+            self.episode_critic_idx = rng_generator.integers(self.n_critics, size=n_envs)
 
     def reset(self, seed=None):
         for i, c in enumerate(self.critics):

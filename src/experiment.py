@@ -449,6 +449,8 @@ class Experiment:
                 critic_rng = self._critic.rng_generator(seed=critic_seed)
 
                 obs, info = self._env_train.reset(seed=env_seed)
+                self._actor.reset_episode(obs, actor_rng)
+                self._critic.reset_episode(obs, critic_rng)
                 ep_steps = 0
                 ep_disc_return = 0.0
                 ep_undisc_return = 0.0
@@ -747,6 +749,7 @@ class Experiment:
         ep_seed = self._seed_test
         test_rng = self._critic_test.rng_generator(seed=self._rng_seed)
         obs, _ = self._env_test.reset(seed=ep_seed)  # ep_seed is fixed per experiment.rng_seed
+        self._critic_test.reset_episode(obs, test_rng)
 
         if self._save_videos and self._data_dir is not None:
             import cv2

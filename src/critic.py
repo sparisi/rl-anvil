@@ -122,6 +122,9 @@ class Critic(ABC):
     def post_step(self, *args, **kwargs):
         pass
 
+    def reset_episode(self, obs, rng_generator=None, *args, **kwargs):
+        pass
+
     def train(self):
         pass
 

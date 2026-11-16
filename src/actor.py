@@ -147,6 +147,9 @@ class Actor(ABC):
         if self._pi is not None:
             self._pi.reset(seed=seed)
 
+    def reset_episode(self, obs, rng_generator=None, *args, **kwargs):
+        pass
+
     def eval(self):
         self._train = False
 

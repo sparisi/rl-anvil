@@ -17,9 +17,14 @@ under configs/plots without the extension:
                     noise, or kept its true value while the value check fired
                     (approximation error). Each reselection has one cause (see
                     src.utils.reachability.reselection_causes).
-  reselection_causes_<group>.tex
-                    the same numbers as a booktabs LaTeX tabular: the number
-                    of reselections and the percentage of each cause per bar.
+  reselection_unreachable_<group>.png
+                    a 100% stacked horizontal bar per environment and entry
+                    with goals unreachable from the state of their last
+                    selection: the fraction of them, pooled over seeds, that a
+                    reselection replaced and that were kept until the end of
+                    their episode, with their number and the median steps from
+                    their first selection to the reselection at the end of the
+                    bar (see src.utils.reachability.unreachable_selections).
   reselection_causes_steps_<group>.png
                     the same reselections over training, a row per entry and a
                     column per environment with reselections: a histogram in
@@ -32,8 +37,8 @@ under configs/plots without the extension:
 
 The `histograms` block of the plot config maps a group name to a list of
 environments, and each group gets one more reselection_causes_steps_<group>.png
-over those environments alone, without the curves of OVERLAY_STATS, a bar
-figure or a table, with the total reselections as a percentage of the training
+over those environments alone, without the curves of OVERLAY_STATS or the bar
+figures, with the total reselections as a percentage of the training
 steps in the top right corner of every subplot and the legend of the causes in
 one column inside the first subplot, and its legend of the
 causes alone in one column as
@@ -74,7 +79,6 @@ Example
 import argparse
 import json
 import os
-import re
 import sys
 from ast import literal_eval
 from dataclasses import dataclass, field
@@ -117,6 +121,7 @@ from src.utils.reachability import (
     RESELECTION_CAUSES,
     critic_error_progress,
     reselection_causes,
+    unreachable_selections,
 )
 from src.wrappers import gym_wrappers
 
@@ -156,6 +161,13 @@ CAUSE_STYLE = {
     "suboptimal_action": ("Suboptimal action", "#4393c3", "white"),
     "env_noise": ("Environment noise", "#2166ac", "white"),
     "critic_error": ("Approximation error", "#bababa", "black"),
+}
+# Label, colour and label colour of the goals unreachable from the state of
+# their last selection that a reselection replaced, in the red of
+# unreachable_at_selection, and of those kept until the end of their episode.
+UNREACHABLE_STYLE = {
+    "replaced": ("Replaced by the check", "#b2182b", "white"),
+    "kept": ("Kept until the end of the episode", "#fddbc7", "black"),
 }
 # Statistic, label and colour of each curve drawn over the bars of
 # reselection_causes_steps: the absolute error of the difference
@@ -334,10 +346,13 @@ def true_visit_of(env_cfg, critic_cfg):
 
 
 def read_memory_causes(run_dir, mem_file):
-    """Return `(causes, progress)` for the memory dump `mem_file` of a run in
-    `run_dir`: the cause of every reselection, as reselection_causes returns
-    them, and the true progress of the reselections attributed to
-    critic_error, as critic_error_progress returns it. Return None when the
+    """Return `(causes, progress, fates, held)` for the memory dump `mem_file` of
+    a run in `run_dir`: the cause of every reselection, as reselection_causes
+    returns them, the true progress of the reselections attributed to
+    critic_error, as critic_error_progress returns it, and whether a
+    reselection replaced every goal unreachable from the state of its last
+    selection, with the steps it was held before, as unreachable_selections
+    returns them. Return None when the
     dump or the run's cfg.yaml cannot be read, the dump lacks a key of
     MEMORY_KEYS, the environment has no tabular counter, or true_visit_of gives
     no true visit Q-function."""
@@ -382,7 +397,18 @@ def read_memory_causes(run_dir, mem_file):
         flat["term"].astype(bool) | flat["trunc"].astype(bool),
         ORACLE_TOL,
     )
-    return causes, critic_error_progress(true_visit, state, goal, goal_act, selected, causes)
+    progress = critic_error_progress(true_visit, state, goal, goal_act, selected, causes)
+    fates, held = unreachable_selections(
+        true_visit,
+        state,
+        goal,
+        flat["act"].astype(np.int64),
+        goal_act,
+        flat["has_goal"].astype(bool),
+        selected,
+        flat["term"].astype(bool) | flat["trunc"].astype(bool),
+    )
+    return causes, progress, fates, held
 
 
 def memory_causes(config_id, seed):
@@ -417,7 +443,7 @@ def cause_runs(drawing, env, index):
     reselection_causes), leaving out the runs without them (see
     read_memory_causes)."""
 
-    return [causes for causes, _progress in memory_runs(drawing, env, index)]
+    return [causes for causes, _progress, _fates, _held in memory_runs(drawing, env, index)]
 
 
 def progress_rates(drawing, env, index):
@@ -428,7 +454,7 @@ def progress_rates(drawing, env, index):
     mean number per seed per 1,000 training steps over the steps of their memory
     dumps. Return None when no run has them (see read_memory_causes)."""
 
-    runs = [progress for _causes, progress in memory_runs(drawing, env, index)]
+    runs = [progress for _causes, progress, _fates, _held in memory_runs(drawing, env, index)]
     if not runs:
         return None
     k = np.rint(np.concatenate([p[~np.isnan(p)] for p in runs])).astype(np.int64)
@@ -489,18 +515,24 @@ def add_cause_legend(fig, overlays=(), n_cols=3, fontsize=FONT_SIZE - 2, **kwarg
     )
 
 
-def cause_legend(fig, axes, overlays=()):
-    """Draw the legend of the causes of CAUSE_STYLE and of the curves of
-    OVERLAY_STATS named in `overlays` under where `axes` and their tick labels
-    end, measured, unless --no_legend."""
+def legend_top(fig, axes):
+    """Return the height, as a fraction of `fig`, just under where `axes` and
+    their tick labels end, measured."""
 
-    if args.no_legend:
-        return
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
     bottom = min(ax.get_tightbbox(renderer).y0 for ax in axes)
-    top = fig.transFigure.inverted().transform((0, bottom))[1] - 0.02
-    add_cause_legend(fig, overlays, loc="upper center", bbox_to_anchor=(0.5, top))
+    return fig.transFigure.inverted().transform((0, bottom))[1] - 0.02
+
+
+def cause_legend(fig, axes, overlays=()):
+    """Draw the legend of the causes of CAUSE_STYLE and of the curves of
+    OVERLAY_STATS named in `overlays` under where `axes` and their tick labels
+    end (see legend_top), unless --no_legend."""
+
+    if args.no_legend:
+        return
+    add_cause_legend(fig, overlays, loc="upper center", bbox_to_anchor=(0.5, legend_top(fig, axes)))
 
 
 def write_cause_legend(output_dir):
@@ -656,45 +688,19 @@ def round_ticks(ax, which, n_bins):
         ax.yaxis.set_major_formatter(lambda v, _pos: f"{v:g}")
 
 
-def tex_text(text):
-    """Return `text` as LaTeX, with `_`, `&`, `%` and `#` outside `$...$`
-    escaped unless a backslash already precedes them. Text between two `$` is
-    left as it is."""
+def unreachable_stats(drawing, env, index):
+    """Return `(replaced, kept, steps)` for the goals unreachable from the state
+    of their last selection (see unreachable_selections) in the runs entry
+    `index` selects in `env`, pooled over their seeds: how many of them a
+    reselection replaced, how many were kept until the end of their episode,
+    and the median steps from their first selection to the reselection, NaN
+    when no reselection replaced one."""
 
-    parts = text.split("$")
-    for k in range(0, len(parts), 2):
-        parts[k] = re.sub(r"(?<!\\)([_&%#])", r"\\\1", parts[k])
-    return "$".join(parts)
-
-
-def write_cause_table(drawing, name, bars, several):
-    """Write the reselection causes of `bars`, as (environment, entry index,
-    counts per cause of RESELECTION_CAUSES), to <name>.tex in the output
-    directory: a booktabs tabular with a row per bar, its environment (and its
-    entry when `several`), its number of reselections and the percentage of
-    each cause, one decimal each, under the labels of CAUSE_STYLE."""
-
-    header = ["Environment"] + (["Method"] if several else []) + ["$n$"]
-    header += [tex_text(CAUSE_STYLE[c][0]) for c in RESELECTION_CAUSES]
-    lines = [
-        r"\begin{tabular}{l" + ("l" if several else "") + "r" * (len(RESELECTION_CAUSES) + 1) + "}",
-        r"\toprule",
-        " & ".join(header) + r" \\",
-        r"\midrule",
-    ]
-    for env, i, counts in bars:
-        total = int(counts.sum())
-        cells = [tex_text(drawing.env_labels.get(str(env), str(env)))]
-        if several:
-            cells.append(tex_text(drawing.entries[i]["label"]))
-        cells.append(f"{total:,}".replace(",", "{,}"))
-        cells += [f"{100 * n / total:.1f}" for n in counts]
-        lines.append(" & ".join(cells) + r" \\")
-    lines += [r"\bottomrule", r"\end{tabular}"]
-    path = os.path.join(drawing.output_dir, f"{name}.tex")
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(lines) + "\n")
-    vprint(f"  Saved: {path}")
+    runs = memory_runs(drawing, env, index)
+    fates = np.concatenate([f[f >= 0] for _causes, _progress, f, _held in runs] or [np.zeros(0)])
+    held = np.concatenate([h[~np.isnan(h)] for _causes, _progress, _fates, h in runs] or [np.zeros(0)])
+    steps = np.median(held) if held.size else np.nan
+    return int((fates == 1).sum()), int((fates == 0).sum()), steps
 
 
 def kilo(n):
@@ -704,46 +710,28 @@ def kilo(n):
     return f"{float(f'{n / 1000:.3g}'):g}k" if n >= 1000 else f"{n}"
 
 
-def draw_cause_figure(drawing, name, envs):
-    """Draw the causes of the reselections as a 100% stacked horizontal bar per
-    (environment, entry) of `envs` with at least one reselection, write the same
-    numbers to <name>.tex (see write_cause_table), and return the number of
-    figures written.
+def draw_share_figure(drawing, title, bars, styles, notes):
+    """Draw a 100% stacked horizontal bar per (environment, entry index,
+    counts) of `bars`, titled `title`, and return the figure and its axes.
 
-    Every reselection has one cause (see reselection_causes), and the segments
-    of a bar are the fractions of its reselections of each cause, pooled over
-    the seeds, in the order and the colours of CAUSE_STYLE. A segment at least
-    CAUSE_LABEL_MIN wide is labelled with its percentage. At the end of the bar,
-    "total = <reselections>" is written over "(<x>% of <training steps>)", x
-    being the mean number of reselections per seed as a percentage of the
-    training steps, both counts written by kilo. A bar is named by its
+    The segments of a bar are the fractions of its counts, in the order of
+    `styles`, a (label, colour, label colour) per count. A segment at least
+    CAUSE_LABEL_MIN wide is labelled with its percentage. The text of `notes`,
+    one per bar, is written at the end of the bar. A bar is named by its
     environment, and by its entry too when several entries have bars."""
 
-    bars, runs_steps = [], []
-    for env in envs:
-        for i in range(len(drawing.entries)):
-            counted = cause_counts(drawing, env, i)
-            if counted is not None and counted[0].sum() > 0:
-                bars.append((env, i, counted[0]))
-                runs_steps.append(counted[1:])
-    if not bars:
-        vprint(f"  No reselection for {name}, skipping.")
-        return 0
     several = len({i for _, i, _ in bars}) > 1
-    write_cause_table(drawing, name, bars, several)
-
     fig, ax = plt.subplots(figsize=(CAUSE_FIG_W, CAUSE_BAR_H * len(bars) + 0.6))
     labels = []
-    for y, ((env, i, counts), (n_runs, n_steps)) in enumerate(zip(bars, runs_steps)):
+    for y, ((env, i, counts), note) in enumerate(zip(bars, notes)):
         label = drawing.env_labels.get(str(env), str(env))
         if several:
             label = f"{label}\n{drawing.entries[i]['label']}"
         labels.append(label)
-        total = int(counts.sum())
+        total = counts.sum()
         left = 0.0
-        for cause, n in zip(RESELECTION_CAUSES, counts):
+        for (_label, color, text_color), n in zip(styles, counts):
             frac = n / total
-            _label, color, text_color = CAUSE_STYLE[cause]
             ax.barh(y, frac, left=left, height=0.7, color=color, edgecolor="white", linewidth=0.8)
             if frac >= CAUSE_LABEL_MIN:
                 ax.text(
@@ -759,15 +747,15 @@ def draw_cause_figure(drawing, name, envs):
         ax.text(
             1.01,
             y,
-            f"total = {kilo(total)}\n({100 * total / (n_runs * n_steps):.1f}% of {kilo(n_steps)})",
+            note,
             ha="left",
             va="center",
             fontsize=FONT_SIZE - 3,
             clip_on=False,
         )
         vprint(
-            f"  {label.replace(chr(10), ' / ')}: {total} reselections, "
-            + ", ".join(f"{c} {100 * n / total:.1f}%" for c, n in zip(RESELECTION_CAUSES, counts))
+            f"  {label.replace(chr(10), ' / ')}: {int(total)}, "
+            + ", ".join(f"{s[0]} {100 * n / total:.1f}%" for s, n in zip(styles, counts))
         )
 
     ax.set_xlim(0.0, 1.0)
@@ -781,9 +769,88 @@ def draw_cause_figure(drawing, name, envs):
     ax.tick_params(axis="x", labelsize=FONT_SIZE - 2)
     ax.tick_params(axis="y", length=0)
     ax.yaxis.grid(False)
-    ax.set_title("Causes of Goal Reselections", fontsize=FONT_SIZE)
+    ax.set_title(title, fontsize=FONT_SIZE)
+    return fig, ax
 
+
+def draw_cause_figure(drawing, name, envs):
+    """Draw the causes of the reselections as a 100% stacked horizontal bar per
+    (environment, entry) of `envs` with at least one reselection (see
+    draw_share_figure), and return the number of figures written.
+
+    Every reselection has one cause (see reselection_causes), and the segments
+    of a bar are the fractions of its reselections of each cause, pooled over
+    the seeds, in the order and the colours of CAUSE_STYLE. At the end of the
+    bar, "total = <reselections>" is written over "(<x>% of <training
+    steps>)", x being the mean number of reselections per seed as a percentage
+    of the training steps, both counts written by kilo."""
+
+    bars, notes = [], []
+    for env in envs:
+        for i in range(len(drawing.entries)):
+            counted = cause_counts(drawing, env, i)
+            if counted is not None and counted[0].sum() > 0:
+                counts, n_runs, n_steps = counted
+                total = int(counts.sum())
+                bars.append((env, i, counts))
+                notes.append(f"total = {kilo(total)}\n({100 * total / (n_runs * n_steps):.1f}% of {kilo(n_steps)})")
+    if not bars:
+        vprint(f"  No reselection for {name}, skipping.")
+        return 0
+
+    fig, ax = draw_share_figure(
+        drawing,
+        "Causes of Goal Reselections",
+        bars,
+        list(CAUSE_STYLE.values()),
+        notes,
+    )
     cause_legend(fig, [ax])
+    return save_and_close(fig, drawing.output_dir, name, vprint)
+
+
+def draw_unreachable_figure(drawing, name, envs):
+    """Draw the goals unreachable from the state of their last selection (see
+    unreachable_stats) as a 100% stacked horizontal bar per (environment,
+    entry) of `envs` with at least one (see draw_share_figure), and return the
+    number of figures written.
+
+    The segments of a bar are the fractions of the goals, pooled over the
+    seeds, that a reselection replaced and that were kept until the end of
+    their episode, in the order and the colours of UNREACHABLE_STYLE, with its
+    legend below. At the end of the bar, "total = <goals>" is written over
+    "(median <s> steps)", s being the median steps from their first selection
+    to the reselection, the count written by kilo."""
+
+    bars, notes = [], []
+    for env in envs:
+        for i in range(len(drawing.entries)):
+            replaced, kept, steps = unreachable_stats(drawing, env, i)
+            if replaced + kept > 0:
+                bars.append((env, i, np.array([replaced, kept])))
+                median = "no replacement" if np.isnan(steps) else f"median {steps:g} steps"
+                notes.append(f"total = {kilo(replaced + kept)}\n({median})")
+    if not bars:
+        vprint(f"  No goal unreachable at selection for {name}, skipping.")
+        return 0
+
+    fig, ax = draw_share_figure(
+        drawing,
+        "Goals Unreachable at Selection",
+        bars,
+        list(UNREACHABLE_STYLE.values()),
+        notes,
+    )
+    if not args.no_legend:
+        fig.legend(
+            [mpatches.Patch(facecolor=color, edgecolor="white") for _label, color, _text in UNREACHABLE_STYLE.values()],
+            [label for label, _color, _text in UNREACHABLE_STYLE.values()],
+            ncol=len(UNREACHABLE_STYLE),
+            frameon=False,
+            fontsize=FONT_SIZE - 2,
+            loc="upper center",
+            bbox_to_anchor=(0.5, legend_top(fig, [ax])),
+        )
     return save_and_close(fig, drawing.output_dir, name, vprint)
 
 
@@ -1100,6 +1167,7 @@ def draw_config(config_name, cfg):
             continue
         suffix = f"_{group_name}" if group_name else ""
         written += draw_cause_figure(drawing, f"reselection_causes{suffix}", present)
+        written += draw_unreachable_figure(drawing, f"reselection_unreachable{suffix}", present)
         written += draw_cause_steps_figure(drawing, f"reselection_causes_steps{suffix}", present)
     for group_name, envs in (cfg.get("histograms") or {}).items():
         present = [e for e in envs if (drawing.env_stem == e).any()]

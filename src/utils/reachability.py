@@ -1,7 +1,8 @@
 """Goal selections of a goal-conditioned actor read from a replay-memory dump:
-the cause of each goal reselection under the true visit Q-function, and the
-true progress toward the goal replaced at the reselections attributed to
-approximation error.
+the cause of each goal reselection under the true visit Q-function, the true
+progress toward the goal replaced at the reselections attributed to
+approximation error, and whether each goal unreachable from the state of its
+last selection was replaced by a reselection.
 
 The arrays over the steps of a dump are `state` and `goal`, the counter bins of
 its `obs` and `goal_obs`, and `act`, `goal_act`, `has_goal` and `act_source` as
@@ -103,6 +104,53 @@ def reselection_causes(
                         causes[t] = 4
         last_sel = t
     return causes
+
+
+def unreachable_selections(true_visit, state, goal, act, goal_act, has_goal, selected, done):
+    """Return `(fates, held)`, an int array and a float array over the steps of a
+    replay-memory dump, for every goal held that is not reachable from the state
+    of its last selection, under the reachability of the true visit Q-function
+    `true_visit` (src.oracle.TrueVisitQ).
+
+    A goal is held from the selection that picks it while the previous step, in
+    the same episode, held no goal, a different one, or reached it, through the
+    selections that pick it again, until a selection picks another goal, the
+    goal is reached, or the episode or the dump ends. Its last selection is the
+    state reselection_causes tests for unreachable_at_selection. At the step of
+    its first selection, `fates` holds 1 when a reselection (see
+    reselection_causes) replaces it, and 0 otherwise; `held` holds the steps
+    from its first selection to the reselection, and NaN when no reselection
+    replaces it. Every other step holds -1 in `fates` and NaN in `held`."""
+
+    reach = true_visit.reach
+    size = len(state)
+    fates = np.full(size, -1, dtype=np.int64)
+    held = np.full(size, np.nan)
+    first = last = -1  # first and last selection of the goal held, or -1
+    for t in range(size):
+        new_episode = t == 0 or done[t - 1]
+        if new_episode and first >= 0:
+            if not reach[int(state[last]), int(goal[last])]:
+                fates[first] = 0
+            first = last = -1
+        if not selected[t]:
+            continue
+        p = t - 1
+        held_before = not new_episode and first >= 0 and has_goal[p]
+        reached = held_before and state[p] == goal[p] and act[p] == goal_act[p]
+        same = held_before and goal[t] == goal[p] and goal_act[t] == goal_act[p]
+        if same and not reached:
+            last = t
+            continue
+        if first >= 0 and not reach[int(state[last]), int(goal[last])]:
+            replaced = held_before and not reached
+            fates[first] = int(replaced)
+            if replaced:
+                held[first] = t - first
+        first = last = t
+    if first >= 0 and not reach[int(state[last]), int(goal[last])]:
+        fates[first] = 0
+    return fates, held
 
 
 def critic_error_progress(true_visit, state, goal, goal_act, selected, causes):

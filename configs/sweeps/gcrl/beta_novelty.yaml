@@ -8,8 +8,8 @@ global_sweep:
     - gymnasium/pendulum_discrete
     - gymnasium/cart_pole
     - gymnasium/lunar_lander
-    - gymnasium/lunar_lander_full
-  algorithm: [sun_ucb_adaptive, discover_episodic]
+    # - gymnasium/lunar_lander_full
+  algorithm: [sun_ucb_adaptive, discover_episodic, discover_success, discover_adaptive]
   agent.actor.beta_novelty: [0.1, 1, 10, 100, 1_000]
   results.save_memory: True
   experiment.testing_episodes: 0

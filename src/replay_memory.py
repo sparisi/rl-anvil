@@ -4,7 +4,14 @@ import numpy as np
 import src.parameter
 from omegaconf import DictConfig
 
-from src.pseudocount import SCALE_EPS, is_neighbor, pseudocount, robust_scale, scaled_dist2
+from src.pseudocount import (
+    SCALE_EPS,
+    effective_dimension,
+    ladder_count,
+    pseudocount,
+    robust_scale,
+    scaled_dist2,
+)
 from src.utils.misc import atomic_open
 
 # This implementation is in pure NumPy to make it compatible with any deep learning
@@ -127,6 +134,8 @@ class ReplayMemory(object):
         min_size: int,
         max_size: int,
         rho: float = None,
+        rho_step: float = None,
+        rho_steps: int = 0,
         scale_check_every: int = 1000,
         scale_tol: float = 0.01,
         scale_max_samples: int = None,
@@ -144,8 +153,17 @@ class ReplayMemory(object):
                 None selects the environment's true binned visit counts instead,
                 read from the counter given to init_counting(), and no
                 pseudocount is maintained,
+            rho_step (float): ratio between consecutive radii of the ladder of
+                pseudocounts, rho * rho_step**j for j = 0, ..., rho_steps. Must
+                be larger than 1 when rho_steps > 0,
+            rho_steps (int): number of radii of the ladder beyond rho. With 0,
+                the pseudocount is the count within rho. Otherwise, an entry
+                without a neighbor within rho is counted at the first radius
+                that holds one, rescaled to rho with the effective dimension of
+                the stored observations (see src.pseudocount.ladder_count),
             scale_check_every (int): number of insertions between two checks of
-                the pseudocount scale,
+                the pseudocount scale, and between two estimates of the
+                effective dimension of the ladder of pseudocounts,
             scale_tol (float): the scale is frozen once its largest relative
                 per-dimension change between two checks falls below this value,
             scale_max_samples (int): number of stored samples past which the
@@ -161,9 +179,15 @@ class ReplayMemory(object):
         assert (
             min_size <= max_size
         ), f"min_size {min_size} larger than max_size {max_size}"
+        assert rho_steps == 0 or (rho is not None and rho_step is not None and rho_step > 1), (
+            f"a ladder of {rho_steps} radii needs rho and rho_step > 1 (got rho={rho}, "
+            f"rho_step={rho_step})"
+        )
         self._min_size = min_size
         self._max_size = max_size
         self.rho = rho
+        self._rho_step = rho_step
+        self._rho_steps = rho_steps
         self._scale_check_every = scale_check_every
         self._scale_tol = scale_tol
         self._scale_max_samples = scale_max_samples
@@ -200,6 +224,20 @@ class ReplayMemory(object):
             # Bin of every stored entry, kept so that the entries sharing a bin can
             # be found without binning the stored observations again.
             self.bin_idx = zeros_resident((self._max_size,), np.int64)
+        if self._rho_steps > 0:
+            # Counts within the radii of the ladder beyond rho, while `count`
+            # holds the count within rho. They are not in `keys`, so saved chunks
+            # hold the count within rho, and a batch's `count` is the ladder count
+            # (see _stored).
+            self.count_ladder = zeros_resident(
+                (self._max_size, self._rho_steps, n_actions),
+                np.int32,
+            )
+            # Number of goal features, the effective dimension used before any
+            # stored entry has a neighbor within rho.
+            self._goal_dim = int(np.asarray(self.obs[0])[..., goal_idx].size)
+            self._dim = None
+            self._dim_step = 0
         self._reset_count_scale()
 
     @property
@@ -232,6 +270,10 @@ class ReplayMemory(object):
             self.count.fill(0)
             if self.rho is None:
                 self.bin_idx.fill(0)
+            if self._rho_steps > 0:
+                self.count_ladder.fill(0)
+                self._dim = None
+                self._dim_step = 0
 
     def add(self, **kwargs):
         write_idx = self._idx
@@ -266,6 +308,54 @@ class ReplayMemory(object):
         if self._idx >= self._max_size:
             self._idx = 0
             self._full = True
+
+    def _radii(self):
+        """Return the radii of the pseudocounts, rho * rho_step**j for
+        j = 0, ..., rho_steps, as a float64 array."""
+
+        if self._rho_steps == 0:
+            return np.array([self.rho], dtype=np.float64)
+        return self.rho * self._rho_step ** np.arange(self._rho_steps + 1, dtype=np.float64)
+
+    def _count_tables(self):
+        """Return the (max_size, n_actions) count arrays of the radii of _radii,
+        in the same order: `count`, then views of `count_ladder`."""
+
+        tables = [self.count]
+        if self._rho_steps > 0:
+            tables += [self.count_ladder[:, j] for j in range(self._rho_steps)]
+        return tables
+
+    def _effective_dimension(self):
+        """Return the effective dimension of the stored observations (see
+        src.pseudocount.effective_dimension), from their counts summed over
+        actions within rho and within the next radius of the ladder. The estimate
+        is refreshed at most once every scale_check_every insertions."""
+
+        if self._dim is None or self._tot_steps - self._dim_step >= self._scale_check_every:
+            n = self.size
+            self._dim = effective_dimension(
+                self.count[:n].sum(axis=-1),
+                self.count_ladder[:n, 0].sum(axis=-1),
+                self._rho_step,
+                fallback=self._goal_dim,
+            )
+            self._dim_step = self._tot_steps
+        return self._dim
+
+    def _stored(self, key, idx):
+        """Return the values of `key` stored at `idx`. With a ladder of radii,
+        `count` gives the ladder count of the stored entries (see
+        src.pseudocount.ladder_count) as floats, in place of their count within
+        rho."""
+
+        if key == "count" and self._rho_steps > 0:
+            counts = np.concatenate(
+                [self.count[idx][..., None, :], self.count_ladder[idx]],
+                axis=-2,
+            )
+            return ladder_count(counts, self._rho_step, self._effective_dimension())
+        return getattr(self, key)[idx]
 
     def _stored_count_data(self, write_idx):
         """Return the stored goal-space observations and actions as a (N, D) and a (N,) array.
@@ -331,7 +421,8 @@ class ReplayMemory(object):
             self._rebuild_counts(write_idx)
 
     def _rebuild_counts(self, write_idx):
-        """Recompute every stored count from scratch under the current scale."""
+        """Recompute every stored count, within each radius of _radii, from
+        scratch under the current scale."""
 
         obs, act = self._stored_count_data(write_idx)
         n = obs.shape[0]
@@ -341,15 +432,17 @@ class ReplayMemory(object):
         onehot = np.zeros((n, n_actions), dtype=float)
         onehot[np.arange(n), act] = 1.0
 
-        radius2 = self.rho**2
+        tables = self._count_tables()
+        radii2 = self._radii() ** 2
         # Chunk the pairwise distances so the temporaries stay bounded regardless
         # of how many samples are stored when the scale freezes.
         chunk = max(1, int(2**22) // n)
         for start in range(0, n, chunk):
             stop = min(start + chunk, n)
             dist2 = scaled_dist2(obs[start:stop], obs, self._count_scale)
-            mask = (dist2 <= radius2).astype(float)
-            self.count[start:stop] = (mask @ onehot).astype(self.count.dtype)
+            for table, radius2 in zip(tables, radii2):
+                mask = (dist2 <= radius2).astype(float)
+                table[start:stop] = (mask @ onehot).astype(table.dtype)
 
     def _update_counts(self, write_idx, kwargs, evicted):
         n_actions = self.count.shape[-1]
@@ -385,47 +478,51 @@ class ReplayMemory(object):
         if self._maybe_freeze_scale(write_idx):
             return
 
+        # One distance per stored entry serves the counts of every radius.
+        tables = self._count_tables()
+        radii2 = self._radii() ** 2
+
         # Decrement counts of entries that were neighbors of the now-evicted entry
         if evicted is not None:
             evicted_obs, evicted_act = evicted
-            close_to_evicted = is_neighbor(
-                evicted_obs,
+            dist2 = scaled_dist2(
+                np.asarray(evicted_obs).reshape(1, -1),
                 stored_obs,
-                radius=self.rho,
-                scale=self._count_scale,
-            )
-            # write_idx row will be overwritten below; keep it out of the decrement.
-            close_to_evicted[write_idx] = False
-            evicted_rows = np.nonzero(close_to_evicted)[0]
-            self.count[evicted_rows, evicted_act] = np.maximum(
-                self.count[evicted_rows, evicted_act] - 1, 0
-            )
+                self._count_scale,
+            )[0]
+            for table, radius2 in zip(tables, radii2):
+                close_to_evicted = dist2 <= radius2
+                # write_idx row will be overwritten below; keep it out of the decrement.
+                close_to_evicted[write_idx] = False
+                evicted_rows = np.nonzero(close_to_evicted)[0]
+                table[evicted_rows, evicted_act] = np.maximum(
+                    table[evicted_rows, evicted_act] - 1, 0
+                )
 
-        # Increment counts of entries that are neighbors of the new entry
-        close_to_new = is_neighbor(
-            new_obs,
-            stored_obs,
-            radius=self.rho,
-            scale=self._count_scale,
-        )
-        if self._full:
-            close_to_new[write_idx] = False
-        new_rows = np.nonzero(close_to_new)[0]
-        self.count[new_rows, new_act] += 1
+        dist2 = scaled_dist2(new_obs.reshape(1, -1), stored_obs, self._count_scale)[0]
+        for table, radius2 in zip(tables, radii2):
+            # Increment counts of entries that are neighbors of the new entry
+            close_to_new = dist2 <= radius2
+            if self._full:
+                close_to_new[write_idx] = False
+            new_rows = np.nonzero(close_to_new)[0]
+            table[new_rows, new_act] += 1
 
-        # Set count for the newly written entry
-        count = np.bincount(
-            stored_act[close_to_new],
-            minlength=n_actions,
-        ).astype(np.int64)
-        count[new_act] += 1  # count self
-        self.count[write_idx] = count
+            # Set count for the newly written entry
+            count = np.bincount(
+                stored_act[close_to_new],
+                minlength=n_actions,
+            ).astype(np.int64)
+            count[new_act] += 1  # count self
+            table[write_idx] = count
 
     def counts(self, obs):
         """Count of every action in each observation of obs, shaped (..., n_actions).
 
         For observations that are not stored, such as a goal candidate the actor
-        is considering. Stored entries are counted by get().
+        is considering. Stored entries are counted by get(). With a ladder of
+        radii, the count is the ladder count (see src.pseudocount.ladder_count)
+        of the counts within every radius of _radii.
         """
 
         if self.rho is None:
@@ -441,15 +538,19 @@ class ReplayMemory(object):
         n_actions = self.count.shape[-1]
         stored_obs = self.obs[:self.size, ..., self.goal_idx]
         stored_act = self.act[:self.size].ravel()
-        n = np.zeros(obs.shape[:-1] + (n_actions,))
-        for a in range(n_actions):
-            n[..., a] = pseudocount(
-                obs[..., self.goal_idx],
-                stored_obs[stored_act == a],
-                radius=self.rho,
-                scale=self._count_scale,
-            )
-        return n
+        radii = self._radii()
+        n = np.zeros(obs.shape[:-1] + (len(radii), n_actions))
+        for j, radius in enumerate(radii):
+            for a in range(n_actions):
+                n[..., j, a] = pseudocount(
+                    obs[..., self.goal_idx],
+                    stored_obs[stored_act == a],
+                    radius=radius,
+                    scale=self._count_scale,
+                )
+        if self._rho_steps > 0:
+            return ladder_count(n, self._rho_step, self._effective_dimension())
+        return n[..., 0, :]
 
     def get(
         self,
@@ -467,7 +568,7 @@ class ReplayMemory(object):
         idx = rng_generator.integers(self.size, size=batch_size)
         idx = idx[:, None] + np.arange(-sequence_length + 1, 1)
         idx = np.remainder(idx, self.size)
-        batch = {k: getattr(self, k)[idx] for k in keys}
+        batch = {k: self._stored(k, idx) for k in keys}
 
         # A sequence holding the newest sample before its last position continues
         # with the oldest sample, which is not its successor: mark truncation here.
@@ -495,13 +596,14 @@ class ReplayMemory(object):
         entry, it is reduced with max ("descending") or min ("ascending") across
         the trailing axes before sorting.
         For example, passing `order=ascending` and `sort_key=count` returns the
-        least-visited samples.
+        least-visited samples, ranked by the ladder count when the memory keeps
+        a ladder of radii (see _stored).
         """
 
         if keys is None:
             keys = self.keys
 
-        values = getattr(self, sort_key)[:self.size]
+        values = self._stored(sort_key, slice(0, self.size))
 
         if order == "descending":
             if values.ndim > 1:
@@ -526,7 +628,7 @@ class ReplayMemory(object):
 
         idx = top_idx[:, None] + np.arange(-sequence_length + 1, 1)
         idx = np.remainder(idx, self.size)
-        batch = {k: getattr(self, k)[idx] for k in keys}
+        batch = {k: self._stored(k, idx) for k in keys}
 
         # A sequence holding the newest sample before its last position continues
         # with the oldest sample, which is not its successor: mark truncation here.
@@ -805,7 +907,7 @@ class PrioritizedReplayMemory(ReplayMemory):
 
         idx = data_idxs[:, None] + np.arange(-sequence_length + 1, 1)
         idx = np.remainder(idx, self.size)
-        batch = {k: getattr(self, k)[idx] for k in keys}
+        batch = {k: self._stored(k, idx) for k in keys}
 
         # A sequence holding the newest sample before its last position continues
         # with the oldest sample, which is not its successor: mark truncation here.
@@ -915,7 +1017,7 @@ class OnlineMemory(ReplayMemory):
         # Handles the no-wrap, wrap, and n_new == 0 cases in one expression.
         start = (self._idx - n_new) % self._max_size
         idx = (start + np.arange(n_new)) % self._max_size
-        batch = {k: getattr(self, k)[idx][None, ...] for k in keys}
+        batch = {k: self._stored(k, idx)[None, ...] for k in keys}
         batch["idx"] = idx[None, :]
         batch["priority_key"] = None
         return batch

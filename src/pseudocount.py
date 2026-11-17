@@ -464,3 +464,38 @@ def pseudocount(x, batch, radius: float, scale=None):
     counts = (dist2 <= radius**2).sum(axis=1)
 
     return counts.reshape(orig_shape[:-1])
+
+
+def ladder_count(counts, step: float, dim: float):
+    """Return the pseudocount at the radius rho from the counts at a ladder of
+    radii, as a float array shaped as `counts` without its second-to-last axis.
+
+    `counts` holds, along its second-to-last axis, the counts c_j within the
+    radii rho * step**j for j = 0, ..., J, and actions along its last axis. With
+    j* the first j whose count is at least 2, or J when none is, the count is
+    c_0 when j* = 0 and min(1, c_j* * step**(-j* * dim)) otherwise: the count at
+    the first radius holding a neighbor, rescaled to rho with the effective
+    dimension `dim`. With J = 0 the count is c_0."""
+
+    counts = np.asarray(counts)
+    last = counts.shape[-2] - 1
+    has_neighbor = counts >= 2
+    first = np.where(has_neighbor.any(axis=-2), has_neighbor.argmax(axis=-2), last)
+    at_first = np.take_along_axis(counts, first[..., None, :], axis=-2)[..., 0, :]
+    rescaled = np.minimum(1.0, at_first * float(step) ** (-first * float(dim)))
+    return np.where(first == 0, counts[..., 0, :], rescaled).astype(float)
+
+
+def effective_dimension(count_in, count_out, step: float, fallback: float):
+    """Return the effective dimension of the counted points: the median of
+    log(count_out / count_in) / log(step) over the entries whose count_in is at
+    least 2, or `fallback` when no entry is. `count_in` and `count_out` are the
+    counts of the same entries within two radii, the second `step` times the
+    first."""
+
+    count_in = np.asarray(count_in, dtype=float)
+    count_out = np.asarray(count_out, dtype=float)
+    dense = count_in >= 2
+    if not dense.any():
+        return float(fallback)
+    return float(np.median(np.log(count_out[dense] / count_in[dense]) / np.log(step)))

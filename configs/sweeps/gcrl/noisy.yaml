@@ -1,0 +1,11 @@
+global_sweep:
+  environment:
+    - gym_gridworlds/four_rooms_stuck_hard_sticky
+    - gymnasium/lunar_lander_noisyact
+  algorithm:
+    - adagoal_episodic
+    - discover_episodic
+    - random
+    - sun_ratio_adaptive
+  results.save_memory: True
+  experiment.testing_episodes: 0

@@ -466,36 +466,26 @@ def pseudocount(x, batch, radius: float, scale=None):
     return counts.reshape(orig_shape[:-1])
 
 
-def ladder_count(counts, step: float, dim: float):
-    """Return the pseudocount at the radius rho from the counts at a ladder of
-    radii, as a float array shaped as `counts` without its second-to-last axis.
+def isolated_count(counts, nn_dist2, nn_acts, radius: float, dim: int):
+    """Return the pseudocounts within `radius` of a set of points as a float
+    array shaped as `counts`, with the counts of the points without a neighbor
+    within `radius` rescaled from their nearest neighbor.
 
-    `counts` holds, along its second-to-last axis, the counts c_j within the
-    radii rho * step**j for j = 0, ..., J, and actions along its last axis. With
-    j* the first j whose count is at least 2, or J when none is, the count is
-    c_0 when j* = 0 and min(1, c_j* * step**(-j* * dim)) otherwise: the count at
-    the first radius holding a neighbor, rescaled to rho with the effective
-    dimension `dim`. With J = 0 the count is c_0."""
+    `counts` (..., n_actions) holds the counts within `radius`, a stored copy
+    of the point included. Points whose count summed over actions is at least
+    2 keep them. For the others, `nn_dist2` (...,) is the squared distance r^2
+    to the second-nearest stored entry, counting a stored copy of the point as
+    the nearest, and `nn_acts` (..., 2) holds the actions of the two nearest
+    entries, -1 for a missing one. Every action's count is then
+    min(1, c_a * (radius / r)**dim), with c_a the number of the two nearest
+    entries taken with action a: the count within r rescaled to `radius` by
+    the ratio of the volumes of the two balls in `dim` dimensions."""
 
-    counts = np.asarray(counts)
-    last = counts.shape[-2] - 1
-    has_neighbor = counts >= 2
-    first = np.where(has_neighbor.any(axis=-2), has_neighbor.argmax(axis=-2), last)
-    at_first = np.take_along_axis(counts, first[..., None, :], axis=-2)[..., 0, :]
-    rescaled = np.minimum(1.0, at_first * float(step) ** (-first * float(dim)))
-    return np.where(first == 0, counts[..., 0, :], rescaled).astype(float)
-
-
-def effective_dimension(count_in, count_out, step: float, fallback: float):
-    """Return the effective dimension of the counted points: the median of
-    log(count_out / count_in) / log(step) over the entries whose count_in is at
-    least 2, or `fallback` when no entry is. `count_in` and `count_out` are the
-    counts of the same entries within two radii, the second `step` times the
-    first."""
-
-    count_in = np.asarray(count_in, dtype=float)
-    count_out = np.asarray(count_out, dtype=float)
-    dense = count_in >= 2
-    if not dense.any():
-        return float(fallback)
-    return float(np.median(np.log(count_out[dense] / count_in[dense]) / np.log(step)))
+    counts = np.asarray(counts, dtype=float)
+    n_actions = counts.shape[-1]
+    at_r = (np.asarray(nn_acts)[..., None] == np.arange(n_actions)).sum(axis=-2)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        volume_ratio = (radius**2 / np.asarray(nn_dist2, dtype=float)) ** (dim / 2)
+        rescaled = np.minimum(1.0, at_r * volume_ratio[..., None])
+    isolated = counts.sum(axis=-1) < 2
+    return np.where(isolated[..., None], rescaled, counts)

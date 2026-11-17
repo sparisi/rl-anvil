@@ -25,5 +25,3 @@ agent:
 experiment:
   replay_memory:
     rho: 0.25
-    rho_step: 1.25
-    rho_steps: 10

@@ -1,10 +1,6 @@
-ignored_cfg_keys:
-  - experiment.testing_episodes
-  - agent.critic.approximator.device
-  - agent.critic.approximator_visit.device
 
-color_scheme:
-  - sun_ratio_adaptive
+default:
+  - default
 
 configs:
   sun_ratio_adaptive:
@@ -47,7 +43,3 @@ environments:
     gymnasium/cart_pole:
       label: "CartPole"
       score_bounds: *unit_bounds
-
-statistics:
-  sa_h: "Entropy"
-  sa_%: "Coverage"

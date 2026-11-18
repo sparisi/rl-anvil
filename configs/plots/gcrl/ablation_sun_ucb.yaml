@@ -1,0 +1,81 @@
+default:
+  - default
+
+tick_labels:
+  agent.actor.beta_novelty:
+    1_000: "1,000"
+  algorithm:
+    sun_ucb_episodic: "Episodic"
+    sun_ucb_adaptive: "Adaptive"
+    sun_ucb_success: "At Success"
+
+color_scheme:
+  - sun_ratio*
+  - adagoal*
+  - discover*
+  - random
+  - sun_ucb_episodic
+  - sun_ucb_adaptive
+  - eps_greedy
+  - sun_ucb_success
+
+group_labels:
+  sun_ratio_adaptive: "SUN"
+  sun_ucb_episodic: "Episodic"
+  sun_ucb_adaptive: "Adaptive"
+  sun_ucb_success: "At Success"
+
+references:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      plot.label: "SUN"
+
+configs:
+  sun_ucb_episodic:
+    - algorithm: sun_ucb_episodic
+      agent.actor.beta_novelty: 0.1
+      plot.label: "$\\beta = 0.1$"
+    - algorithm: sun_ucb_episodic
+      agent.actor.beta_novelty: 1
+      plot.label: "$\\beta = 1$"
+    - algorithm: sun_ucb_episodic
+      agent.actor.beta_novelty: 10
+      plot.label: "$\\beta = 10$"
+    - algorithm: sun_ucb_episodic
+      agent.actor.beta_novelty: 100
+      plot.label: "$\\beta = 100$"
+    - algorithm: sun_ucb_episodic
+      agent.actor.beta_novelty: 1_000
+      plot.label: "$\\beta = 1,000$"
+  sun_ucb_adaptive:
+    - algorithm: sun_ucb_adaptive
+      agent.actor.beta_novelty: 0.1
+      plot.label: "$\\beta = 0.1$"
+    - algorithm: sun_ucb_adaptive
+      agent.actor.beta_novelty: 1
+      plot.label: "$\\beta = 1$"
+    - algorithm: sun_ucb_adaptive
+      agent.actor.beta_novelty: 10
+      plot.label: "$\\beta = 10$"
+    - algorithm: sun_ucb_adaptive
+      agent.actor.beta_novelty: 100
+      plot.label: "$\\beta = 100$"
+    - algorithm: sun_ucb_adaptive
+      agent.actor.beta_novelty: 1_000
+      plot.label: "$\\beta = 1,000$"
+  sun_ucb_success:
+    - algorithm: sun_ucb_success
+      agent.actor.beta_novelty: 0.1
+      plot.label: "$\\beta = 0.1$"
+    - algorithm: sun_ucb_success
+      agent.actor.beta_novelty: 1
+      plot.label: "$\\beta = 1$"
+    - algorithm: sun_ucb_success
+      agent.actor.beta_novelty: 10
+      plot.label: "$\\beta = 10$"
+    - algorithm: sun_ucb_success
+      agent.actor.beta_novelty: 100
+      plot.label: "$\\beta = 100$"
+    - algorithm: sun_ucb_success
+      agent.actor.beta_novelty: 1_000
+      plot.label: "$\\beta = 1,000$"

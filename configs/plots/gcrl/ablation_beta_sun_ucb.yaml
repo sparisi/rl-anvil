@@ -4,13 +4,13 @@ default:
 configs:
   sun_ratio_adaptive:
     - algorithm: sun_ratio_adaptive
-      plot.label: "SUN (Multipl.)"
+      plot.label: "SUN (Multiplicative)"
   sun_novelty_adaptive:
     - algorithm: sun_novelty_adaptive
       plot.label: "Novelty-Only"
   sun_reachability_adaptive:
     - algorithm: sun_reachability_adaptive
-      plot.label: "Reach.-Only"
+      plot.label: "Reachability-Only"
   sun_ucb_adaptive:
     - algorithm: sun_ucb_adaptive
       agent.actor.beta_novelty: 0.1

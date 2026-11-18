@@ -5,10 +5,8 @@ configs:
   sun_ratio_adaptive:
     - algorithm: sun_ratio_adaptive
       plot.label: "SUN"
-  sun_ratio_step:
     - algorithm: sun_ratio_step
       plot.label: "SUN (Step)"
-  sun_ratio_episodic:
     - algorithm: sun_ratio_episodic
       plot.label: "SUN (Epis.)"
   sun_ucb_adaptive:

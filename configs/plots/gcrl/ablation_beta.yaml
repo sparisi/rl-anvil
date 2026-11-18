@@ -1,10 +1,15 @@
 default:
   - default
 
+group_labels:
+  sun_ratio_adaptive: "SUN (Mult.)"
+  discover: "DISCOVER"
+  sun_ucb_adaptive: "SUN (Additive)"
+
 configs:
   sun_ratio_adaptive:
     - algorithm: sun_ratio_adaptive
-      plot.label: "SUN (Multipl.)"
+      plot.label: "SUN (Mult.)"
   discover:
     - algorithm: discover_episodic
       agent.actor.beta_novelty: 0.1

@@ -4,7 +4,7 @@ default:
 configs:
   sun_ratio_adaptive:
     - algorithm: sun_ratio_adaptive
-      plot.label: "SUN"
+      plot.label: "SUN (Adaptive)"
   discover:
     - algorithm: discover_adaptive
       plot.label: "Adaptive"

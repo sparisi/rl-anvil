@@ -5,8 +5,9 @@ over (see configs/plots/example.yaml). Every key of an entry but `plot.label` is
 a hyperparameter the runs must hold. An entry is a whole configuration:
 its keys are composed through Hydra with everything configs/default.yaml and the
 files it selects put under them, and a run is drawn only when its WHOLE
-configuration is the one that comes out. Entries in one group share a hue and
-differ in shade and line style.
+configuration is the one that comes out. Entries in one group share a hue, as do
+the groups `color_scheme` gives one palette index, and entries of one hue differ
+in shade and line style.
 
 Five flags choose the figures, each written once per (environment group,
 statistic) and named after both, as <stat>_<group>_<suffix>. With none of the
@@ -76,7 +77,7 @@ from src.utils.aggregate import (
     interval_estimates,
     iqm,
     performance_profile,
-    probability_of_improvement,
+    probability_of_improvement_interval,
     stack_runs,
 )
 from src.utils.id import decode_stat
@@ -578,8 +579,7 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
     if pairs:
         record["poi"] = {
             (a, b): tuple(
-                float(v) for v in interval_estimates(
-                    probability_of_improvement,
+                float(v) for v in probability_of_improvement_interval(
                     scores[a],
                     scores[b],
                     reps=args.rliable_reps,

@@ -151,3 +151,66 @@ def interval_estimates(fn, *scores, reps, seed=0):
         replicates.append(fn(*(resample(s, size, rng) for s in scores)))
     low, high = np.percentile(np.concatenate(replicates), [2.5, 97.5], axis=0)
     return fn(*scores), low, high
+
+
+def run_counts(scores, n, position, total, reps, rng):
+    """Return how many times each run of `scores` is drawn in `reps` stratified
+    bootstrap replicates, as a (reps, total) array. `scores` is (runs,
+    environments) and `n` holds the runs of each environment. The draws are those
+    resample makes from the same `rng`, and run i of environment e is counted in
+    column position[i, e]."""
+
+    runs, envs = scores.shape
+    drawn = (rng.random((reps, runs, envs)) * n).astype(int)
+    column = position[drawn, np.arange(envs)] + total * np.arange(reps)[:, None, None]
+    kept = np.arange(runs)[:, None] < n
+    return np.bincount(column[:, kept].ravel(), minlength=reps * total).reshape(reps, total)
+
+
+def probability_of_improvement_interval(x, y, reps, seed=0):
+    """Return probability_of_improvement(x, y) with its 95% percentile interval,
+    as (estimate, low, high), equal up to floating-point rounding to
+    interval_estimates(probability_of_improvement, x, y, reps=reps, seed=seed):
+    the replicates are drawn from the same `rng` calls and summed in a different
+    order. `x` and `y` are (runs, environments).
+
+    A replicate depends only on how many times each run is drawn. The runs of `y`
+    are sorted once per environment and every run of `x` is located among them, so
+    the wins of a run of `x` in a replicate are read off the cumulative draw counts
+    of `y`, in time linear in the number of runs."""
+
+    envs = x.shape[1]
+    na = np.isfinite(x).sum(axis=0)
+    nb = np.isfinite(y).sum(axis=0)
+    a_start = np.concatenate([[0], np.cumsum(na)])
+    b_start = np.concatenate([[0], np.cumsum(nb)])
+    position_a = np.zeros(x.shape, dtype=int)
+    position_b = np.zeros(y.shape, dtype=int)
+    lo, hi, start = [], [], []
+    for e in range(envs):
+        a = x[:na[e], e]
+        b = y[:nb[e], e]
+        order = np.argsort(b)
+        position_a[:na[e], e] = a_start[e] + np.arange(na[e])
+        position_b[order, e] = b_start[e] + np.arange(nb[e])
+        lo.append(b_start[e] + np.searchsorted(b[order], a, side="left"))
+        hi.append(b_start[e] + np.searchsorted(b[order], a, side="right"))
+        start.append(np.full(na[e], b_start[e]))
+    lo, hi, start = (np.concatenate(v) for v in (lo, hi, start))
+    env_of_a = np.repeat(np.eye(envs), na, axis=0)
+    pairs = na * nb
+
+    rng = np.random.default_rng(seed)
+    replicates = []
+    for begin in range(0, reps, REPS_PER_CHUNK):
+        size = min(REPS_PER_CHUNK, reps - begin)
+        counts_a = run_counts(x, na, position_a, a_start[-1], size, rng)
+        counts_b = run_counts(y, nb, position_b, b_start[-1], size, rng)
+        below = np.concatenate(
+            [np.zeros((size, 1)), np.cumsum(counts_b, axis=1)],
+            axis=1,
+        )
+        wins = 0.5 * (below[:, lo] + below[:, hi]) - below[:, start]
+        replicates.append(((counts_a * wins) @ env_of_a / pairs).mean(axis=-1))
+    low, high = np.percentile(np.concatenate(replicates), [2.5, 97.5], axis=0)
+    return probability_of_improvement(x, y), low, high

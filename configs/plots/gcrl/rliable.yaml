@@ -4,22 +4,52 @@ default:
 configs:
   sun_ratio_adaptive:
     - algorithm: sun_ratio_adaptive
-      plot.label: "SUN (Adapt., Multipl.)"
+      tuned: rho
+      plot.label: "SUN (Adaptive, Multiplicative)"
+    - algorithm: sun_ratio_episodic
+      tuned: rho
+      plot.label: "SUN (Episodic, Multiplicative)"
+    - algorithm: sun_ratio_step
+      tuned: rho
+      plot.label: "SUN (Per-Step, Multiplicative)"
+    - algorithm: sun_ratio_success
+      tuned: rho
+      plot.label: "SUN (At Success, Multiplicative)"
   sun_ucb_adaptive:
     - algorithm: sun_ucb_adaptive
-      plot.label: "SUN (Adapt., Additive)"
-  sun_ratio_step:
-    - algorithm: sun_ratio_step
-      plot.label: "SUN (Per-Step, Multipl.)"
-  sun_ratio_episodic:
-    - algorithm: sun_ratio_episodic
-      plot.label: "SUN (Epis., Multipl.)"
+      tuned: [beta, rho]
+      plot.label: "SUN (Adaptive, Additive)"
+    - algorithm: sun_ucb_episodic
+      tuned: [beta, rho]
+      plot.label: "SUN (Episodic, Additive)"
+    - algorithm: sun_ucb_step
+      tuned: [beta, rho]
+      plot.label: "SUN (Per-Step, Additive)"
+    - algorithm: sun_ucb_success
+      tuned: [beta, rho]
+      plot.label: "SUN (At Success, Additive)"
   adagoal:
+    - algorithm: adagoal_adaptive
+      plot.label: "AdaGoal (Adaptive)"
     - algorithm: adagoal_episodic
-      plot.label: "AdaGoal"
+      plot.label: "AdaGoal (Episodic)"
+    - algorithm: adagoal_step
+      plot.label: "AdaGoal (Per-Step)"
+    - algorithm: adagoal_success
+      plot.label: "AdaGoal (At Success)"
   discover:
+    - algorithm: discover_adaptive
+      tuned: beta
+      plot.label: "DISCOVER (Adaptive)"
     - algorithm: discover_episodic
-      plot.label: "DISCOVER"
+      tuned: beta
+      plot.label: "DISCOVER (Episodic)"
+    - algorithm: discover_step
+      tuned: beta
+      plot.label: "DISCOVER (Per-Step)"
+    - algorithm: discover_success
+      tuned: beta
+      plot.label: "DISCOVER (At Success)"
   random:
     - algorithm: random
       plot.label: "Random"

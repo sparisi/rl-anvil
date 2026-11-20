@@ -4,7 +4,8 @@ global_sweep:
     - gym_gridworlds/four_rooms_stuck_hard
     - gym_gridworlds/four_rooms_stuck_hard_sticky
     - gym_gridworlds/four_rooms_stuck_hard_no_noise
-  algorithm: [sun_ratio_adaptive]
+  algorithm: sun_ratio_adaptive
+  tuned: rho
   results.true_visit_check: True
   results.save_memory: True
   experiment.testing_episodes: 0

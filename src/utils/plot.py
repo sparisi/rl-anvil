@@ -7,6 +7,7 @@ imports no plotting library.
 """
 
 import colorsys
+import fnmatch
 import io
 import itertools
 import json
@@ -280,9 +281,9 @@ def plot_entries(plot_cfg: dict, with_directives: bool = False):
     return entries
 
 
-# Within a colour group: the first entry is a darkened palette colour, the last
-# lands at MAX_BRIGHTEN, and the ones between are spaced evenly, so a group of two
-# reads as clearly as a group of four.
+# Among the entries of one hue: the first is a darkened palette colour, the last
+# lands at MAX_BRIGHTEN, and the ones between are spaced evenly, so two entries
+# read as clearly as four.
 DARKEN = -0.25
 MAX_BRIGHTEN = 0.72
 LINESTYLES = ["-", "--", ":", "-."]
@@ -300,60 +301,100 @@ def shade(color, amount):
     return colorsys.hls_to_rgb(h, l, s)
 
 
-def style_entries(plot_cfg: dict):
-    """The entries a plot config draws, in the order it writes them, each with
-    what to draw it in, as a list of dicts with:
+def style_entries(plot_cfg: dict, blocks=("configs",)):
+    """Return the entries of the plot config's `blocks`, block by block in the
+    order of `blocks` and within a block in the order the config writes them,
+    each with what to draw it in, as a list of dicts with:
 
-        group       the colour group it belongs to
+        group       the colour group it belongs to, as (block, group name), so
+                    groups of the same name in two blocks stay apart
         group_label what to call the group: its value in the plot config's
                     `group_labels`, a mapping of group names to labels, and None
                     when that mapping leaves it out
         selector    what the runs must hold, as {hyperparameter: value}
         label       what to call them
         base_color  the group's palette colour, unshaded
-        color       the group's hue, shaded by the entry's position in it
-        linestyle   varied within a group as well, so a printout in grey still reads
+        color       the hue's palette colour, shaded by the entry's position
+                    among the entries of that hue
+        linestyle   varied the same way, so a printout in grey still reads
         hatch       the same distinction, for bars
 
-    A group's entries share a hue; a group of one keeps the palette colour
-    undarkened, since it has no siblings to reserve brightness for.
+    Every block is in the format of `configs`. Which hue a group gets is fixed by
+    `color_scheme`, a list in palette order, so a group is the same colour
+    whichever figure draws it, and however many others it is drawn beside. An
+    item of the list is a group name, an fnmatch pattern over group names such as
+    `<prefix>*`, or a list of names and patterns, and a group takes the palette
+    index of the first item that matches its name. A group name no item matches
+    takes the next free index after the list, in the order the blocks write it,
+    and keeps it in every block.
 
-    Which hue a group gets is fixed by `color_scheme`, a list of group names in
-    palette order -- so a group is the same colour whichever figure draws it, and
-    however many others it is drawn beside. A group the list leaves out takes the
-    next free index, in the order the config writes it.
+        color_scheme:
+          - <group>
+          - <prefix>*
+          - [<group>, <prefix>*]
 
-    An entry's `plot.color` overrides the shade it would have been given,
-    whatever its group and its position in it, for the entry that is not one of
-    the family the rest of the group is. Anything matplotlib reads as a colour
-    does: a name, a hex string, an (r, g, b) triple. Its linestyle and hatch are
-    left alone, so it stays distinguishable in grey.
+    The entries of one palette colour, across groups and blocks, are shaded,
+    styled and hatched as one sequence: the first is the darkened palette colour,
+    the last is the darkened colour brightened by MAX_BRIGHTEN, and the ones
+    between are spaced evenly. Indices past the end of the palette wrap around to
+    its start and share the sequence of the colour they wrap to. A palette colour
+    with a single entry keeps it undarkened.
+
+    An entry's `plot.color` overrides the shade it would have been given. Anything
+    matplotlib reads as a colour does: a name, a hex string, an (r, g, b) triple.
+    Its linestyle and hatch are left alone, so it stays distinguishable in grey.
 
     Every script that puts several configurations on one axis reads its entries
     here, so a configuration is the same colour in all of them."""
 
     by_group = {}
-    for name, label, selector, directives in plot_entries(
-        plot_cfg, with_directives=True
-    ):
-        by_group.setdefault(name, []).append((label, selector, directives))
+    for block in blocks:
+        for name, label, selector, directives in plot_entries(
+            {"configs": plot_cfg.get(block) or {}},
+            with_directives=True,
+        ):
+            by_group.setdefault((block, name), []).append((label, selector, directives))
 
     group_labels = plot_cfg.get("group_labels") or {}
-    hue = {name: i for i, name in enumerate(plot_cfg.get("color_scheme") or [])}
-    for name in by_group:
-        if name not in hue:
-            hue[name] = len(hue)
+    scheme = [
+        item if isinstance(item, list) else [item]
+        for item in plot_cfg.get("color_scheme") or []
+    ]
+    hue = {}
+    free = len(scheme)
+    for _block, name in by_group:
+        if name in hue:
+            continue
+        matched = [
+            i for i, patterns in enumerate(scheme)
+            if any(fnmatch.fnmatchcase(name, str(p)) for p in patterns)
+        ]
+        if matched:
+            hue[name] = matched[0]
+        else:
+            hue[name] = free
+            free += 1
+
+    of_hue = {}
+    for (_block, name), group in by_group.items():
+        k = hue[name] % len(PALETTE)
+        of_hue[k] = of_hue.get(k, 0) + len(group)
 
     entries = []
-    for name, group in by_group.items():
-        base = PALETTE[hue[name] % len(PALETTE)]
-        for i, (label, selector, directives) in enumerate(group):
-            if len(group) == 1:
+    seen = {}
+    for (block, name), group in by_group.items():
+        k = hue[name] % len(PALETTE)
+        base = PALETTE[k]
+        n = of_hue[k]
+        for label, selector, directives in group:
+            i = seen.get(k, 0)
+            seen[k] = i + 1
+            if n == 1:
                 color = base
             elif i == 0:
                 color = shade(base, DARKEN)
             else:
-                color = shade(shade(base, DARKEN), MAX_BRIGHTEN * i / (len(group) - 1))
+                color = shade(shade(base, DARKEN), MAX_BRIGHTEN * i / (n - 1))
             if directives.get(COLOR_KEY) is not None:
                 try:
                     color = mc.to_rgb(directives[COLOR_KEY])
@@ -364,7 +405,7 @@ def style_entries(plot_cfg: dict):
                         f"read as a colour."
                     )
             entries.append({
-                "group": name,
+                "group": (block, name),
                 "group_label": group_labels.get(name),
                 "selector": selector,
                 "label": label,

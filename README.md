@@ -136,7 +136,6 @@ The second command will merge the heatmaps and videos into one stream each.
 works in every environment. The code automatically resizes RGB renderings to 25% to
 save memory.
 
-
 ## Data Structure
 You can decide what to save via the `results` key (`results.data_dir`, `results.save_videos`, ...).
 ```
@@ -167,7 +166,6 @@ You can decide what to save via the `results` key (`results.data_dir`, `results.
 `results.force_run=False` to stop the run instead.
 
 ## Code Structure
-
 > The code is a compromise between readability, long-term maintainability, and
 consistency. For example, configurations are defined with Hydra, which makes it
 easy to customize algorithms and define sweeps. However, every class reads its
@@ -212,6 +210,25 @@ familiarizing yourself with the sweep and plot examples (see
 [Launching Sweeps](#launching-sweeps) and
 [Data Processing and Visualization](#data-processing-and-visualization)).
 
+> An algorithm may need tuned hyperparameters depending on the environment.
+> To define a customized set of (algorithm, environment) tunings, create a YAML
+> config file, place it in [`configs/tunings/`](configs/tunings/), and pass it
+> with the `++tuned=` override. For example, create `configs/tunings/eps_init.yaml`
+> like
+>
+> ```yaml
+> eps_greedy:
+>   gymnasium/mountain_car: {agent.actor.eps.init_value: 0.5}
+>   gym_gridworlds/four_rooms: {agent.actor.eps.init_value: 0.2}
+> ```
+>
+> and pass
+>
+> ```
+> python main.py algorithm=eps_greedy environment=gymnasium/mountain_car ++tuned=eps_init
+> ```
+
+
 ### 2. Training and Testing + Reproducibility
 The training routine is handled in [`src/experiment.py`](src/experiment.py).
 It is a simple loop where the agent first fills the replay memory, then performs
@@ -250,7 +267,6 @@ seeds. This reduces noise within same-seed runs, and correlation between
 training and testing.
 
 ### 3. The Agent
-
 The main components are [`src/critic.py`](src/critic.py) and [`src/actor.py`](src/actor.py).
 The former defines value functions and their losses; the latter handles exploration,
 which it does by calling the critic.
@@ -270,7 +286,6 @@ and anything you can override, you can sweep. See [`encoders.yaml`](configs/swee
 which sweeps a no-encoder baseline and three encoder families, crossed with their kernels,
 aggregation statistics, dropout rates, observation normalization, and three environments,
 from a single file.
-
 
 ## Launching Sweeps
 Sweeps are defined in [`configs/sweeps/`](configs/sweeps/). The commands below use
@@ -394,12 +409,9 @@ unfinished ones, and retries the failed ones.
 - Branch for JAX and Gymnax.
 
 ## License
-
 This project is licensed under the [MIT License](LICENSE).
 
-
 ## Citation
-
 If you use this software, please cite it as below (see [CITATION.cff](CITATION.cff)).
 
 ```bibtex

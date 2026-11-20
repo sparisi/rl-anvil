@@ -2,25 +2,28 @@ global_sweep:
   environment:
     - gym_gridworlds/three_rooms_wall_mini_nonuniform
     - gym_gridworlds/four_rooms_stuck_hard
-    - gym_gridworlds/four_rooms_stuck_hard_sticky
     - gym_gridworlds/travel_field_small
     - gymnasium/acrobot
     - gymnasium/mountain_car
     - gymnasium/pendulum_discrete
     - gymnasium/cart_pole
     - gymnasium/lunar_lander
-    - gymnasium/lunar_lander_noisyact
-    # - gymnasium/lunar_lander_full
-  algorithm:
-    - adagoal_episodic
-    - discover_episodic
-    - random
-    - sun_ratio_adaptive
-    - sun_ratio_adaptive_binned
-    - sun_ratio_episodic
-    - sun_ratio_step
-    - sun_ucb_adaptive
-    - sun_novelty_adaptive
-    - sun_reachability_adaptive
   results.save_memory: True
   experiment.testing_episodes: 0
+
+config_sweep:
+  - algorithm:
+      - adagoal_episodic
+      - random
+      - sun_ratio_adaptive_binned
+  - algorithm: discover_episodic
+    tuned: beta
+  - algorithm:
+      - sun_ratio_adaptive
+      - sun_ratio_episodic
+      - sun_ratio_step
+      - sun_novelty_adaptive
+      - sun_reachability_adaptive
+    tuned: rho
+  - algorithm: sun_ucb_adaptive
+    tuned: [[beta, rho]]

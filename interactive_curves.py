@@ -29,7 +29,9 @@ that run's own curve.
   Violin max    pools, i.e. the global_sweep combinations, each scored by the
   Violin final  mean over its seeds -- with the quartile bar, the median and a
                 dot per curve. The three differ only in what a run scores: the
-                area under its curve, its best point, or its last.
+                area under its curve, its best point, or its last. Under
+                --all_seeds the violin, the quartile bar, the median and the
+                dots are over every run, a dot per run.
 
 Every row ends in an extra "all" subplot, pooling every run of that row. In the
 violin modes it is the density over the means of every curve of the row; in the
@@ -45,8 +47,9 @@ scores every run by its final value or its area under the curve, chosen with the
 "Type" dropdown, and normalizes each environment's scores by the lowest and
 highest score of any run of that environment and statistic on the page. A
 configuration is one cell's curve, matched across environments by its block,
-row, column and curve, and only configurations with runs in every environment
-are counted; environments holding different numbers of its runs are padded
+row, column and curve, and each estimate is over the environments where its
+configuration has runs, both configurations of a pair for the probability of
+improvement; environments holding different numbers of its runs are padded
 rather than cut, and each is weighed the same whatever its run count, except in
 the IQM, which pools the runs. The tab shows the median, IQM, mean and
 optimality gap of each configuration, the probability of improvement of every
@@ -60,9 +63,9 @@ runs by one hyperparameter at a time, chosen from a dropdown. A row of its grid
 is an environment and the last row pools them; a column is one of the three scores
 (AUC, max, final); and a cell holds a violin per value that hyperparameter takes,
 over the curves holding that value, each scored by the mean over its seeds, with
-a dot per curve. Only runs whose sweep entry VARIES it are counted
-(configurations that do not declare the parameter or do not vary it are
-ignored).
+a dot per curve; under --all_seeds the violins are over every run, with a dot
+per run. Only runs whose sweep entry VARIES it are counted (configurations that
+do not declare the parameter or do not vary it are ignored).
 
 "Log scale" puts the y axis into a symlog.
 
@@ -111,7 +114,7 @@ from src.utils.aggregate import (
     interval_estimates,
     iqm,
     performance_profile,
-    probability_of_improvement,
+    probability_of_improvement_interval,
     stack_runs,
 )
 from src.utils.id import CONFIG_ID, decode_stat
@@ -197,6 +200,12 @@ parser.add_argument(
     type=int,
     default=2000,
     help="Bootstrap replicates behind every interval of the rliable tab.",
+)
+parser.add_argument(
+    "--all_seeds",
+    action="store_true",
+    help="Draw the violins, quartiles, medians and dots of the violin modes and "
+         "the parameters tab over every run, a dot per run.",
 )
 parser.add_argument("-v", "--verbose", action="store_true")
 args = parser.parse_args()
@@ -941,6 +950,13 @@ RLIABLE_SCORES = {"score_final": "Final", "score_auc": "AUC"}
 PROFILE_TAUS = np.linspace(0.0, 1.0, 51)
 
 
+def common_envs(per_env_a, per_env_b):
+    """Return the indices of the environments where both configurations have
+    runs, given each one's runs per environment."""
+
+    return [k for k, (a, b) in enumerate(zip(per_env_a, per_env_b)) if len(a) and len(b)]
+
+
 def rliable_records(runs):
     """The rliable estimates of every (statistic, score) as three lists of
     records: the aggregate metrics per configuration, the probability of
@@ -951,9 +967,11 @@ def rliable_records(runs):
     environment and statistic, so the normalized scores span [0, 1]; an
     environment where every run scored the same is left out, with a warning, and
     the environments each estimate is over are carried as `n_envs`. A
-    configuration is (block, row, column, curve) and is counted only with runs in
-    every remaining environment; environments holding different numbers of its
-    runs are padded (see aggregate.stack_runs), not cut."""
+    configuration is (block, row, column, curve), and its aggregates and profile
+    are over the remaining environments where it has runs; a probability of
+    improvement is over the environments where both configurations of the pair
+    have runs. Environments holding different numbers of runs are padded (see
+    aggregate.stack_runs), not cut."""
 
     frame = pd.DataFrame(runs)
     keys = ["_block", "_row", "_col", "_curve"]
@@ -979,34 +997,38 @@ def rliable_records(runs):
             if not envs:
                 continue
 
-            scores, labels, missing = {}, {}, 0
+            scores, per_envs, labels, partial = {}, {}, {}, 0
             for key, config in by_stat.groupby(keys, sort=False):
                 per_env = [
                     (config.loc[config["_env"] == e, score].to_numpy(dtype=float)
                      - low[e]) / (high[e] - low[e])
                     for e in envs
                 ]
-                if not all(len(p) for p in per_env):
-                    missing += 1
+                if not any(len(p) for p in per_env):
                     continue
-                scores[key] = stack_runs(per_env)
+                if not all(len(p) for p in per_env):
+                    partial += 1
+                per_envs[key] = per_env
+                scores[key] = stack_runs([p for p in per_env if len(p)])
                 block_label = config["_block_label"].iloc[0] or f"entry {key[0] + 1}"
                 labels[key] = block_label
-            if score == "score_final" and missing:
+            if score == "score_final" and partial:
                 print(
-                    f"WARNING: rliable tab, {stat}: {missing} configuration(s) "
-                    f"without runs in every environment are left out."
+                    f"WARNING: rliable tab, {stat}: {partial} configuration(s) "
+                    f"without runs in every environment are estimated over the "
+                    f"environments where they have runs."
                 )
             if not scores:
                 continue
             pairs = [
                 (a, b)
                 for a, b in itertools.combinations(scores, 2)
-                if a[0] == b[0]
+                if a[0] == b[0] and common_envs(per_envs[a], per_envs[b])
             ]
             jobs.append((
-                {"statistic": stat, "type": kind, "n_envs": len(envs)},
+                {"statistic": stat, "type": kind},
                 scores,
+                per_envs,
                 labels,
                 pairs,
             ))
@@ -1014,11 +1036,11 @@ def rliable_records(runs):
     # Gathered first and computed after, so the bar knows how many estimates
     # there are: an aggregate and a profile per configuration, and one per pair.
     progress = tqdm(
-        total=sum(2 * len(scores) + len(pairs) for _, scores, _, pairs in jobs),
+        total=sum(2 * len(scores) + len(pairs) for _, scores, _, _, pairs in jobs),
         desc="rliable",
         unit="estimate",
     )
-    for base, scores, labels, pairs in jobs:
+    for base, scores, per_envs, labels, pairs in jobs:
         for key, s in scores.items():
             point, lo, hi = interval_estimates(
                 aggregate_metrics,
@@ -1036,14 +1058,15 @@ def rliable_records(runs):
                     "lo": float(lo[k]),
                     "hi": float(hi[k]),
                     "n_runs": int(np.isfinite(s).sum()),
+                    "n_envs": s.shape[-1],
                 })
             progress.update()
 
         for a, b in pairs:
-            value, lo, hi = interval_estimates(
-                probability_of_improvement,
-                scores[a],
-                scores[b],
+            common = common_envs(per_envs[a], per_envs[b])
+            value, lo, hi = probability_of_improvement_interval(
+                stack_runs([per_envs[a][k] for k in common]),
+                stack_runs([per_envs[b][k] for k in common]),
                 reps=args.rliable_reps,
             )
             poi_rows.append({
@@ -1056,6 +1079,7 @@ def rliable_records(runs):
                 "value": float(value),
                 "lo": float(lo),
                 "hi": float(hi),
+                "n_envs": len(common),
             })
             progress.update()
 
@@ -1079,6 +1103,7 @@ def rliable_records(runs):
                     "frac": float(profile[t]),
                     "lo": float(lo[t]),
                     "hi": float(hi[t]),
+                    "n_envs": s.shape[-1],
                 }
                 for t, tau in enumerate(PROFILE_TAUS)
             ]
@@ -1088,9 +1113,9 @@ def rliable_records(runs):
 
 
 def build_rliable_spec(runs, curve_domain):
-    """The rliable panel, or None when no configuration has runs in every
-    environment. A "Statistic" and a "Type" dropdown pick what every chart of it
-    shows: the aggregate metrics, one column per metric and a bar per
+    """The rliable panel, or None when no configuration has runs. A "Statistic"
+    and a "Type" dropdown pick what every chart of it shows: the aggregate
+    metrics, one column per metric and a bar per
     configuration spanning its interval with a tick at the estimate; the
     probability of improvement, a row of pairs per sweep entry with a rule at
     0.5; and the performance profiles. Colours follow `curve_domain`, as on the
@@ -1379,13 +1404,16 @@ def build_param_spec(rows):
     #
     # The jitter is computed here, from the golden-ratio sequence over `_unit`,
     # so a curve's runs share it: an expression using random() would re-scatter
-    # the dots on every signal change.
+    # the dots on every signal change. Under --all_seeds `_k` is the same
+    # sequence over the records, a run's own offset.
     unit_index = {u: k for k, u in enumerate(dict.fromkeys(r["_unit"] for r in rows))}
     values = []
-    for r in rows:
+    for n, r in enumerate(rows):
         rec = {k: r[k] for k in reserved}
         rec["_unit"] = unit_index[r["_unit"]]
         rec["_j"] = ((rec["_unit"] * 0.6180339887498949) % 1.0) - 0.5
+        if args.all_seeds:
+            rec["_k"] = ((n * 0.6180339887498949) % 1.0) - 0.5
         for key, seen in candidates.items():
             if key in r:
                 rec[f"hp_{names[key]}"] = r[key]
@@ -1426,6 +1454,44 @@ def build_param_spec(rows):
     y_enc = {"type": "quantitative", "title": None, "scale": {"zero": False}}
     cell_width = min(460, max(180, 52 * widest))
 
+    # Each curve's score: the mean over its runs, with how many runs it is over.
+    # The violins, the quartiles and the dots are over these, or over the runs
+    # themselves under --all_seeds.
+    curve_mean = {
+        "aggregate": [
+            {"op": "mean", "field": "score", "as": "score"},
+            {"op": "valid", "field": "score", "as": "_n"},
+        ],
+        "groupby": ["_env", "_score_kind", "_unit", "_i", "_j", "_val"],
+    }
+    violin_scores = [] if args.all_seeds else [curve_mean]
+    if args.all_seeds:
+        dot_transform = [{"calculate": "datum._i + 0.3 * datum._k", "as": "_dot_x"}]
+        dot_tooltip = [
+            {"field": "_val", "type": "nominal", "title": "value"},
+            {
+                "field": "score",
+                "type": "quantitative",
+                "title": "score",
+                "format": ".3f",
+            },
+        ]
+    else:
+        dot_transform = [
+            curve_mean,
+            {"calculate": "datum._i + 0.3 * datum._j", "as": "_dot_x"},
+        ]
+        dot_tooltip = [
+            {"field": "_val", "type": "nominal", "title": "value"},
+            {
+                "field": "score",
+                "type": "quantitative",
+                "title": "mean score",
+                "format": ".3f",
+            },
+            {"field": "_n", "type": "quantitative", "title": "runs"},
+        ]
+
     return {
         "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
         "data": {"values": values},
@@ -1460,15 +1526,6 @@ def build_param_spec(rows):
                 "fold": ["score_auc", "score_max", "score_final"],
                 "as": ["_score_kind", "score"],
             },
-            # Each curve's score: the mean over its runs, with how many runs it
-            # is over. The violins, quartiles and dots are all over these.
-            {
-                "aggregate": [
-                    {"op": "mean", "field": "score", "as": "score"},
-                    {"op": "valid", "field": "score", "as": "_n"},
-                ],
-                "groupby": ["_env", "_score_kind", "_unit", "_i", "_j", "_val"],
-            },
         ],
         "facet": {
             "row": {
@@ -1499,6 +1556,7 @@ def build_param_spec(rows):
                 # the point, and the dots say how many there were.
                 {
                     "transform": [
+                        *violin_scores,
                         {
                             "density": "score",
                             "groupby": ["_i"],
@@ -1542,6 +1600,7 @@ def build_param_spec(rows):
                 # The quartiles and the median, as in the environment tabs.
                 {
                     "transform": [
+                        *violin_scores,
                         {
                             "aggregate": [
                                 {"op": "q1", "field": "score", "as": "_q1"},
@@ -1582,11 +1641,10 @@ def build_param_spec(rows):
                         },
                     ],
                 },
-                # The curve means themselves, scattered across the slot.
+                # The curve means themselves, or the runs under --all_seeds,
+                # scattered across the slot.
                 {
-                    "transform": [
-                        {"calculate": "datum._i + 0.3 * datum._j", "as": "_dot_x"},
-                    ],
+                    "transform": dot_transform,
                     "mark": {
                         "type": "point",
                         "filled": True,
@@ -1600,16 +1658,7 @@ def build_param_spec(rows):
                     "encoding": {
                         "y": {"field": "score", **y_enc},
                         "x": {"field": "_dot_x", **x_enc},
-                        "tooltip": [
-                            {"field": "_val", "type": "nominal", "title": "value"},
-                            {
-                                "field": "score",
-                                "type": "quantitative",
-                                "title": "mean score",
-                                "format": ".3f",
-                            },
-                            {"field": "_n", "type": "quantitative", "title": "runs"},
-                        ],
+                        "tooltip": dot_tooltip,
                     },
                 },
             ],
@@ -1657,6 +1706,12 @@ def build_spec(
     # were averaged in Python (see pooled_rows) and arrive already summarised.
     pooled = long_df[long_df["_kind"] == "violin"].assign(_col=ALL_COL)
     long_df = pd.concat([long_df, pooled], ignore_index=True)
+
+    # Under --all_seeds a violin row's `_run_i` numbers it among every violin row,
+    # pooled copies included, and its dot's offset is taken over that number.
+    if args.all_seeds:
+        violin = long_df["_kind"] == "violin"
+        long_df.loc[violin, "_run_i"] = np.arange(violin.sum())
 
     # Plain ints: the seeds reach the spec through json.dumps, which has no
     # encoder for numpy scalars.
@@ -1744,11 +1799,13 @@ def build_spec(
     v_half = f"0.4 * ({x_len})"
     # The curve means are scattered across the middle of it rather than stacked
     # on the centre line, so curves that scored alike stay countable. The offsets
-    # are the golden-ratio sequence over the curve's `_unit_i` rather than
-    # random(): a Vega expression is re-evaluated on every signal change, and
-    # dots that jump when a dropdown moves read as new data.
+    # are the golden-ratio sequence over the curve's `_unit_i`, or over the run's
+    # `_run_i` under --all_seeds, rather than random(): a Vega expression is
+    # re-evaluated on every signal change, and dots that jump when a dropdown
+    # moves read as new data.
+    dot_index = "_run_i" if args.all_seeds else "_unit_i"
     jitter = (
-        f"{v_mid} + 0.3 * ({x_len}) * ((((datum._unit_i)"
+        f"{v_mid} + 0.3 * ({x_len}) * ((((datum.{dot_index})"
         f" * 0.6180339887498949) % 1) - 0.5)"
     )
 
@@ -1905,6 +1962,9 @@ def build_spec(
             "groupby": ["_unit_i", "_curve"],
         },
     ]
+    # What the violins, the quartiles and the dots are over: the curve means, or
+    # every run under --all_seeds.
+    violin_scores = pick_score if args.all_seeds else curve_means
 
     # A scale's `type` is the one thing a Vega-Lite param cannot drive, so the log
     # axis is the values put into log space and the ticks labelled back out of it.
@@ -2540,7 +2600,8 @@ def build_spec(
                     },
                     # One violin per cell: the density over the curves the cell
                     # pools, which are the global_sweep combinations, each scored
-                    # by the mean over its seeds.
+                    # by the mean over its seeds, or over every run under
+                    # --all_seeds.
                     #
                     # The density is normalised by its own peak and laid out as
                     # x/x2 about the middle of the span, so the shape is symmetric
@@ -2549,7 +2610,7 @@ def build_spec(
                     {
                         "transform": [
                             {"filter": violin_filter},
-                            *curve_means,
+                            *violin_scores,
                             {"calculate": "datum.score", "as": "_score"},
                             # An empty groupby, not a missing one: the facet
                             # pushes its own fields into it, which is what makes
@@ -2603,12 +2664,13 @@ def build_spec(
                             "color": {"value": "#7f7f7f"},
                         },
                     },
-                    # The quartiles of the curve means down the middle of it and
-                    # their median across them.
+                    # The quartiles of the curve means, or of the runs under
+                    # --all_seeds, down the middle of it and their median across
+                    # them.
                     {
                         "transform": [
                             {"filter": violin_filter},
-                            *curve_means,
+                            *violin_scores,
                             {"calculate": "datum.score", "as": "_score"},
                             {
                                 "aggregate": [
@@ -2675,10 +2737,10 @@ def build_spec(
                             },
                         ],
                     },
-                    # The curve means themselves, at the height each scored: a
-                    # density drawn over six points looks like a distribution it
-                    # has not earned. Which curve a dot belongs to is in its
-                    # tooltip -- the dots are one colour.
+                    # The curve means themselves, or the runs under --all_seeds,
+                    # at the height each scored: a density drawn over six points
+                    # looks like a distribution it has not earned. Which curve a
+                    # dot belongs to is in its tooltip -- the dots are one colour.
                     layer(
                         violin_filter,
                         {
@@ -2696,11 +2758,21 @@ def build_spec(
                             (
                                 "score",
                                 "quantitative",
+                                {"title": "score", "format": ".3f"},
+                            ),
+                        ) if args.all_seeds else tooltip(
+                            ("_curve", "nominal", {"title": "curve"}),
+                            (
+                                "score",
+                                "quantitative",
                                 {"title": "mean score", "format": ".3f"},
                             ),
                             ("_n", "quantitative", {"title": "runs"}),
                         ),
-                        calc=[*curve_means, {"calculate": jitter, "as": "_dot_x"}],
+                        calc=[
+                            *violin_scores,
+                            {"calculate": jitter, "as": "_dot_x"},
+                        ],
                         x={
                             "field": "_dot_x",
                             "type": "quantitative",
@@ -3179,8 +3251,8 @@ if args.with_rliable:
     rliable_spec = build_rliable_spec(rliable_runs, curve_domain)
     if rliable_spec is None:
         vprint(
-            "\nNo configuration has runs in every environment, so the rliable "
-            "tab was not written."
+            "\nNo configuration has runs in an environment it can be normalized "
+            "in, so the rliable tab was not written."
         )
     else:
         panels.append({"title": "rliable", "spec": rliable_spec})

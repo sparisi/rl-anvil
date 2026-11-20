@@ -1,0 +1,20 @@
+discover_episodic:
+  gym_gridworlds/three_rooms_wall_mini_nonuniform: {agent.actor.beta_novelty: 1.0}
+  gym_gridworlds/four_rooms_stuck_hard: {agent.actor.beta_novelty: 100.0}
+  gym_gridworlds/travel_field_small: {agent.actor.beta_novelty: 100.0}
+  gymnasium/mountain_car: {agent.actor.beta_novelty: 1000.0}
+  gymnasium/pendulum_discrete: {agent.actor.beta_novelty: 1000.0}
+  gymnasium/lunar_lander: {agent.actor.beta_novelty: 100.0}
+  gymnasium/lunar_lander_full: {agent.actor.beta_novelty: 100.0}
+  gymnasium/acrobot: {agent.actor.beta_novelty: 1000.0}
+  gymnasium/cart_pole: {agent.actor.beta_novelty: 100.0}
+
+sun_ucb_adaptive:
+  gym_gridworlds/three_rooms_wall_mini_nonuniform: {agent.actor.beta_novelty: 1.0}
+  gym_gridworlds/four_rooms_stuck_hard: {agent.actor.beta_novelty: 10.0}
+  gym_gridworlds/travel_field_small: {agent.actor.beta_novelty: 100.0}
+  gymnasium/mountain_car: {agent.actor.beta_novelty: 10.0}
+  gymnasium/pendulum_discrete: {agent.actor.beta_novelty: 1.0}
+  gymnasium/lunar_lander: {agent.actor.beta_novelty: 1.0}
+  gymnasium/acrobot: {agent.actor.beta_novelty: 100.0}
+  gymnasium/cart_pole: {agent.actor.beta_novelty: 100.0}

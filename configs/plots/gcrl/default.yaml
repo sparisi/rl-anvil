@@ -10,16 +10,14 @@ ignored_cfg_keys:
 # legend_rows_cols: [1, -1]  # defines how to arrange legend entries
 
 color_scheme:
-  - sun_ratio_adaptive
-  - adagoal
-  - discover
+  - sun_ratio*
+  - adagoal*
+  - discover*
   - random
-  - sun_ratio_episodic
-  - sun_ratio_step
-  - sun_ucb_adaptive
-  - sun_novelty_adaptive
-  - sun_reachability_adaptive
-  - sun_ratio_adaptive_binned
+  - sun_ucb*
+  - sun_novelty*
+  - eps_greedy
+  - sun_reachability*
 
 # Configurations to plot and their legend labels.
 # One group per algorithm, so each of them is a hue of its own.
@@ -27,12 +25,14 @@ color_scheme:
 configs:
   sun_ratio_adaptive:
     - algorithm: sun_ratio_adaptive
+      tuned: rho
       plot.label: "SUN"
   adagoal:
-    - algorithm: adagoal
+    - algorithm: adagoal_episodic
       plot.label: "AdaGoal"
   discover:
-    - algorithm: discover
+    - algorithm: discover_episodic
+      tuned: beta
       plot.label: "DISCOVER"
   random:
     - algorithm: random

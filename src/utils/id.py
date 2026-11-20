@@ -5,14 +5,19 @@ import os
 import re
 import yaml
 from functools import lru_cache
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 from omegaconf.errors import OmegaConfBaseException
 from hydra import compose, initialize_config_dir
+from hydra.core.hydra_config import HydraConfig
 from rich import print
 
 from src.utils.misc import atomic_open
 from src.utils.paths import CONFIG_DIR
 
+
+# Where configurations with tuned hyperparameters per (algorithm, environment)
+# pairs are stored.
+TUNED_PATH = os.path.join(CONFIG_DIR, "tunings", "{}.yaml")
 
 # Keys that do not define a configuration. See configs/full_config.yaml for details.
 # Every other key must resolve to the same value wherever it is composed: a value
@@ -25,6 +30,7 @@ DROPPED_CFG_KEYS = (
     "extra",
     "meta",
     "results",
+    "tuned",
     "experiment.rng_seed",
     # "agent.critic.approximator.device",
 )
@@ -201,10 +207,79 @@ def compose_cfg(overrides=(), config_name: str = "default") -> DictConfig:
 
     and compose_cfg(config_name="environment/gymnasium/lunar_lander") composes
     that file and its `defaults:` list alone, without configs/default.yaml.
+
+    If an override sets `tuned` to a tuning name or a list of names, e.g.
+    `++tuned=rho` or `++tuned=[beta,rho]`, the values in those TUNED_PATH
+    files override some parameters (apply_tuned).
+    The key `tuned` is in DROPPED_CFG_KEYS, so it is not part of the config ID.
     """
 
+    tuned = any(o.split("=", 1)[0].lstrip("+~") == "tuned" for o in overrides)
     with initialize_config_dir(version_base=None, config_dir=CONFIG_DIR):
-        return compose(config_name=config_name, overrides=list(overrides))
+        cfg = compose(config_name=config_name, overrides=list(overrides), return_hydra_config=tuned)
+    if tuned:
+        if cfg.get("tuned"):
+            apply_tuned(cfg, cfg.hydra)
+        with open_dict(cfg):
+            del cfg["hydra"]
+    return cfg
+
+
+@lru_cache(maxsize=None)
+def tuned_table(name: str) -> dict:
+    """Return the file of the tuning `name`, TUNED_PATH.format(name), as
+    {algorithm: {environment: {dotted_key: value}}}. The result is cached:
+    every call with the same `name` returns the same object.
+
+    Raise ValueError if the file does not exist, or if it names an algorithm or
+    an environment that has no YAML in configs/algorithm or configs/environment."""
+
+    path = TUNED_PATH.format(name)
+    if not os.path.isfile(path):
+        raise ValueError(f"The tuning {name} has no file {path}.")
+    table = load_yaml(path) or {}
+    for algorithm, environments in table.items():
+        for group, group_name in (("algorithm", algorithm), *(("environment", e) for e in environments)):
+            if not os.path.isfile(os.path.join(CONFIG_DIR, group, f"{group_name}.yaml")):
+                raise ValueError(
+                    f"{path} names the {group} {group_name}, which has no YAML "
+                    f"in {os.path.join(CONFIG_DIR, group)}."
+                )
+    return table
+
+
+def apply_tuned(cfg: DictConfig, hydra_cfg: DictConfig) -> None:
+    """Overwrite in `cfg` the keys that the tunings named in `cfg.tuned` (a
+    name or a list of names) list for the algorithm and environment chosen in
+    `hydra_cfg`, the `hydra` node of the composition. Keys set by an override
+    are skipped.
+
+    Raise ValueError if `cfg.tuned` is neither a string nor a list, or if two of
+    the tunings set the same key for that algorithm and environment."""
+
+    names = cfg.tuned
+    if isinstance(names, str):
+        names = [names]
+    elif OmegaConf.is_list(names) or isinstance(names, list):
+        names = [str(n) for n in names]
+    else:
+        raise ValueError(f"tuned must be a tuning name or a list of names, got {names!r}.")
+
+    choices = hydra_cfg.runtime.choices
+    entry = {}
+    for name in names:
+        values = tuned_table(name).get(choices.get("algorithm"), {}).get(choices.get("environment"), {})
+        shared = sorted(entry.keys() & values.keys())
+        if shared:
+            raise ValueError(f"The tunings {names} all set {shared} for {choices.get('algorithm')} in {choices.get('environment')}.")
+        entry.update(values)
+
+    keys = [o.split("=", 1)[0].lstrip("+~") for o in hydra_cfg.overrides.task]
+    overridden = [k for k in keys if k not in choices]
+    for key, value in entry.items():
+        if any(key == o or key.startswith(f"{o}.") for o in overridden):
+            continue
+        OmegaConf.update(cfg, key, value)
 
 
 def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
@@ -223,7 +298,13 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
     With results.force_run, the files already in the seed folder are not
     removed. Files the new run writes under the same names are overwritten,
     and the others stay next to them.
+
+    If `cfg.tuned` names one or more tunings, their values are first set in
+    `cfg` (apply_tuned), with the `hydra` node of the running Hydra app.
     """
+
+    if cfg.get("tuned"):
+        apply_tuned(cfg, HydraConfig.get())
 
     cfg_identity = config_identity(cfg)
     config_id = id_of(cfg_identity)
@@ -303,7 +384,7 @@ def prepare_run(cfg: DictConfig, verbose: bool = True) -> str | None:
         # cfg.yaml. Every seed writes the same configuration, so which one lands
         # last does not change the config ID. The int or float types in cfg.yaml
         # are those of the seed that lands last.
-        with atomic_open(yaml_path, "w") as f:
+        with atomic_open(yaml_path, "w", encoding="utf-8") as f:
             f.write(config_for_save(cfg))
 
     # The seed folder is made only once cfg.yaml matches this configuration

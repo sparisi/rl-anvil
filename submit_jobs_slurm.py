@@ -274,6 +274,7 @@ TIMEOUTS_ENV = {
     "gym_gridworlds/three_rooms_wall_mini_nonuniform": 110,
     "gym_gridworlds/four_rooms_stuck_hard": 290,
     "gym_gridworlds/four_rooms_stuck_hard_sticky": 290,
+    "gym_gridworlds/four_rooms_stuck_hard_no_noise": 290,
     "gym_gridworlds/travel_field_small": 310,
 }
 
@@ -281,13 +282,24 @@ TIMEOUTS_ENV = {
 # Algorithms not listed here use a factor of 1.
 TIMEOUTS_ADJUST_ALGO = {
     "random": 0.3,
-    "discover": 1.3,
-    "adagoal": 1.3,
+    "discover_episodic": 1.3,
+    "adagoal_episodic": 1.3,
+    "discover_adaptive": 1.3,
+    "adagoal_adaptive": 1.3,
     "sun_ratio_adaptive": 1.3,
-    "sun_ucb_adaptive": 1.3,
+    "sun_ucb_adaptive": 1.5,
     "sun_ratio_step": 1.3,
     "sun_reachability_adaptive": 1.3,
     "sun_novelty_adaptive": 1.3,
+    "adagoal_step": 1.2,
+    "adagoal_success": 1.6,
+    "discover_step": 1.4,
+    "discover_success": 1.9,
+    "sun_ratio_episodic": 1.15,
+    "sun_ratio_success": 1.3,
+    "sun_ucb_episodic": 1.3,
+    "sun_ucb_step": 1.5,
+    "sun_ucb_success": 1.35,
 }
 
 # Memory: `mem_mb = BASE_MEM_MB + PER_SEED_MEM_MB[env] * len(seeds_in_chunk)`.
@@ -322,6 +334,7 @@ PER_SEED_MEM_MB = {
     "gym_gridworlds/three_rooms_wall_mini_nonuniform": 500,
     "gym_gridworlds/four_rooms_stuck_hard": 600,
     "gym_gridworlds/four_rooms_stuck_hard_sticky": 600,
+    "gym_gridworlds/four_rooms_stuck_hard_no_noise": 600,
     "gym_gridworlds/travel_field_small": 900,
 }
 

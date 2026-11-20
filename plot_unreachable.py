@@ -4,9 +4,9 @@ For every goal SELECTION stored in a run's `memory.npz`, this checks whether the
 goal tile could still be reached from the tile the agent was standing on. The
 selections are the steps the memory marks with `goal_selection`, the steps on
 which the actor selected a goal. A goal pursued for 50 steps is therefore one
-selection, not 50. Reachability is the forward closure of the
-environment's own transition graph, enumerated with `set_state` / `step` over every
-(state, action) pair, expanding only non-terminal transitions. Where the doorways
+selection, not 50. Reachability is the forward closure of the transition graph
+built from the environment's grid and movement rules (see build_distances),
+expanding only non-terminal transitions. Where the doorways
 of a gridworld are one-way, an agent that has dropped into a room it cannot leave
 reaches only that room's tiles, so every goal it picks outside the room is
 unachievable until the episode resets.
@@ -14,24 +14,13 @@ unachievable until the episode resets.
 Goals are compared on states only. A goal is a (state, action) pair, but every
 action is available in every non-wall tile, so the state decides achievability.
 
-A figure each for two metrics, both a percentage of the goal selections and
-binned over the memory (`--points` bins):
-
-    Unreachable Goals  the goal could not be reached from where the agent stood
-    Perfect Goals      the goal was the best pick among the (candidate, action)
-                       pairs the actor scored at the selection, its candidates
-                       replayed from the seeds of the run (see
-                       src.utils.reachability.replay_candidates). `--goal_score`
-                       chooses what best means: 1 / n, a least-tried action of a
-                       candidate in reach (default), or the actor's own V / n
-
-A warning names every dump in which the goal of a selection is not among its
-replayed candidates.
+The figure draws the percentage of the goal selections whose goal could not be
+reached from where the agent stood, binned over the memory (`--points` bins).
 
 Which configurations are drawn, what they are called and which environments they
 are drawn over comes from a plot config, read exactly as plot_results.py reads it,
-and a configuration keeps the colour it has there. Environments without a tabular
-`set_state` interface have no transition graph to close over and are skipped.
+and a configuration keeps the colour it has there. Environments without a grid
+have no transition graph to close over and are skipped.
 
 Bins where no goal was selected are NaN, leaving a gap. --log_scale draws the same
 figure on a log y axis instead, where bins at exactly 0% drop out too, a log scale
@@ -40,14 +29,17 @@ having no room for them.
 Output goes to <data_dir>/<output>/<plot config>/, the path of the plot config
 under configs/plots without the extension:
 
-    unreachable_goals_curves.png  the unreachable-goal figure
-    perfect_goals_curves.png      the perfect-goal figure
-    <metric>_auc.png              under --auc_only, that metric's AUC bars alone,
-                                  one figure per environment group
-    <metric>_auc_all_envs.png     the same bars over every environment at once,
-                                  written whatever --auc_only says
+    unreachable_goals_<group>_curves.png
+                                  the unreachable-goal figure of a group
+    unreachable_goals_<group>_auc.png
+                                  the AUC bars over the environments of a group,
+                                  one figure per environment group: beside the
+                                  curves without a legend, or alone with the
+                                  legend under --auc_only
     legend_horizontal.png         the legend on its own, laid out by the config
     legend_vertical.png           the legend in a single column
+    legend_2_rows.png             the legend over two rows
+    legend_3_rows.png             the legend over three rows
 
 Example
 
@@ -69,6 +61,7 @@ import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from gym_gridworlds.gridworld import ACTION_TO_VEC, GOOD, GOOD_SMALL, PIT, STAY, WALL, _move
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
@@ -99,7 +92,6 @@ from src.utils.plot import (
     write_legend,
 )
 from src.utils.heatmaps import env_context
-from src.utils.reachability import COUNT_FLOOR, perfect_selections, replay_candidates
 
 FONT_SIZE = 12
 SUBPLOT_W = 2.6  # inches per subplot
@@ -120,33 +112,24 @@ AUC_ONLY_LABEL_SIZE = 7
 
 CACHE_DIRNAME = ".goal_curves_cache"
 
-METRICS = ("unreachable", "perfect")
+METRICS = ("unreachable",)
 METRIC_LABELS = {
     "unreachable": "Unreachable Goals (%)",
-    "perfect": "Perfect Goals (%)",
 }
 METRIC_FILES = {
     "unreachable": "unreachable_goals",
-    "perfect": "perfect_goals",
 }
 # What the bars are titled when they stand on their own, with no curves beside
 # them to say what is being averaged.
 METRIC_AUC_TITLES = {
     "unreachable": "Avg. Unreachable Goal %",
-    "perfect": "Avg. Perfect Goal %",
 }
 
 # The memory keys a dump is reduced from.
 MEMORY_KEYS = (
     "obs",
-    "act",
-    "term",
-    "trunc",
     "goal_obs",
-    "goal_act",
     "goal_selection",
-    "has_goal",
-    "act_source",
 )
 
 parser = argparse.ArgumentParser()
@@ -186,22 +169,6 @@ parser.add_argument(
     help="Points either side to average a curve over. 0 draws it as recorded.",
 )
 parser.add_argument(
-    "--goal_score",
-    default="novelty",
-    choices=["novelty", "ratio"],
-    help="Which score a perfect goal is the argmax of, over the goal candidates "
-         "the actor scored at the selection: 'novelty' is 1 / n, i.e. a "
-         "least-visited candidate in reach; 'ratio' is the actor's own V / n, with "
-         "V the discounted reachability gamma ** (steps to reach it).",
-)
-parser.add_argument(
-    "--gamma",
-    type=float,
-    default=0.99,
-    help="Discount the 'ratio' score values a goal with: a goal d steps away is "
-         "worth gamma ** d. Unused by 'novelty'.",
-)
-parser.add_argument(
     "--log_scale",
     action="store_true",
     help="Draw the curves on a log y axis, in place of the linear figure rather "
@@ -216,7 +183,7 @@ parser.add_argument(
 parser.add_argument(
     "--auc_only",
     action="store_true",
-    help="Write only the AUC bars, one figure per metric, with no curves beside "
+    help="Write only the AUC bars, one figure per environment group, with no curves beside "
          "them.",
 )
 parser.add_argument(
@@ -267,16 +234,21 @@ _dist_cache: dict = {}
 
 
 def build_distances(env_cfg):
-    """Return `(dist, n_act)`, where `dist` is an (n_states, n_states) float
-    matrix holding in `dist[s, g]` the fewest steps from state `s` to state `g`,
-    `inf` when `g` cannot be got to from `s` at all, and `n_act` is the number of
-    actions.
+    """Return `dist`, an (n_states, n_states) float matrix holding in
+    `dist[s, g]` the fewest steps from state `s` to state `g`, `inf` when `g`
+    cannot be got to from `s` at all.
 
-    The transition graph is read off the environment itself -- `set_state(s)`, step
-    every action, record `get_state()` -- so one-way doorways, absorbing tiles and
-    any other layout quirk are captured without hard-coding the geometry. Returns
-    (None, None) for environments without a tabular `set_state` / `get_state` interface,
-    which is what makes this metric a gridworld one.
+    The transition graph is built from the environment's `original_grid` with
+    the movement rules of Gridworld._step, with no environment step taken.
+    Every action moves the agent by `_move`, except on a one-directional tile,
+    where only the tile's own action moves, and a move into a wall leaves the
+    agent in place. A transition terminates when it enters a pit, when it is
+    the terminate action, and when it leaves a positive tile with STAY (any
+    action with `no_stay`), unless the environment has an infinite horizon.
+    Noisy tiles, quicksand, random actions, slipping, random resets and
+    wrappers only add randomness to these moves and are ignored. Returns None
+    for environments without `original_grid` and `grid_reachable`, which is
+    what makes this metric a gridworld one.
 
     Building an environment costs seconds and many runs share one, so the result is
     cached on the config it was built from."""
@@ -289,33 +261,38 @@ def build_distances(env_cfg):
 
     env = gym_wrappers.make_gym_env(**env_cfg)
     u = env.unwrapped
-    try:
-        if not all(hasattr(u, k) for k in ("set_state", "get_state", "grid_reachable")):
-            _dist_cache[key] = (None, None)
-            return None, None
-        # Action noise would make the enumeration below random. It cannot change
-        # which states are reachable (a noisy action is resampled from the same
-        # action set), so zeroing it out gives the same graph, deterministically.
-        for attr in ("random_action_prob", "slippery_prob", "random_reset_prob"):
-            if hasattr(u, attr):
-                setattr(u, attr, 0.0)
-        env.reset()
+    env.close()
+    if not all(hasattr(u, k) for k in ("original_grid", "grid_reachable")):
+        _dist_cache[key] = None
+        return None
 
-        valid = np.asarray(u.grid_reachable).reshape(-1).astype(bool)
-        n_states = int(valid.size)
-        n_act = int(u.action_space.n)
-        succ = np.full((n_states, n_act), -1, dtype=np.int64)
-        term = np.zeros((n_states, n_act), dtype=bool)
-        for s in np.flatnonzero(valid):
-            for a in range(n_act):
-                u.set_state(int(s))
-                _, _, terminated, truncated, _ = env.step(a)
-                succ[s, a] = int(u.get_state())
-                term[s, a] = bool(terminated)
-                if terminated or truncated:
-                    env.reset()
-    finally:
-        env.close()
+    grid = np.asarray(u.original_grid)
+    valid = np.asarray(u.grid_reachable).reshape(-1).astype(bool)
+    n_states = int(valid.size)
+    n_act = int(u.action_space.n)
+    terminate_action = getattr(u, "terminate_action_id", None)
+    no_stay = bool(getattr(u, "no_stay", False))
+    infinite_horizon = bool(getattr(u, "infinite_horizon", False))
+    succ = np.full((n_states, n_act), -1, dtype=np.int64)
+    term = np.zeros((n_states, n_act), dtype=bool)
+    for s in np.flatnonzero(valid):
+        pos = tuple(int(i) for i in np.unravel_index(s, grid.shape))
+        tile = int(grid[pos])
+        for a in range(n_act):
+            if a == terminate_action:
+                succ[s, a] = s
+                term[s, a] = True
+                continue
+            ends = tile in (GOOD, GOOD_SMALL) and (a == STAY or no_stay)
+            nxt = pos
+            if tile not in ACTION_TO_VEC or tile == a:
+                nxt = _move(pos, a, grid)
+            if grid[nxt] == PIT:
+                ends = True
+            elif grid[nxt] == WALL:
+                nxt = pos
+            succ[s, a] = np.ravel_multi_index(nxt, grid.shape)
+            term[s, a] = ends and not infinite_horizon
 
     # Breadth-first from every tile, so the result is the number of steps to the
     # goal and not merely whether it can be got to: the discounted reachability the
@@ -344,130 +321,63 @@ def build_distances(env_cfg):
                     queue.append(y)
         dist[s] = d
 
-    _dist_cache[key] = (dist, n_act)
-    return dist, n_act
+    _dist_cache[key] = dist
+    return dist
 
 
 # -----------------------------------------------------------------------------
 # ----- Metrics ---------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-def goal_curves(
-    dist,
-    n_act,
-    counter,
-    mem,
-    warmup,
-    n_points,
-    gamma,
-    score_mode,
-    replay,
-):
-    """Return two per-bin percentages of the goal SELECTIONS, their totals, the
-    number of selections, the size of the dump, and the number of selections
-    whose goal is not among their replayed candidates; or None when `replay` is
-    None, the dump lacks a key of MEMORY_KEYS or it holds no step after
-    `warmup`.
+def goal_curves(dist, counter, mem, warmup, n_points):
+    """Return the per-bin percentage of the goal SELECTIONS whose goal tile could
+    not be reached from the tile the agent was on, its total, the number of
+    selections and the size of the dump; or None when the dump lacks a key of
+    MEMORY_KEYS or holds no selection after `warmup`.
 
-    unreachable  the goal tile could not be reached from the tile the agent was on
-    perfect      the goal maximised `score_mode` among the candidates the actor
-                 scored at the selection (see perfect_selections)
+    The selections are the steps marked with `goal_selection`, the ones on which
+    the actor selected a goal, and the goal stored on such a step is the one
+    selected. A choice counts once however long the agent then acts on it, so
+    an actor that picks a goal per episode and one that picks per step are both
+    measured on the decisions they made. Bins with no selection stay NaN,
+    leaving a gap rather than reading as 0%."""
 
-    A goal is a (tile, action) pair, as in the actor (src/actor.py). The
-    candidates of every selection are replayed from the seeds of the run by
-    replay_candidates, with the settings `replay` holds as its keyword arguments
-    (rng_seed, batch_size, n_critics, per_step_selection, goal_value_check,
-    max_size). Both scores divide by `n`, how often the pair appears in (`obs`,
-    `act`) strictly before the step -- the true count these runs select on, as
-    it stood then rather than at the end -- and differ in the numerator:
-
-        novelty  1 / n, so the best goal is a least-tried action of a candidate
-                 in reach
-        ratio    the actor's own `V / n`, where V is discounted reachability: a
-                 goal `d` steps away is worth `gamma ** d`
-
-    Whether V is `gamma ** d` or `gamma ** (d - 1)` makes no difference -- a
-    constant factor across every candidate cannot move the argmax. The goal
-    itself is scored with the count of its own goal action, and `n` is floored
-    at COUNT_FLOOR the way the actor floors it. A goal is perfect when it ties
-    the best score of its candidates, since pairs often share it and any of them
-    is an equally good pick; an unreachable goal never is.
-
-    Both metrics share the same denominator (every goal selection), so the two
-    read against each other. The selections are the steps marked with
-    `goal_selection`, the ones on which the actor selected a goal, and the goal
-    stored on such a step is the one selected. A choice counts once however long
-    the agent then acts on it, so an actor that picks a goal per episode and one
-    that picks per step are both measured on the decisions they made. Bins with
-    no selection stay NaN, leaving a gap rather than reading as 0%."""
-
-    if replay is None or any(mem.get(k) is None for k in MEMORY_KEYS):
+    if any(mem.get(k) is None for k in MEMORY_KEYS):
         return None
     size = len(mem["obs"])
-    if warmup >= size:
+    active = np.asarray(mem["goal_selection"]).reshape(size).astype(bool)
+    if warmup >= size or not active[warmup:].any():
         return None
 
     reach = np.isfinite(dist)
     state = np.asarray(counter.bin_index(mem["obs"])).reshape(size)
     goal = np.asarray(counter.bin_index(mem["goal_obs"])).reshape(size)
-    act = np.asarray(mem["act"]).reshape(size).astype(np.int64)
-    goal_act = np.asarray(mem["goal_act"]).reshape(size).astype(np.int64)
-    active = np.asarray(mem["goal_selection"]).reshape(size).astype(bool)
-
     unreachable = np.zeros(size, dtype=bool)
     idx = np.flatnonzero(active)
     unreachable[idx] = ~reach[state[idx], goal[idx]]
 
-    sel_steps, cand, missing = replay_candidates(
-        state,
-        act,
-        goal,
-        goal_act,
-        np.asarray(mem["has_goal"]).reshape(size).astype(bool),
-        np.asarray(mem["act_source"]).reshape(size),
-        active,
-        np.asarray(mem["term"]).reshape(size).astype(bool) | np.asarray(mem["trunc"]).reshape(size).astype(bool),
-        n_act=n_act,
-        **replay,
-    )
-    perfect = perfect_selections(
-        dist,
-        n_act,
-        state,
-        goal,
-        act,
-        goal_act,
-        sel_steps,
-        cand,
-        score_mode,
-        gamma,
-    )
-
     edges = np.linspace(warmup, size, n_points + 1).astype(int)
-    flags = {"unreachable": unreachable, "perfect": perfect}
-    curves = {}
-    for name, flag in flags.items():
-        y = np.full(n_points, np.nan)
-        for i in range(n_points):
-            lo, hi = edges[i], edges[i + 1]
-            n_sel = int(active[lo:hi].sum())
-            if n_sel > 0:
-                y[i] = 100.0 * flag[lo:hi].sum() / n_sel
-        curves[name] = y
-    totals = {name: int(flag[warmup:].sum()) for name, flag in flags.items()}
-    return curves, totals, int(active[warmup:].sum()), size, missing
+    y = np.full(n_points, np.nan)
+    for i in range(n_points):
+        lo, hi = edges[i], edges[i + 1]
+        n_sel = int(active[lo:hi].sum())
+        if n_sel > 0:
+            y[i] = 100.0 * unreachable[lo:hi].sum() / n_sel
+    curves = {"unreachable": y}
+    totals = {"unreachable": int(unreachable[warmup:].sum())}
+    return curves, totals, int(active[warmup:].sum()), size
 
 
 # -----------------------------------------------------------------------------
 # ----- Per-seed cache --------------------------------------------------------
 # -----------------------------------------------------------------------------
 #
-# One dump reduces to two short curves and three integers, while producing them
+# One dump reduces to a short curve and three integers, while producing them
 # costs a multi-hundred-MB read and a pass over every step. Nothing about that
 # depends on how the figure is styled, so a re-run that only changes the plot
 # config, the legend or --auc_only can reuse it. The key covers the dump's identity
-# and every parameter that changes the numbers, so a changed --goal_score or a
-# re-synced dump misses rather than returning something stale.
+# and every parameter that changes the numbers, so a re-synced dump misses rather
+# than returning something stale.
 
 cache_dir = None
 if not args.no_cache:
@@ -501,11 +411,8 @@ def cache_path(
         # What a rate is over. Bumped when that changes, so curves reduced under
         # the old definition are missed rather than read back.
         "denominator": "goal_selection",
-        "counts": "state_action",
-        "gamma": args.gamma,
-        "score": args.goal_score,
-        "candidates": "replayed_batch",
-        "floor": COUNT_FLOOR,
+        "metrics": list(METRICS),
+        "graph": "grid",
         "env": env_cfg,
     }, sort_keys=True, default=str)
     return cache_dir / f"{hashlib.sha1(payload.encode()).hexdigest()}.npz"
@@ -542,7 +449,7 @@ def cache_write(path, result):
 def curves_for_file(task):
     """One dump's curves, from the cache when it is there. Returns (result, hit)."""
 
-    mem_file, env_cfg, dist, n_act, counter, warmup, n_points, replay = task
+    mem_file, env_cfg, dist, counter, warmup, n_points = task
     path = cache_path(mem_file, env_cfg, warmup, n_points) if cache_dir else None
     if path is not None:
         hit = cache_read(path)
@@ -554,26 +461,10 @@ def curves_for_file(task):
     except Exception as e:
         vprint(f"  WARNING: skipping unreadable {mem_file}: {e}")
         return None, False
-    reduced = goal_curves(
-        dist,
-        n_act,
-        counter,
-        mem,
-        warmup,
-        n_points,
-        args.gamma,
-        args.goal_score,
-        replay,
-    )
-    if reduced is None:
+    result = goal_curves(dist, counter, mem, warmup, n_points)
+    if result is None:
         vprint(f"  WARNING: {mem_file} stores no goals, skipping")
         return None, False
-    result, missing = reduced[:4], reduced[4]
-    if missing:
-        print(
-            f"WARNING: {mem_file}: the goals of {missing} selection(s) are not "
-            f"among their replayed candidates."
-        )
     if path is not None:
         try:
             cache_write(path, result)
@@ -605,6 +496,7 @@ if not run_dirs:
 flat_cfgs: dict = {}   # "<config_id>/<seed>" -> flat cfg
 run_cfgs: dict = {}    # "<config_id>/<seed>" -> nested cfg
 mem_files: dict = {}   # "<config_id>/<seed>" -> path to memory.npz
+read_cfgs: dict = {}   # cfg.yaml path -> read_run_cfg of it, read once per configuration
 no_cfg_dirs: list = []
 bad_cfg_dirs: list = []
 
@@ -616,7 +508,9 @@ for seed_dir in tqdm(
     if not cfg_file.is_file():
         no_cfg_dirs.append(seed_dir.parent.name)
         continue
-    _, run_cfg, reason = read_run_cfg(cfg_file)
+    if cfg_file not in read_cfgs:
+        read_cfgs[cfg_file] = read_run_cfg(cfg_file)
+    _, run_cfg, reason = read_cfgs[cfg_file]
     if reason is not None:
         vprint(f"  WARNING: {cfg_file} {reason}.")
         bad_cfg_dirs.append(seed_dir.parent.name)
@@ -749,7 +643,7 @@ no_counter: list = []     # runs whose environment has no transition graph to cl
 for name in needed:
     run_cfg = run_cfgs[name]
     env_cfg = run_cfg.get("environment") or {}
-    dist, n_act = build_distances(env_cfg)
+    dist = build_distances(env_cfg)
     counter = env_context(env_cfg)[0] if dist is not None else None
     if dist is None or counter is None:
         no_counter.append(name)
@@ -760,38 +654,21 @@ for name in needed:
     warmup = int(memory_cfg.get("min_size") or 0)
     n_points = args.points or int(experiment.get("testing_points") or 100)
     warmup_of[name] = warmup
-    # What replay_candidates needs to replay the actor's draws, None for an actor
-    # that selects no goal. The seed is the name of the seed directory, as
-    # process_data.py reads it.
-    agent = run_cfg.get("agent") or {}
-    actor_cfg = agent.get("actor") or {}
-    replay = None
-    if "batch_size_goal" in actor_cfg:
-        replay = {
-            "rng_seed": int(mem_files[name].parent.name),
-            "batch_size": int(actor_cfg["batch_size_goal"]),
-            "n_critics": (agent.get("critic") or {}).get("n_critics"),
-            "per_step_selection": bool(actor_cfg.get("per_step_selection", False)),
-            "goal_value_check": bool(actor_cfg.get("goal_value_check", False)),
-            "max_size": int(memory_cfg["max_size"]),
-        }
     tasks.append((
         name,
         (
             mem_files[name],
             env_cfg,
             dist,
-            n_act,
             counter,
             warmup,
             n_points,
-            replay,
         ),
     ))
 
 if not tasks:
     raise SystemExit(
-        "No run has a tabular state space with a set_state interface, so no "
+        "No run has an environment with a grid, so no "
         "transition graph can be closed over and nothing can be drawn."
     )
 
@@ -856,7 +733,7 @@ print(
 if no_counter:
     print(
         f"Skipped                    : {len(no_counter)}"
-        f"  (no tabular state space / no set_state interface)"
+        f"  (no grid / no tabular counter)"
     )
 if not curves_of:
     raise SystemExit("No data to plot.")
@@ -1051,10 +928,7 @@ def draw_curves(
     output_dir,
 ):
     """One metric over one environment group: a subplot per environment, a curve per
-    configuration, seeds averaged into the mean and its confidence band.
-
-    The two metrics get a figure each rather than two rows of one, so either can be
-    placed on its own."""
+    configuration, seeds averaged into the mean and its confidence band."""
 
     ylabel = METRIC_LABELS[metric]
     present = [e for e in envs if any((i, e) in selected for i in range(len(entries)))]
@@ -1220,13 +1094,12 @@ def draw_auc(cfg, entries, selected, group_name, envs, metric, output_dir):
     return save_and_close(fig, output_dir, name, vprint)
 
 
-def draw_auc_all(cfg, entries, selected, envs, metric, output_dir):
-    """One metric's AUC bars over every environment at once, drawn as draw_auc
-    draws a group's.
+def draw_auc_all(cfg, entries, selected, group_name, envs, metric, output_dir):
+    """One metric's AUC bars over every environment of a group at once, drawn as
+    draw_auc draws them without the legend, to <metric>_<group>_auc.png.
 
-    The figures above are one per environment group. This pools every environment
-    the plot config names, group or no group, into one number per configuration.
-    Written whatever --auc_only says."""
+    Pools every environment of the group into one number per configuration.
+    Written beside the curves of the group, when --auc_only is not given."""
 
     present = [e for e in envs if any((i, e) in selected for i in range(len(entries)))]
     if not present:
@@ -1247,13 +1120,13 @@ def draw_auc_all(cfg, entries, selected, envs, metric, output_dir):
     ax.set_title(title, fontsize=FONT_SIZE, **tex_kwargs(title))
     draw_hbars(ax, items)
 
-    name = METRIC_FILES[metric] + "_auc_all_envs"
+    name = METRIC_FILES[metric] + (f"_{group_name}" if group_name else "") + "_auc"
     return save_and_close(fig, output_dir, name, vprint)
 
 
 def recap(config_name, entries, selected, envs):
-    """What share of the goals each configuration selected were unreachable, and how
-    many of them were the best pick available, over the whole post-warm-up memory."""
+    """What share of the goals each configuration selected were unreachable, over
+    the whole post-warm-up memory."""
 
     rows = []
     for env in envs:
@@ -1283,7 +1156,6 @@ def recap(config_name, entries, selected, envs):
         print(
             f"  {env:<{env_w}}  {label:<{label_w}}  {n_sel:>9d} goals"
             f"  unreachable {pct['unreachable']:6.2f}%"
-            f"  perfect {pct['perfect']:6.2f}%"
             f"  ({n_seeds} seed(s))"
         )
 
@@ -1341,15 +1213,19 @@ for config_name, _path, cfg in plot_cfgs:
                     metric,
                     output_dir,
                 )
+                written += draw_auc_all(
+                    cfg,
+                    entries,
+                    selected,
+                    group_name,
+                    group_envs,
+                    metric,
+                    output_dir,
+                )
 
-    # One figure per metric over every environment the config names, after the
-    # per-group ones: the groups split the figures, and this is the number that
-    # does not belong to any one of them.
     all_envs = [e for envs in groups.values() for e in envs]
-    for metric in METRICS:
-        written += draw_auc_all(cfg, entries, selected, all_envs, metric, output_dir)
 
-    for path in write_legend(entries, cfg, output_dir, FONT_SIZE):
+    for path in write_legend(entries, cfg, output_dir, FONT_SIZE, rows=(2, 3)):
         vprint(f"  Saved: {path}")
     recap(config_name, entries, selected, all_envs)
     print(

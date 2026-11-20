@@ -1,0 +1,98 @@
+default:
+  - default
+
+tick_labels:
+  agent.actor.beta_novelty:
+    1_000: "1,000"
+  algorithm:
+    discover_adaptive: "Adaptive"
+    discover_episodic: "Episodic"
+    discover_step: "Per-Step"
+    discover_success: "At Success"
+
+color_scheme:
+  - sun_ratio*
+  - adagoal*
+  - discover_episodic
+  - random
+  - discover_adaptive
+  - discover_step
+  - discover_success
+
+group_labels:
+  sun_ratio_adaptive: "SUN"
+  discover_adaptive: "Adaptive"
+  discover_episodic: "Episodic"
+  discover_step: "Per-Step"
+  discover_success: "At Success"
+
+references:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      plot.label: "SUN"
+
+configs:
+  discover_adaptive:
+    - algorithm: discover_adaptive
+      agent.actor.beta_novelty: 0.1
+      plot.label: "$\\beta = 0.1$"
+    - algorithm: discover_adaptive
+      agent.actor.beta_novelty: 1
+      plot.label: "$\\beta = 1$"
+    - algorithm: discover_adaptive
+      agent.actor.beta_novelty: 10
+      plot.label: "$\\beta = 10$"
+    - algorithm: discover_adaptive
+      agent.actor.beta_novelty: 100
+      plot.label: "$\\beta = 100$"
+    - algorithm: discover_adaptive
+      agent.actor.beta_novelty: 1_000
+      plot.label: "$\\beta = 1,000$"
+  discover_episodic:
+    - algorithm: discover_episodic
+      agent.actor.beta_novelty: 0.1
+      plot.label: "$\\beta = 0.1$"
+    - algorithm: discover_episodic
+      agent.actor.beta_novelty: 1
+      plot.label: "$\\beta = 1$"
+    - algorithm: discover_episodic
+      agent.actor.beta_novelty: 10
+      plot.label: "$\\beta = 10$"
+    - algorithm: discover_episodic
+      agent.actor.beta_novelty: 100
+      plot.label: "$\\beta = 100$"
+    - algorithm: discover_episodic
+      agent.actor.beta_novelty: 1_000
+      plot.label: "$\\beta = 1,000$"
+  discover_step:
+    - algorithm: discover_step
+      agent.actor.beta_novelty: 0.1
+      plot.label: "$\\beta = 0.1$"
+    - algorithm: discover_step
+      agent.actor.beta_novelty: 1
+      plot.label: "$\\beta = 1$"
+    - algorithm: discover_step
+      agent.actor.beta_novelty: 10
+      plot.label: "$\\beta = 10$"
+    - algorithm: discover_step
+      agent.actor.beta_novelty: 100
+      plot.label: "$\\beta = 100$"
+    - algorithm: discover_step
+      agent.actor.beta_novelty: 1_000
+      plot.label: "$\\beta = 1,000$"
+  discover_success:
+    - algorithm: discover_success
+      agent.actor.beta_novelty: 0.1
+      plot.label: "$\\beta = 0.1$"
+    - algorithm: discover_success
+      agent.actor.beta_novelty: 1
+      plot.label: "$\\beta = 1$"
+    - algorithm: discover_success
+      agent.actor.beta_novelty: 10
+      plot.label: "$\\beta = 10$"
+    - algorithm: discover_success
+      agent.actor.beta_novelty: 100
+      plot.label: "$\\beta = 100$"
+    - algorithm: discover_success
+      agent.actor.beta_novelty: 1_000
+      plot.label: "$\\beta = 1,000$"

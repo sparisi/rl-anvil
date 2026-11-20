@@ -154,7 +154,7 @@ class Actor(ABC):
         if self._pi is not None:
             self._pi.reset(seed=seed)
 
-    def reset_episode(self, seed=None, *args, **kwargs):
+    def reset_episode(self, obs, rng_generator=None, *args, **kwargs):
         pass
 
     def eval(self):
@@ -333,7 +333,6 @@ class GoalConditioned(EpsilonGreedy):
         self._previous_was_random = False
         self._per_step_selection = source._per_step_selection
         self._goal_value_check = source._goal_value_check
-        self._episode_critic_idx = source._episode_critic_idx
         self._sel_obs = None if source._sel_obs is None else source._sel_obs.copy()
         self._random_exploration = source._random_exploration
         self._steps_to_goal_current = source._steps_to_goal_current
@@ -369,46 +368,21 @@ class GoalConditioned(EpsilonGreedy):
         self._steps_to_goal_current = 0
         self._sel_obs = None
 
-    def reset_episode(self, seed=None, rng_generator=None, *args, **kwargs):
+    def reset_episode(self, obs, rng_generator=None, *args, **kwargs):
         self.reset_goal()
         self._random_exploration = False
-        self._pick_episode_critic(rng_generator)
-
-    @property
-    def _acting_critic(self):
-        """If the critic is an ensemble, only one critic selects actions throughout
-        an episode.
-        """
-
-        critics = getattr(self._critic, "critics", None)
-        if critics is None:
-            return self._critic
-        return critics[self._episode_critic_idx]
-
-    def _pick_episode_critic(self, rng_generator):
-        """If the critic is an ensemble, draw the ensemble member that selects
-        actions for this episode.
-        Goal selection is unaffected: it reads the spread across the ensemble
-        and still queries every member.
-        """
-
-        critics = getattr(self._critic, "critics", None)
-        if critics is None:
-            self._episode_critic_idx = 0
-            return
-        self._episode_critic_idx = int(rng_generator.integers(len(critics)))
 
     def _values(self, obs, goal=None):
         """
         Return the values the actor acts on toward `goal`: the outputs of its own
-        network, or the estimates of the acting critic for the goal action. Without
-        a goal, return the values of `Actor._values`.
+        network, or the estimates of the critic for the goal action. Without a
+        goal, return the values of `Actor._values`.
         """
 
         if goal is None:
             return Actor._values(self, obs)
         if self._pi is None:
-            return self._acting_critic(obs=obs, goal=goal["obs"])[..., goal["act"]]
+            return self._critic(obs=obs, goal=goal["obs"])[..., goal["act"]]
         return self._pi(
             self._critic._normalize_obs(obs),
             self._critic._normalize_obs(goal["obs"])[..., self._critic.goal_idx],
@@ -431,7 +405,6 @@ class GoalConditioned(EpsilonGreedy):
         self._random_exploration = False
         self._previous_was_random = False
         self._sel_obs = None
-        self._episode_critic_idx = 0
         self._goal_selections = 0
         self._new_goal_selections = 0
         self._goal_reselections = 0

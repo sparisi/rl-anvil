@@ -12,23 +12,37 @@ group, with a dot per environment. An environment's score is the mean over its
 runs of the normalized area under the curve, the area and the normalization
 bounds being those of plot_results.py. The black bar spans the quartiles of the
 environment scores and the white tick is their median, the rliable Median of
-the normalized AUC (see src/utils/aggregate.py).
+the normalized AUC (see src/utils/aggregate.py). Under --all_seeds the violin,
+the quartile bar, the median and the dots are over the normalized area of every
+run of every environment, a dot per run.
 
 The legend lists the colour groups named in the plot config's `group_labels`, a
-mapping from a group name under `configs` to its label, each in the group's
-unshaded colour and followed by the quartile bar and the median tick. A group
-missing from `group_labels` has no legend entry:
+mapping from a group name under `configs` or `references` to its label, each in
+the group's unshaded colour and followed by the quartile bar and the median
+tick. Groups with the same label and colour share one entry. A group missing
+from `group_labels` has no legend entry:
 
     group_labels:
       <group>: "<label>"
 
 --no_legend and the standalone legend files work as in plot_results.py.
 
+The plot config's `references` block, in the format of `configs`, names
+configurations drawn as violins before those of `configs`, each group in a
+block of its own, also when a group of `configs` has its name. Both blocks are
+coloured together (see src/utils/plot.py:style_entries), so the entries of one
+hue are shaded apart across them.
+
+    references:
+      <group>:
+        - <hyperparameter>: <value>
+          plot.label: "<label>"
+
 An environment of the group where no entry has runs for a statistic is left out
 of that statistic's figure. A group with an environment that has no bounds for a
-statistic is skipped for that statistic. An entry without runs in every
-remaining environment is left out of the figure. An entry whose environments all
-scored the same is drawn without a violin body.
+statistic is skipped for that statistic. An entry without runs in some remaining
+environment is drawn over the environments where it has runs, with a warning. An
+entry whose environments all scored the same is drawn without a violin body.
 
 Example
 
@@ -88,9 +102,9 @@ for _stream in (sys.stdout, sys.stderr):
 FONT_SIZE = 12
 SUBPLOT_H = 2.0
 
-# Offsets of the environment dots across a violin: the golden-ratio sequence
-# over the environment index, so the dots spread evenly and land in the same
-# place on every run of the script.
+# Offsets of the dots across a violin: the golden-ratio sequence over the dot
+# index, so the dots spread evenly and land in the same place on every run of
+# the script.
 GOLDEN = 0.6180339887498949
 
 # The quartile bar and the median tick, in points, and the tick's half-length
@@ -152,6 +166,12 @@ parser.add_argument(
     help="Leave the legend off the figures. The standalone legend is still "
          "written.",
 )
+parser.add_argument(
+    "--all_seeds",
+    action="store_true",
+    help="Draw the violins, quartiles, medians and dots over every run, a dot per "
+         "run at its normalized area.",
+)
 parser.add_argument("-v", "--verbose", action="store_true")
 args = parser.parse_args()
 
@@ -207,14 +227,15 @@ class Drawing:
 
 
 def env_scores(drawing, group_name, present, stat):
-    """Return (environments, {entry index: score per environment}) for one
-    (group, statistic), the scores being None when an environment has no bounds
-    for `stat`.
+    """Return (environments, {entry index: scores}) for one (group, statistic),
+    the scores being None when an environment has no bounds for `stat`.
 
     The environments are those of `present` where at least one entry has runs
-    for `stat`. A score is the mean over the environment's runs of their
-    normalized areas (see aggregate.env_means). The bounds are the environment's
-    `score_bounds` for `stat`, or its `ylim` when it declares none."""
+    for `stat`. The scores are one per environment where the entry has runs, the
+    mean over its runs of their normalized areas (see aggregate.env_means), or
+    under --all_seeds the normalized area of every run. The bounds are the
+    environment's `score_bounds` for `stat`, or its `ylim` when it declares
+    none."""
 
     aucs = {}
     for i, entry in enumerate(drawing.entries):
@@ -263,23 +284,31 @@ def env_scores(drawing, group_name, present, stat):
         if missing:
             warn_once(
                 f"WARNING: {entry['label']} has no runs for {stat} in {missing}; "
-                f"it is left out of the violins."
+                f"its violin is over the other environments."
             )
-            continue
-        scores[i] = env_means((stack_runs(per_env) - low) / (high - low))
+        kept = [k for k, runs in enumerate(per_env) if runs]
+        normalized = (
+            (stack_runs([per_env[k] for k in kept]) - low[kept])
+            / (high[kept] - low[kept])
+        )
+        if args.all_seeds:
+            scores[i] = normalized[np.isfinite(normalized)]
+        else:
+            scores[i] = env_means(normalized)
     return envs, scores
 
 
 def legend_handles(entries):
-    """Return the legend handles of `entries`: one patch per colour group with a
-    group label, named by it in its unshaded colour, then the quartile bar
-    outlined in white and the median tick outlined in black."""
+    """Return the legend handles of `entries`: one patch per distinct (group
+    label, unshaded colour) of the groups with a group label, named by the label
+    in the colour, then the quartile bar outlined in white and the median tick
+    outlined in black."""
 
-    groups = {
-        e["group"]: (e["group_label"], e["base_color"])
+    groups = dict.fromkeys(
+        (e["group_label"], e["base_color"])
         for e in entries
         if e["group_label"] is not None
-    }
+    )
     handles = [
         mpatches.Patch(
             facecolor=color,
@@ -288,7 +317,7 @@ def legend_handles(entries):
             alpha=0.8,
             label=label,
         )
-        for label, color in groups.values()
+        for label, color in groups
     ]
     handles += [
         Line2D(
@@ -327,9 +356,9 @@ def outlined(color, width):
     ]
 
 
-def draw_violins(drawing, name, ylabel, present, scores):
-    """Draw one violin per entry of `scores` over the environments of `present`,
-    save the figure as <name>_violin and return 1, or 0 when it cannot be
+def draw_violins(drawing, name, ylabel, scores):
+    """Draw one violin per entry of `scores` over its scores, with a dot per
+    score, save the figure as <name>_violin and return 1, or 0 when it cannot be
     written."""
 
     order = list(scores)
@@ -343,7 +372,6 @@ def draw_violins(drawing, name, ylabel, present, scores):
         squeeze=False,
     )
     ax = axs[0][0]
-    jitter = ((np.arange(len(present)) * GOLDEN) % 1.0 - 0.5) * 0.5 * width
     for x, i in zip(xs, order):
         entry = drawing.entries[i]
         values = scores[i]
@@ -370,6 +398,7 @@ def draw_violins(drawing, name, ylabel, present, scores):
             linewidth=MEDIAN_WIDTH,
             zorder=4,
         )
+        jitter = ((np.arange(len(values)) * GOLDEN) % 1.0 - 0.5) * 0.5 * width
         ax.scatter(
             x + jitter,
             values,
@@ -382,7 +411,7 @@ def draw_violins(drawing, name, ylabel, present, scores):
         )
         vprint(
             f"  {entry['label']}: median {median:.3f}, mean {values.mean():.3f} "
-            f"over {len(values)} environment(s)"
+            f"over {len(values)} {'run' if args.all_seeds else 'environment'}(s)"
         )
 
     slot = width + BASE_BAR_GAP
@@ -424,7 +453,7 @@ def draw_config(config_name, cfg):
     """Draw one plot config's figures, into its own directory, and return how
     many it wrote."""
 
-    entries = style_entries(cfg)
+    entries = style_entries(cfg, blocks=("references", "configs"))
     if not entries:
         print(f"WARNING: {config_name} declares no configurations to plot, skipping.")
         return 0
@@ -484,12 +513,12 @@ def draw_config(config_name, cfg):
             continue
 
         for stat in stats:
-            envs_drawn, scores = env_scores(drawing, group_name, present, stat)
+            _envs_drawn, scores = env_scores(drawing, group_name, present, stat)
             if not scores:
                 vprint(f"  Nothing to draw for {stat}, skipping.")
                 continue
             name = f"{stat}_{group_name}" if group_name else stat
-            written += draw_violins(drawing, name, stat_labels.get(stat, stat), envs_drawn, scores)
+            written += draw_violins(drawing, name, stat_labels.get(stat, stat), scores)
 
     for path in write_legend_handles(legend_handles(entries), cfg, output_dir, FONT_SIZE):
         vprint(f"  Saved: {path}")

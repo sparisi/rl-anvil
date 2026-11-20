@@ -8,6 +8,7 @@ default:
 configs:
   sun_ratio_adaptive:
     - algorithm: sun_ratio_adaptive
+      tuned: rho
       agent.critic.explore_only: False
       plot.label: "SUN"
   adagoal:
@@ -16,6 +17,7 @@ configs:
       plot.label: "AdaGoal"
   discover:
     - algorithm: discover_episodic
+      tuned: beta
       agent.critic.explore_only: False
       plot.label: "DISCOVER"
   random:

@@ -8,11 +8,15 @@ global_sweep:
     - gymnasium/pendulum_discrete
     - gymnasium/cart_pole
     - gymnasium/lunar_lander
-  algorithm:
-    - adagoal_episodic
-    - discover_episodic
-    - random
-    - sun_ratio_adaptive
-    - eps_greedy
   agent.critic.explore_only: False
   results.save_memory: True
+
+config_sweep:
+  - algorithm:
+      - adagoal_episodic
+      - random
+      - eps_greedy
+  - algorithm: discover_episodic
+    tuned: beta
+  - algorithm: sun_ratio_adaptive
+    tuned: rho

@@ -9,12 +9,16 @@ group_labels:
 configs:
   sun_ratio_adaptive:
     - algorithm: sun_ratio_adaptive
+      tuned: rho
       plot.label: "Adaptive"
     - algorithm: sun_ratio_episodic
+      tuned: rho
       plot.label: "Episodic"
     - algorithm: sun_ratio_step
+      tuned: rho
       plot.label: "Per-Step"
     - algorithm: sun_ratio_success
+      tuned: rho
       plot.label: "At Success"
   adagoal:
     - algorithm: adagoal_adaptive
@@ -27,12 +31,16 @@ configs:
       plot.label: "At Success"
   discover:
     - algorithm: discover_adaptive
+      tuned: beta
       plot.label: "Adaptive"
     - algorithm: discover_episodic
+      tuned: beta
       plot.label: "Episodic"
     - algorithm: discover_step
+      tuned: beta
       plot.label: "Per-Step"
     - algorithm: discover_success
+      tuned: beta
       plot.label: "At Success"
 
 statistics:

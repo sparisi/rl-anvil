@@ -4,25 +4,32 @@ default:
 configs:
   sun_ratio_adaptive:
     - algorithm: sun_ratio_adaptive
+      tuned: rho
       plot.label: "SUN"
     - algorithm: sun_ratio_step
+      tuned: rho
       plot.label: "SUN (Step)"
     - algorithm: sun_ratio_episodic
+      tuned: rho
       plot.label: "SUN (Epis.)"
   sun_ucb_adaptive:
     - algorithm: sun_ucb_adaptive
+      tuned: [beta, rho]
       plot.label: "SUN (Add.)"
   sun_reachability_adaptive:
     - algorithm: sun_reachability_adaptive
+      tuned: rho
       plot.label: "Reach.-Only"
   sun_novelty_adaptive:
     - algorithm: sun_novelty_adaptive
+      tuned: rho
       plot.label: "Novelty-Only"
   adagoal:
     - algorithm: adagoal_episodic
       plot.label: "AdaGoal"
   discover:
     - algorithm: discover_episodic
+      tuned: beta
       plot.label: "DISCOVER"
 
 statistics:

@@ -8,22 +8,30 @@ global_sweep:
     - gymnasium/pendulum_discrete
     - gymnasium/cart_pole
     - gymnasium/lunar_lander
-  algorithm:
-    - adagoal_adaptive
-    - adagoal_episodic
-    - adagoal_step
-    - adagoal_success
-    - discover_adaptive
-    - discover_episodic
-    - discover_step
-    - discover_success
-    - sun_ratio_adaptive
-    - sun_ratio_episodic
-    - sun_ratio_step
-    - sun_ratio_success
-    - sun_ucb_adaptive
-    - sun_ucb_episodic
-    - sun_ucb_step
-    - sun_ucb_success
   results.save_memory: True
   experiment.testing_episodes: 0
+
+config_sweep:
+  - algorithm:
+      - adagoal_adaptive
+      - adagoal_episodic
+      - adagoal_step
+      - adagoal_success
+  - algorithm:
+      - discover_adaptive
+      - discover_episodic
+      - discover_step
+      - discover_success
+    tuned: beta
+  - algorithm:
+      - sun_ratio_adaptive
+      - sun_ratio_episodic
+      - sun_ratio_step
+      - sun_ratio_success
+    tuned: rho
+  - algorithm:
+      - sun_ucb_adaptive
+      - sun_ucb_episodic
+      - sun_ucb_step
+      - sun_ucb_success
+    tuned: [[beta, rho]]

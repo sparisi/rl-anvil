@@ -170,19 +170,14 @@ UNREACHABLE_STYLE = {
     "kept": ("Kept until the end of the episode", "#fddbc7", "black"),
 }
 # Statistic, label and colour of each curve drawn over the bars of
-# reselection_causes_steps: the absolute error of the difference
-# V(s, g, a_g) - V(s_sel, g, a_g), with V(s, g, a_g) = max_a Q(s, a | g, a_g),
-# that the value check compares against 0, logged at every check with
-# results.true_visit_check, and the visit critic's training loss.
+# reselection_causes_steps: the visit critic's training loss.
 OVERLAY_STATS = (
-    ("v_err_check_diff", "Approx. error", "black"),
     ("loss_visit", "Training TD error", "white"),
 )
 # Line width of the curves of OVERLAY_STATS, and the outline drawn around each
 # curve, keyed by the curve's color.
 OVERLAY_WIDTH = 2.0
 OUTLINE = {
-    "black": [pe.Stroke(linewidth=OVERLAY_WIDTH + 1.0, foreground="white"), pe.Normal()],
     "white": [pe.Stroke(linewidth=OVERLAY_WIDTH + 1.0, foreground="black"), pe.Normal()],
 }
 # A segment of a bar narrower than this fraction is drawn without its

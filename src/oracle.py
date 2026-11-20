@@ -1,8 +1,7 @@
 """
 Exact visit Q-function of a Gym-Gridworlds environment, solved from the
-environment's transition model. Goal-conditioned actors and QVisitNetwork use
-it to compare their goal selection and their learned visit Q-function against
-the true ones.
+environment's transition model, to classify the goal selections of
+goal-conditioned runs against it.
 """
 
 import gymnasium as gym

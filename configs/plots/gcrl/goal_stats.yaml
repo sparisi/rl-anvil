@@ -8,27 +8,20 @@ per_env_plot:
 configs:
   sun_ratio_adaptive:
     - algorithm: sun_ratio_adaptive
+      tuned: rho
       plot.label: "SUN"
-  sun_ratio_step:
     - algorithm: sun_ratio_step
+      tuned: rho
       plot.label: "SUN (Step)"
-  sun_ratio_episodic:
     - algorithm: sun_ratio_episodic
+      tuned: rho
       plot.label: "SUN (Epis.)"
-  # sun_ucb_adaptive:
-  #   - algorithm: sun_ucb_adaptive
-  #     plot.label: "SUN (Add.)"
-  # sun_reachability_adaptive:
-  #   - algorithm: sun_reachability_adaptive
-  #     plot.label: "Reach.-Only"
-  # sun_novelty_adaptive:
-  #   - algorithm: sun_novelty_adaptive
-  #     plot.label: "Novelty-Only"
   adagoal:
-    - algorithm: adagoal
+    - algorithm: adagoal_episodic
       plot.label: "AdaGoal"
   discover:
-    - algorithm: discover
+    - algorithm: discover_episodic
+      tuned: beta
       plot.label: "DISCOVER"
 
 statistics:

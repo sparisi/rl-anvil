@@ -1,0 +1,26 @@
+default:
+  - default
+
+configs:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      tuned: rho
+      plot.label: "SUN (Adaptive)"
+  discover:
+    - algorithm: discover_adaptive
+      tuned: beta
+      plot.label: "Adaptive"
+    - algorithm: discover_episodic
+      tuned: beta
+      plot.label: "Episodic"
+    - algorithm: discover_step
+      tuned: beta
+      plot.label: "Per-Step"
+    - algorithm: discover_success
+      tuned: beta
+      plot.label: "At Success"
+
+statistics:
+  sa_h: "Entropy"
+  sa_%: "Coverage"
+  goal_reselections_%: "Goal Re-Selections (%)"

@@ -1,0 +1,49 @@
+default:
+  - default
+
+group_labels:
+  sun_ratio_adaptive: "SUN"
+  adagoal: "AdaGoal"
+  discover: "DISCOVER"
+
+configs:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      tuned: rho
+      plot.label: "Adaptive"
+    - algorithm: sun_ratio_episodic
+      tuned: rho
+      plot.label: "Episodic"
+    - algorithm: sun_ratio_step
+      tuned: rho
+      plot.label: "Per-Step"
+    - algorithm: sun_ratio_success
+      tuned: rho
+      plot.label: "At Success"
+  adagoal:
+    - algorithm: adagoal_adaptive
+      plot.label: "Adaptive"
+    - algorithm: adagoal_episodic
+      plot.label: "Episodic"
+    - algorithm: adagoal_step
+      plot.label: "Per-Step"
+    - algorithm: adagoal_success
+      plot.label: "At Success"
+  discover:
+    - algorithm: discover_adaptive
+      tuned: beta
+      plot.label: "Adaptive"
+    - algorithm: discover_episodic
+      tuned: beta
+      plot.label: "Episodic"
+    - algorithm: discover_step
+      tuned: beta
+      plot.label: "Per-Step"
+    - algorithm: discover_success
+      tuned: beta
+      plot.label: "At Success"
+
+statistics:
+  sa_h: "Entropy"
+  sa_%: "Coverage"
+  goal_reselections_%: "Goal Re-Selections (%)"

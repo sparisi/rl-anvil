@@ -8,8 +8,13 @@ global_sweep:
     - gymnasium/pendulum_discrete
     - gymnasium/cart_pole
     - gymnasium/lunar_lander
-    # - gymnasium/lunar_lander_full
-  algorithm: [sun_ratio_episodic, adagoal, discover]
   agent.actor.batch_size_goal: [256, 2_500, 10_000]
   results.save_memory: True
   experiment.testing_episodes: 0
+
+config_sweep:
+  - algorithm: sun_ratio_episodic
+    tuned: rho
+  - algorithm: adagoal_episodic
+  - algorithm: discover_episodic
+    tuned: beta

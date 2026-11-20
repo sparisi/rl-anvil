@@ -8,17 +8,17 @@ agent:
     id: QEnsemble
     n_critics: 4
     critics_id: QVisitNetwork
+    aggregation: episodic
     relabeling:
       id: her_future
       K: 4
 
   actor:
-    id: DISCOVER
+    id: AdaGoal
     batch_size_goal: 2_500
     random_tail: True
     per_step_selection: False
     goal_value_check: False
-    beta_novelty: 10.0
     eps:
       id: LinearDecay
       init_value: 1.0

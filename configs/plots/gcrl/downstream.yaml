@@ -1,0 +1,53 @@
+ignored_cfg_keys:
+  - agent.critic.approximator.device
+  - agent.critic.approximator_visit.device
+
+default:
+  - default
+
+configs:
+  sun_ratio_adaptive:
+    - algorithm: sun_ratio_adaptive
+      tuned: rho
+      agent.critic.explore_only: False
+      plot.label: "SUN"
+  adagoal:
+    - algorithm: adagoal_episodic
+      agent.critic.explore_only: False
+      plot.label: "AdaGoal"
+  discover:
+    - algorithm: discover_episodic
+      tuned: beta
+      agent.critic.explore_only: False
+      plot.label: "DISCOVER"
+  random:
+    - algorithm: random
+      agent.critic.explore_only: False
+      plot.label: "Random"
+  eps_greedy:
+    - algorithm: eps_greedy
+      agent.critic.explore_only: False
+      plot.label: "ε-greedy"
+
+statistics:
+  "train (γ)": "Train Return (γ)"
+  "test (γ)": "Test Return (γ)"
+
+environments:
+  gridworlds_and_control:
+    # gym_gridworlds/three_rooms_wall_mini_nonuniform:
+    #   label: "ThreeRoom"
+    gym_gridworlds/four_rooms_stuck_hard:
+      label: "FourRoomStuck"
+    gym_gridworlds/travel_field_small:
+      label: "GridMaze"
+    gymnasium/mountain_car:
+      label: "MountainCar"
+    gymnasium/pendulum_discrete:
+      label: "Pendulum"
+    gymnasium/lunar_lander:
+      label: "LunarLander"
+    # gymnasium/acrobot:
+    #   label: "Acrobot"
+    # gymnasium/cart_pole:
+    #   label: "CartPole"

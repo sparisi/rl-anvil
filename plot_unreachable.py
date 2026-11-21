@@ -496,7 +496,6 @@ if not run_dirs:
 flat_cfgs: dict = {}   # "<config_id>/<seed>" -> flat cfg
 run_cfgs: dict = {}    # "<config_id>/<seed>" -> nested cfg
 mem_files: dict = {}   # "<config_id>/<seed>" -> path to memory.npz
-read_cfgs: dict = {}   # cfg.yaml path -> read_run_cfg of it, read once per configuration
 no_cfg_dirs: list = []
 bad_cfg_dirs: list = []
 
@@ -508,9 +507,7 @@ for seed_dir in tqdm(
     if not cfg_file.is_file():
         no_cfg_dirs.append(seed_dir.parent.name)
         continue
-    if cfg_file not in read_cfgs:
-        read_cfgs[cfg_file] = read_run_cfg(cfg_file)
-    _, run_cfg, reason = read_cfgs[cfg_file]
+    _, run_cfg, reason = read_run_cfg(cfg_file)
     if reason is not None:
         vprint(f"  WARNING: {cfg_file} {reason}.")
         bad_cfg_dirs.append(seed_dir.parent.name)

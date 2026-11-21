@@ -1,4 +1,12 @@
 global_sweep:
+  algorithm:
+    - adagoal_episodic
+    - random
+    - sun_ratio_adaptive_binned
+    - discover_episodic
+    - sun_ratio_adaptive
+    - sun_novelty_adaptive
+    - sun_reachability_adaptive
   environment:
     - gym_gridworlds/three_rooms_wall_mini_nonuniform
     - gym_gridworlds/four_rooms_stuck_hard
@@ -10,16 +18,4 @@ global_sweep:
     - gymnasium/lunar_lander
   results.save_memory: True
   experiment.testing_episodes: 0
-
-config_sweep:
-  - algorithm:
-      - adagoal_episodic
-      - random
-      - sun_ratio_adaptive_binned
-  - algorithm: discover_episodic
-    tuned: beta
-  - algorithm:
-      - sun_ratio_adaptive
-      - sun_novelty_adaptive
-      - sun_reachability_adaptive
-    tuned: rho
+  tuned: [[beta, rho]]

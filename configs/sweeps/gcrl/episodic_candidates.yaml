@@ -1,4 +1,8 @@
 global_sweep:
+  algorithm:
+    - sun_ratio_episodic
+    - adagoal_episodic
+    - discover_episodic
   environment:
     - gym_gridworlds/three_rooms_wall_mini_nonuniform
     - gym_gridworlds/four_rooms_stuck_hard
@@ -11,10 +15,4 @@ global_sweep:
   agent.actor.batch_size_goal: [256, 2_500, 10_000]
   results.save_memory: True
   experiment.testing_episodes: 0
-
-config_sweep:
-  - algorithm: sun_ratio_episodic
-    tuned: rho
-  - algorithm: adagoal_episodic
-  - algorithm: discover_episodic
-    tuned: beta
+  tuned: [[beta, rho]]

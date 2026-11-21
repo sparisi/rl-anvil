@@ -1,15 +1,12 @@
 global_sweep:
+  algorithm:
+    - adagoal_episodic
+    - random
+    - discover_episodic
+    - sun_ratio_adaptive
   environment:
     - gym_gridworlds/four_rooms_stuck_hard_sticky
     - gymnasium/lunar_lander_noisyact
   results.save_memory: True
   experiment.testing_episodes: 0
-
-config_sweep:
-  - algorithm:
-      - adagoal_episodic
-      - random
-  - algorithm: discover_episodic
-    tuned: beta
-  - algorithm: sun_ratio_adaptive
-    tuned: rho
+  tuned: [[beta, rho]]

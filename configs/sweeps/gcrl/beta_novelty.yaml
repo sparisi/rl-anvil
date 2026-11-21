@@ -1,4 +1,13 @@
 global_sweep:
+  algorithm:
+    - sun_ucb_episodic
+    - sun_ucb_success
+    - sun_ucb_adaptive
+    - sun_ucb_step
+    - discover_episodic
+    - discover_success
+    - discover_adaptive
+    - discover_step
   environment:
     - gym_gridworlds/three_rooms_wall_mini_nonuniform
     - gym_gridworlds/four_rooms_stuck_hard
@@ -11,16 +20,4 @@ global_sweep:
   agent.actor.beta_novelty: [0.1, 1, 10, 100, 1_000]
   results.save_memory: True
   experiment.testing_episodes: 0
-
-config_sweep:
-  - algorithm:
-      - sun_ucb_episodic
-      - sun_ucb_success
-      - sun_ucb_adaptive
-      - sun_ucb_step
-    tuned: rho
-  - algorithm:
-      - discover_episodic
-      - discover_success
-      - discover_adaptive
-      - discover_step
+  tuned: rho

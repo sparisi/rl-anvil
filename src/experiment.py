@@ -265,14 +265,9 @@ class Experiment:
         self._save_videos = save_videos
         self._save_heatmaps = save_heatmaps
 
-        # The environment's tabular counters, None when it has none. The critic's
-        # gives the true counts for the exploration statistics and the heatmaps;
-        # an actor that selects goals gets two more, for goal selections and hits.
+        # The environment's tabular counter, None when it has none, giving the
+        # true counts for the exploration statistics and the heatmaps.
         self._critic.visit_count = tabular_count(self._env_train)
-        if hasattr(self._actor, "goal_selected_count"):
-            self._actor.goal_selected_count = tabular_count(self._env_train)
-        if hasattr(self._actor, "goal_reached_count"):
-            self._actor.goal_reached_count = tabular_count(self._env_train)
 
         self._replay_memory = getattr(src.replay_memory, replay_memory.id)(**replay_memory)
         self._replay_memory.init(

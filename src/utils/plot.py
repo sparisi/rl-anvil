@@ -1013,7 +1013,16 @@ def save_figure(fig, folder, name, dpi=300, pad_inches=0.1, bbox_inches="tight")
     return path
 
 
-def save_and_close(fig, folder, name, vprint, dpi=300, pad_inches=0.1, note="", bbox_inches="tight"):
+def save_and_close(
+    fig,
+    folder,
+    name,
+    vprint,
+    dpi=300,
+    pad_inches=0.1,
+    note="",
+    bbox_inches="tight",
+):
     """Save `fig` as `folder/name.png` with `dpi`, `pad_inches` and
     `bbox_inches` (see save_figure), close it, print the path followed by
     `note` through `vprint` and return 1, or return 0 when the file cannot be

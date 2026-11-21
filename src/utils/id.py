@@ -239,7 +239,11 @@ def tuned_table(name: str) -> dict:
         raise ValueError(f"The tuning {name} has no file {path}.")
     table = load_yaml(path) or {}
     for algorithm, environments in table.items():
-        for group, group_name in (("algorithm", algorithm), *(("environment", e) for e in environments)):
+        groups = (
+            ("algorithm", algorithm),
+            *(("environment", e) for e in environments),
+        )
+        for group, group_name in groups:
             if not os.path.isfile(os.path.join(CONFIG_DIR, group, f"{group_name}.yaml")):
                 raise ValueError(
                     f"{path} names the {group} {group_name}, which has no YAML "
@@ -254,8 +258,10 @@ def apply_tuned(cfg: DictConfig, hydra_cfg: DictConfig) -> None:
     `hydra_cfg`, the `hydra` node of the composition. Keys set by an override
     are skipped.
 
-    Raise ValueError if `cfg.tuned` is neither a string nor a list, or if two of
-    the tunings set the same key for that algorithm and environment."""
+    Raise ValueError if `cfg.tuned` is neither a string nor a list, if one of
+    the tunings has no entry for that algorithm, or if two of the tunings set
+    the same key for that algorithm and environment. A tuning with an entry
+    for the algorithm and none for the environment sets nothing."""
 
     names = cfg.tuned
     if isinstance(names, str):
@@ -266,12 +272,23 @@ def apply_tuned(cfg: DictConfig, hydra_cfg: DictConfig) -> None:
         raise ValueError(f"tuned must be a tuning name or a list of names, got {names!r}.")
 
     choices = hydra_cfg.runtime.choices
+    algorithm = choices.get("algorithm")
+    environment = choices.get("environment")
     entry = {}
     for name in names:
-        values = tuned_table(name).get(choices.get("algorithm"), {}).get(choices.get("environment"), {})
+        table = tuned_table(name)
+        if algorithm not in table:
+            raise ValueError(
+                f"The tuning {name} has no entry for the algorithm {algorithm} "
+                f"({TUNED_PATH.format(name)})."
+            )
+        values = table[algorithm].get(environment, {})
         shared = sorted(entry.keys() & values.keys())
         if shared:
-            raise ValueError(f"The tunings {names} all set {shared} for {choices.get('algorithm')} in {choices.get('environment')}.")
+            raise ValueError(
+                f"The tunings {names} all set {shared} for {algorithm} in "
+                f"{environment}."
+            )
         entry.update(values)
 
     keys = [o.split("=", 1)[0].lstrip("+~") for o in hydra_cfg.overrides.task]

@@ -21,7 +21,8 @@ what the agent learns. Branches:
 - **Evaluation that is comparable across checkpoints.** The greedy policy is tested at
   every checkpoint against episodes whose reset seeds are fixed for the whole run, so a
   change in the test curve is the policy changing and not a different draw of episodes.
-- **Sweep anything in the config**, including the network, from the command line.
+- **Sweep anything in the config** easily with the provided scripts, and customize
+  sweeps and the plotting of their results with YAML files.
 - Compatible with any [Gymnasium](https://github.com/Farama-Foundation/Gymnasium/) environment.
 - Minimal yet stable implementations of popular RL algorithms (Double DQN, DDPG, PPO, SAC),
   all easy to customize.

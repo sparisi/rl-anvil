@@ -655,8 +655,7 @@ class QEnsemble(Critic):
 
     Each Qt_k is updated from its main Q_k.
     Each call to update() trains one member Q_i, chosen at random, on its own
-    mini-batch. Its TD targets are computed with its own target networks, Qt_i
-    and, for members that learn a visit Q-function, Qt_visit_i, i.e.,
+    mini-batch. Its TD target is computed with its own target network, i.e.,
 
         Q_i(s_t, a_t) target: r + γ max_a Qt_i(s_{t+1}, a) with i random
 

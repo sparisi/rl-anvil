@@ -4,26 +4,34 @@ default:
 configs:
   sun_ratio_adaptive:
     - algorithm: sun_ratio_adaptive
+      tuned: rho
       plot.label: "SUN (Multiplicative)"
   sun_novelty_adaptive:
     - algorithm: sun_novelty_adaptive
+      tuned: rho
       plot.label: "Novelty-Only"
   sun_reachability_adaptive:
     - algorithm: sun_reachability_adaptive
+      tuned: rho
       plot.label: "Reachability-Only"
   sun_ucb_adaptive:
     - algorithm: sun_ucb_adaptive
+      tuned: rho
       agent.actor.beta_novelty: 0.1
       plot.label: "$\\beta = 0.1$"
     - algorithm: sun_ucb_adaptive
+      tuned: rho
       agent.actor.beta_novelty: 1
       plot.label: "$\\beta = 1$"
     - algorithm: sun_ucb_adaptive
+      tuned: rho
       agent.actor.beta_novelty: 10
       plot.label: "$\\beta = 10$"
     - algorithm: sun_ucb_adaptive
+      tuned: rho
       agent.actor.beta_novelty: 100
       plot.label: "$\\beta = 100$"
     - algorithm: sun_ucb_adaptive
+      tuned: rho
       agent.actor.beta_novelty: 1_000
       plot.label: "$\\beta = 1,000$"

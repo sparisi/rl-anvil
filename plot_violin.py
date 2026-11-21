@@ -68,7 +68,7 @@ from matplotlib.ticker import MaxNLocator
 
 from src.utils.aggregate import env_means, stack_runs
 from src.utils.matching import ignored_cfg_keys, load_config_group
-from src.utils.misc import make_vprint, warn_once
+from src.utils.misc import make_vprint
 from src.utils.plot import (
     BASE_BAR_GAP,
     PLOT_CONFIG_DIR,
@@ -233,7 +233,9 @@ def env_scores(drawing, group_name, present, stat):
     The environments are those of `present` where at least one entry has runs
     for `stat`. The scores are one per environment where the entry has runs, the
     mean over its runs of their normalized areas (see aggregate.env_means), or
-    under --all_seeds the normalized area of every run. The bounds are the
+    under --all_seeds the normalized area of every run. Every call prints a
+    warning for each entry without runs in some of the environments, naming
+    them. The bounds are the
     environment's `score_bounds` for `stat`, or its `ylim` when it declares
     none."""
 
@@ -282,9 +284,10 @@ def env_scores(drawing, group_name, present, stat):
             continue
         missing = [env for env, runs in zip(envs, per_env) if not runs]
         if missing:
-            warn_once(
-                f"WARNING: {entry['label']} has no runs for {stat} in {missing}; "
-                f"its violin is over the other environments."
+            print(
+                f"WARNING: {drawing.name}, group {group_name or '(unnamed)'}: "
+                f"{entry['label']} has no runs for {stat} in {missing}; its "
+                f"violin is over the other environments."
             )
         kept = [k for k, runs in enumerate(per_env) if runs]
         normalized = (

@@ -8,15 +8,19 @@ global_sweep:
     - gymnasium/pendulum_discrete
     - gymnasium/cart_pole
     - gymnasium/lunar_lander
-  algorithm:
-    - sun_ucb_episodic
-    - sun_ucb_success
-    - sun_ucb_adaptive
-    - sun_ucb_step
-    - discover_episodic
-    - discover_success
-    - discover_adaptive
-    - discover_step
   agent.actor.beta_novelty: [0.1, 1, 10, 100, 1_000]
   results.save_memory: True
   experiment.testing_episodes: 0
+
+config_sweep:
+  - algorithm:
+      - sun_ucb_episodic
+      - sun_ucb_success
+      - sun_ucb_adaptive
+      - sun_ucb_step
+    tuned: rho
+  - algorithm:
+      - discover_episodic
+      - discover_success
+      - discover_adaptive
+      - discover_step

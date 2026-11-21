@@ -30,70 +30,91 @@ group_labels:
 references:
   sun_ratio_adaptive:
     - algorithm: sun_ratio_adaptive
+      tuned: rho
       plot.label: "SUN"
 
 configs:
   sun_ucb_adaptive:
     - algorithm: sun_ucb_adaptive
+      tuned: rho
       agent.actor.beta_novelty: 0.1
       plot.label: "$\\beta = 0.1$"
     - algorithm: sun_ucb_adaptive
+      tuned: rho
       agent.actor.beta_novelty: 1
       plot.label: "$\\beta = 1$"
     - algorithm: sun_ucb_adaptive
+      tuned: rho
       agent.actor.beta_novelty: 10
       plot.label: "$\\beta = 10$"
     - algorithm: sun_ucb_adaptive
+      tuned: rho
       agent.actor.beta_novelty: 100
       plot.label: "$\\beta = 100$"
     - algorithm: sun_ucb_adaptive
+      tuned: rho
       agent.actor.beta_novelty: 1_000
       plot.label: "$\\beta = 1,000$"
   sun_ucb_episodic:
     - algorithm: sun_ucb_episodic
+      tuned: rho
       agent.actor.beta_novelty: 0.1
       plot.label: "$\\beta = 0.1$"
     - algorithm: sun_ucb_episodic
+      tuned: rho
       agent.actor.beta_novelty: 1
       plot.label: "$\\beta = 1$"
     - algorithm: sun_ucb_episodic
+      tuned: rho
       agent.actor.beta_novelty: 10
       plot.label: "$\\beta = 10$"
     - algorithm: sun_ucb_episodic
+      tuned: rho
       agent.actor.beta_novelty: 100
       plot.label: "$\\beta = 100$"
     - algorithm: sun_ucb_episodic
+      tuned: rho
       agent.actor.beta_novelty: 1_000
       plot.label: "$\\beta = 1,000$"
   sun_ucb_step:
     - algorithm: sun_ucb_step
+      tuned: rho
       agent.actor.beta_novelty: 0.1
       plot.label: "$\\beta = 0.1$"
     - algorithm: sun_ucb_step
+      tuned: rho
       agent.actor.beta_novelty: 1
       plot.label: "$\\beta = 1$"
     - algorithm: sun_ucb_step
+      tuned: rho
       agent.actor.beta_novelty: 10
       plot.label: "$\\beta = 10$"
     - algorithm: sun_ucb_step
+      tuned: rho
       agent.actor.beta_novelty: 100
       plot.label: "$\\beta = 100$"
     - algorithm: sun_ucb_step
+      tuned: rho
       agent.actor.beta_novelty: 1_000
       plot.label: "$\\beta = 1,000$"
   sun_ucb_success:
     - algorithm: sun_ucb_success
+      tuned: rho
       agent.actor.beta_novelty: 0.1
       plot.label: "$\\beta = 0.1$"
     - algorithm: sun_ucb_success
+      tuned: rho
       agent.actor.beta_novelty: 1
       plot.label: "$\\beta = 1$"
     - algorithm: sun_ucb_success
+      tuned: rho
       agent.actor.beta_novelty: 10
       plot.label: "$\\beta = 10$"
     - algorithm: sun_ucb_success
+      tuned: rho
       agent.actor.beta_novelty: 100
       plot.label: "$\\beta = 100$"
     - algorithm: sun_ucb_success
+      tuned: rho
       agent.actor.beta_novelty: 1_000
       plot.label: "$\\beta = 1,000$"

@@ -22,6 +22,14 @@ sun_ucb_step:
   gymnasium/acrobot: {experiment.replay_memory.rho: 0.25}
   gymnasium/cart_pole: {experiment.replay_memory.rho: 0.5}
 
+sun_ucb_success:
+  gymnasium/mountain_car: {experiment.replay_memory.rho: 0.5}
+  gymnasium/pendulum_discrete: {experiment.replay_memory.rho: 0.1}
+  gymnasium/lunar_lander: {experiment.replay_memory.rho: 0.25}
+  gymnasium/lunar_lander_full: {experiment.replay_memory.rho: 0.5}
+  gymnasium/acrobot: {experiment.replay_memory.rho: 0.25}
+  gymnasium/cart_pole: {experiment.replay_memory.rho: 0.5}
+
 sun_ratio_adaptive:
   gymnasium/mountain_car: {experiment.replay_memory.rho: 0.5}
   gymnasium/pendulum_discrete: {experiment.replay_memory.rho: 0.1}
@@ -39,6 +47,14 @@ sun_ratio_episodic:
   gymnasium/cart_pole: {experiment.replay_memory.rho: 0.5}
 
 sun_ratio_step:
+  gymnasium/mountain_car: {experiment.replay_memory.rho: 0.5}
+  gymnasium/pendulum_discrete: {experiment.replay_memory.rho: 0.1}
+  gymnasium/lunar_lander: {experiment.replay_memory.rho: 0.25}
+  gymnasium/lunar_lander_full: {experiment.replay_memory.rho: 0.5}
+  gymnasium/acrobot: {experiment.replay_memory.rho: 0.25}
+  gymnasium/cart_pole: {experiment.replay_memory.rho: 0.5}
+
+sun_ratio_success:
   gymnasium/mountain_car: {experiment.replay_memory.rho: 0.5}
   gymnasium/pendulum_discrete: {experiment.replay_memory.rho: 0.1}
   gymnasium/lunar_lander: {experiment.replay_memory.rho: 0.25}

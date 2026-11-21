@@ -77,3 +77,25 @@ sun_reachability_adaptive:
   gymnasium/lunar_lander_full: {experiment.replay_memory.rho: 0.5}
   gymnasium/acrobot: {experiment.replay_memory.rho: 0.25}
   gymnasium/cart_pole: {experiment.replay_memory.rho: 0.5}
+
+discover_episodic: {}
+
+discover_success: {}
+
+discover_adaptive: {}
+
+discover_step: {}
+
+sun_ratio_adaptive_binned: {}
+
+adagoal_adaptive: {}
+
+adagoal_episodic: {}
+
+adagoal_step: {}
+
+adagoal_success: {}
+
+random: {}
+
+eps_greedy: {}

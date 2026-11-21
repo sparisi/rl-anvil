@@ -1,4 +1,21 @@
 global_sweep:
+  algorithm:
+    - adagoal_adaptive
+    - adagoal_episodic
+    - adagoal_step
+    - adagoal_success
+    - discover_adaptive
+    - discover_episodic
+    - discover_step
+    - discover_success
+    - sun_ratio_adaptive
+    - sun_ratio_episodic
+    - sun_ratio_step
+    - sun_ratio_success
+    - sun_ucb_adaptive
+    - sun_ucb_episodic
+    - sun_ucb_step
+    - sun_ucb_success
   environment:
     - gym_gridworlds/three_rooms_wall_mini_nonuniform
     - gym_gridworlds/four_rooms_stuck_hard
@@ -10,28 +27,4 @@ global_sweep:
     - gymnasium/lunar_lander
   results.save_memory: True
   experiment.testing_episodes: 0
-
-config_sweep:
-  - algorithm:
-      - adagoal_adaptive
-      - adagoal_episodic
-      - adagoal_step
-      - adagoal_success
-  - algorithm:
-      - discover_adaptive
-      - discover_episodic
-      - discover_step
-      - discover_success
-    tuned: beta
-  - algorithm:
-      - sun_ratio_adaptive
-      - sun_ratio_episodic
-      - sun_ratio_step
-      - sun_ratio_success
-    tuned: rho
-  - algorithm:
-      - sun_ucb_adaptive
-      - sun_ucb_episodic
-      - sun_ucb_step
-      - sun_ucb_success
-    tuned: [[beta, rho]]
+  tuned: [[beta, rho]]

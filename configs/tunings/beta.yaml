@@ -81,3 +81,29 @@ sun_ucb_success:
   gymnasium/lunar_lander: {agent.actor.beta_novelty: 1.0}
   gymnasium/acrobot: {agent.actor.beta_novelty: 100.0}
   gymnasium/cart_pole: {agent.actor.beta_novelty: 100.0}
+
+sun_ratio_adaptive: {}
+
+sun_ratio_episodic: {}
+
+sun_ratio_step: {}
+
+sun_ratio_success: {}
+
+sun_ratio_adaptive_binned: {}
+
+sun_novelty_adaptive: {}
+
+sun_reachability_adaptive: {}
+
+adagoal_adaptive: {}
+
+adagoal_episodic: {}
+
+adagoal_step: {}
+
+adagoal_success: {}
+
+random: {}
+
+eps_greedy: {}

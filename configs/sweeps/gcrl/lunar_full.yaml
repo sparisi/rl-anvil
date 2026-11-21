@@ -1,14 +1,11 @@
 global_sweep:
+  algorithm:
+    - adagoal_episodic
+    - random
+    - discover_episodic
+    - sun_ratio_adaptive
   environment:
     - gymnasium/lunar_lander_full
   results.save_memory: True
   experiment.testing_episodes: 0
-
-config_sweep:
-  - algorithm:
-      - adagoal_episodic
-      - random
-  - algorithm: discover_episodic
-    tuned: beta
-  - algorithm: sun_ratio_adaptive
-    tuned: rho
+  tuned: [[beta, rho]]

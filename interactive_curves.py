@@ -47,9 +47,11 @@ scores every run by its final value or its area under the curve, chosen with the
 "Type" dropdown, and normalizes each environment's scores by the lowest and
 highest score of any run of that environment and statistic on the page. A
 configuration is one cell's curve, matched across environments by its block,
-row, column and curve, and each estimate is over the environments where its
-configuration has runs, both configurations of a pair for the probability of
-improvement; environments holding different numbers of its runs are padded
+row, column and curve. The aggregates and the profiles are drawn only for the
+configurations with runs in every environment, and the probability of
+improvement of a pair is over the environments where both configurations have
+runs. A configuration without runs in some environment gets a warning naming
+them. Environments holding different numbers of its runs are padded
 rather than cut, and each is weighed the same whatever its run count, except in
 the IQM, which pools the runs. The tab shows the median, IQM, mean and
 optimality gap of each configuration, the probability of improvement of every
@@ -968,10 +970,12 @@ def rliable_records(runs):
     environment where every run scored the same is left out, with a warning, and
     the environments each estimate is over are carried as `n_envs`. A
     configuration is (block, row, column, curve), and its aggregates and profile
-    are over the remaining environments where it has runs; a probability of
-    improvement is over the environments where both configurations of the pair
-    have runs. Environments holding different numbers of runs are padded (see
-    aggregate.stack_runs), not cut."""
+    are over the remaining environments, written only for a configuration with
+    runs in all of them; a configuration missing some of them gets a warning per
+    score naming those environments. A probability of improvement is over the
+    environments where both configurations of the pair have runs. Environments
+    holding different numbers of runs are padded (see aggregate.stack_runs), not
+    cut."""
 
     frame = pd.DataFrame(runs)
     keys = ["_block", "_row", "_col", "_curve"]
@@ -997,7 +1001,7 @@ def rliable_records(runs):
             if not envs:
                 continue
 
-            scores, per_envs, labels, partial = {}, {}, {}, 0
+            scores, per_envs, labels = {}, {}, {}
             for key, config in by_stat.groupby(keys, sort=False):
                 per_env = [
                     (config.loc[config["_env"] == e, score].to_numpy(dtype=float)
@@ -1006,23 +1010,25 @@ def rliable_records(runs):
                 ]
                 if not any(len(p) for p in per_env):
                     continue
-                if not all(len(p) for p in per_env):
-                    partial += 1
-                per_envs[key] = per_env
-                scores[key] = stack_runs([p for p in per_env if len(p)])
                 block_label = config["_block_label"].iloc[0] or f"entry {key[0] + 1}"
+                missing = [e for e, p in zip(envs, per_env) if not len(p)]
+                if missing:
+                    print(
+                        f"WARNING: rliable tab, {stat} ({kind}): "
+                        f"{name_of(key, block_label)} has no runs in {missing}; "
+                        f"it is left out of the aggregates and the profile, and "
+                        f"its probabilities of improvement are over the "
+                        f"environments each pair shares."
+                    )
+                else:
+                    scores[key] = stack_runs(per_env)
+                per_envs[key] = per_env
                 labels[key] = block_label
-            if score == "score_final" and partial:
-                print(
-                    f"WARNING: rliable tab, {stat}: {partial} configuration(s) "
-                    f"without runs in every environment are estimated over the "
-                    f"environments where they have runs."
-                )
-            if not scores:
+            if not per_envs:
                 continue
             pairs = [
                 (a, b)
-                for a, b in itertools.combinations(scores, 2)
+                for a, b in itertools.combinations(per_envs, 2)
                 if a[0] == b[0] and common_envs(per_envs[a], per_envs[b])
             ]
             jobs.append((

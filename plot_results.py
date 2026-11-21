@@ -39,7 +39,11 @@ every pair (`rliable_<score>_poi`); the median, IQM, mean and optimality gap
 (`rliable_<score>_profile`). Every aggregate except the probability of
 improvement pools scores across environments, so each environment's scores are
 normalized by its `ylim` for that statistic, and a group with an environment that
-has none is left out of them. The same holds for --curves_iqm. An environment's
+has none is left out of them. The same holds for --curves_iqm. An entry without
+scores in some environment of the group is left out of the aggregates, the
+performance profiles and --curves_iqm, and its probability of improvement
+against another entry is over the environments where both have scores, with a
+warning naming the environments it misses. An environment's
 `score_bounds` for a statistic replace its `ylim` as the normalization bounds,
 and leave the axis limits unchanged.
 
@@ -82,7 +86,7 @@ from src.utils.aggregate import (
 )
 from src.utils.id import decode_stat
 from src.utils.matching import ignored_cfg_keys, load_config_group
-from src.utils.misc import make_vprint, warn_once
+from src.utils.misc import make_vprint
 from src.utils.plot import (
     PLOT_CONFIG_DIR,
     STEPS_STAT,
@@ -421,17 +425,18 @@ RLIABLE_SCORES = {"final": "Final", "auc": "AUC"}
 def complete_entries(drawing, present, stat, decoded_of, drawn):
     """The entries holding runs in every environment of the group. An aggregate
     over environments compares configurations on the same ones, so an entry
-    missing any of them is left out."""
+    missing any of them is left out, and every call prints a warning naming it
+    and the environments it misses."""
 
     kept = []
     for i in drawn:
-        if all((env, i) in decoded_of for env in present):
+        missing = [env for env in present if (env, i) not in decoded_of]
+        if not missing:
             kept.append(i)
         else:
-            warn_once(
+            print(
                 f"WARNING: {drawing.entries[i]['label']} has no runs for {stat} "
-                f"in some environment of the group; it is left out of the rliable "
-                f"estimates."
+                f"in {missing}; it is left out of the IQM curve."
             )
     return kept
 
@@ -550,23 +555,44 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
     being `final` or `auc` (see run_scores). Returns the number of figures
     written.
 
-    The probability of improvement is drawn for every pair of configurations,
-    and needs no normalization: it compares runs within an environment and
-    averages over environments. The aggregate metrics and the performance
-    profile pool runs across environments, so they are drawn only when every
-    environment has score bounds for `stat` (see norm_bounds), which the scores
-    are normalized by."""
+    The probability of improvement is drawn for every pair of configurations
+    sharing an environment where both have scores, over those environments, and
+    needs no normalization: it compares runs within an environment and averages
+    over environments. The aggregate metrics and the performance profile pool
+    runs across environments, so they are drawn only when every environment has
+    score bounds for `stat` (see norm_bounds), which the scores are normalized
+    by, and only for the entries with scores in every environment. An entry
+    without scores in some environment gets a warning naming those
+    environments."""
 
-    scores = {}
-    for i in complete_entries(drawing, present, stat, decoded_of, drawn):
+    per_env_of, scores = {}, {}
+    for i in drawn:
         per_env = [
             run_scores(decoded_of[(env, i)], kind, args.rliable_last_k)
+            if (env, i) in decoded_of else []
             for env in present
         ]
-        if all(per_env):
+        if not any(per_env):
+            continue
+        per_env_of[i] = per_env
+        missing = [env for env, runs in zip(present, per_env) if not runs]
+        if missing:
+            print(
+                f"WARNING: {drawing.entries[i]['label']} has no {kind} score for "
+                f"{stat} in {missing}; it is left out of the rliable aggregates "
+                f"and profile, and its probabilities of improvement are over the "
+                f"environments each pair shares."
+            )
+        else:
             scores[i] = stack_runs(per_env)
-    if not scores:
+    if not per_env_of:
         return 0
+
+    def shared(a, b):
+        return [
+            k for k, (x, y) in enumerate(zip(per_env_of[a], per_env_of[b]))
+            if x and y
+        ]
 
     ylabel = drawing.stat_labels.get(stat, stat)
     score_label = RLIABLE_SCORES[kind]
@@ -575,13 +601,15 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
     written = 0
 
     # --- Probability of improvement ------------------------------------------
-    pairs = list(itertools.combinations(scores, 2))
+    pairs = [
+        (a, b) for a, b in itertools.combinations(per_env_of, 2) if shared(a, b)
+    ]
     if pairs:
         record["poi"] = {
             (a, b): tuple(
                 float(v) for v in probability_of_improvement_interval(
-                    scores[a],
-                    scores[b],
+                    stack_runs([per_env_of[a][k] for k in shared(a, b)]),
+                    stack_runs([per_env_of[b][k] for k in shared(a, b)]),
                     reps=args.rliable_reps,
                 )
             )
@@ -629,6 +657,8 @@ def draw_rliable(drawing, name, group_name, present, stat, decoded_of, drawn, ki
         written += save_and_close(fig, drawing.output_dir, f"{stem}_poi", vprint)
 
     # --- Aggregate metrics and performance profile -----------------------------
+    if not scores:
+        return written
     bounds = norm_bounds(drawing.score_bounds, present, stat)
     if bounds is None:
         missing = missing_bounds(drawing.score_bounds, present, stat)

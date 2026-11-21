@@ -440,11 +440,14 @@ def load_yaml(path: str):
     return OmegaConf.to_container(OmegaConf.load(path), resolve=False)
 
 
+@lru_cache(maxsize=None)
 def read_run_cfg(path) -> tuple:
     """Read the cfg.yaml at `path` and return (cfg, resolved dict, None), with
     the dict being strip_config(cfg). When the file cannot be read, is empty or
     not a mapping, or cannot be resolved, return (None, None, reason), with the
-    reason written to follow the file's name."""
+    reason written to follow the file's name. The result is cached by `path`, so
+    each file is read once per process and repeated calls return the same
+    objects."""
 
     try:
         cfg = OmegaConf.load(path)

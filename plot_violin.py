@@ -235,9 +235,8 @@ def env_scores(drawing, group_name, present, stat):
     mean over its runs of their normalized areas (see aggregate.env_means), or
     under --all_seeds the normalized area of every run. Every call prints a
     warning for each entry without runs in some of the environments, naming
-    them. The bounds are the
-    environment's `score_bounds` for `stat`, or its `ylim` when it declares
-    none."""
+    them. The bounds are the environment's `score_bounds` for `stat`, or its
+    `ylim` when it declares none."""
 
     aucs = {}
     for i, entry in enumerate(drawing.entries):

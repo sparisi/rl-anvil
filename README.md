@@ -46,7 +46,6 @@ Then set `SCRATCH`, the folder where temporary files (Hydra outputs, W&B files)
 are written.
 ```
 export SCRATCH=/scratch/$USER
-export SCRATCH=/projappl/project_abc
 setx SCRATCH "C:\scratch\%USERNAME%"  # on Windows
 ```
 
@@ -71,7 +70,7 @@ environment, save heatmaps of the Q-function and (discretized) state visits,
 videos of the greedy policies at testing checkpoints, and the whole replay memory.  
 Here is what you will see printed on screen during training.
 
-> `1b3bc0de` is the ID the above configuration hashes to (see [`src/utils/id`](src/utils/id.py)).
+> `1b3bc0de` is the ID the above configuration hashes to (see [`src/utils/id.py`](src/utils/id.py)).
 
 
 ```shell
@@ -279,14 +278,14 @@ strategies, and networks with a few customized modules (see [`src/utils/torch_nn
 They are designed to be extended by subclassing. For example, the `pytorch_gcrl` branch implements
 goal-conditioned networks, actors, and critics with a few simple changes.
 
-Because all of this is configuration, the network is an ordinary command line override
+Any key, the network included, can be overridden
 ```
 python main.py agent.critic.approximator.hidden_size=128 agent.critic.approximator.maxout_layers=8
 ```
-and anything you can override, you can sweep. See [`encoders.yaml`](configs/sweeps/encoders.yaml),
-which sweeps a no-encoder baseline and three encoder families, crossed with their kernels,
-aggregation statistics, dropout rates, observation normalization, and three environments,
-from a single file.
+and swept. See [`encoders.yaml`](configs/sweeps/encoders.yaml), which sweeps a
+no-encoder baseline and three encoder families, crossed with their kernels,
+aggregation statistics, dropout rates, observation normalization, and three
+environments, from a single file.
 
 ## Launching Sweeps
 Sweeps are defined in [`configs/sweeps/`](configs/sweeps/). The commands below use
@@ -308,7 +307,7 @@ script below for SLURM jobs.
 python submit_jobs_slurm.py --sweep=example --data_dir=data_example --cluster=roihu --seeds=0-9 --seeds_per_chunk=5 --skip_duplicates
 ```
 
-> `--cluster` selects a settings file in `configs/slurm` (directories, modules, account, ---).
+> `--cluster` selects a settings file in `configs/slurm` (directories, modules, account, ...).
 
 Each configuration's seeds are split into chunks, and each chunk runs on a
 separate process within the same job via SLURM tasks. This script assigns unique

@@ -30,7 +30,7 @@ under configs/plots without the extension:
                     column per environment with reselections: a histogram in
                     --cause_bins equal-width bins of steps, each bar the mean
                     number of reselections per seed per 1,000 training steps
-                    in the bin, stacked by cause in the same colours. Its axes
+                    in the bin, stacked by cause in the same colors. Its axes
                     carry round ticks (see round_ticks). The statistics of
                     OVERLAY_STATS the runs logged are drawn over the bars on a
                     log-scale right axis, as the mean over seeds.
@@ -38,14 +38,12 @@ under configs/plots without the extension:
 The `histograms` block of the plot config maps a group name to a list of
 environments, and each group gets one more reselection_causes_steps_<group>.png
 over those environments alone, without the curves of OVERLAY_STATS or the bar
-figures, with the total reselections as a percentage of the training
-steps in the top right corner of every subplot and the legend of the causes in
-one column inside the first subplot, and its legend of the
-causes alone in one column as
-reselection_causes_steps_<group>_legend_vertical.png and in one row as
-reselection_causes_steps_<group>_legend_horizontal.png. The environments are
-labelled as
-in `environments`.
+figures, with the total reselections as a percentage of the training steps in
+the top right corner of every subplot and the legend of the causes in one
+column inside the first subplot, and its legend of the causes alone in one
+column as reselection_causes_steps_<group>_legend_vertical.png and in one row
+as reselection_causes_steps_<group>_legend_horizontal.png. The environments
+are labeled as in `environments`.
 
 When the plot config has a `margin` block, one more file is written there:
 
@@ -151,7 +149,7 @@ _memory_causes: dict = {}
 _true_visit: dict = {}
 _run_cfgs: dict = {}
 
-# Label, colour and label colour of each cause of RESELECTION_CAUSES, in its
+# Label, color and label color of each cause of RESELECTION_CAUSES, in its
 # order: reds for the goals that were or became unreachable, blues for the true
 # value lost while acting, grey for the value checks that fired without a drop.
 CAUSE_STYLE = {
@@ -162,14 +160,14 @@ CAUSE_STYLE = {
     "env_noise": ("Environment noise", "#2166ac", "white"),
     "critic_error": ("Approximation error", "#bababa", "black"),
 }
-# Label, colour and label colour of the goals unreachable from the state of
+# Label, color and label color of the goals unreachable from the state of
 # their last selection that a reselection replaced, in the red of
 # unreachable_at_selection, and of those kept until the end of their episode.
 UNREACHABLE_STYLE = {
     "replaced": ("Replaced by the check", "#b2182b", "white"),
     "kept": ("Kept until the end of the episode", "#fddbc7", "black"),
 }
-# Statistic, label and colour of each curve drawn over the bars of
+# Statistic, label and color of each curve drawn over the bars of
 # reselection_causes_steps: the absolute error of the difference
 # V(s, g, a_g) - V(s_sel, g, a_g), with V(s, g, a_g) = max_a Q(s, a | g, a_g),
 # that the value check compares against 0, logged at every check with
@@ -573,9 +571,9 @@ def write_cause_tree(output_dir):
     of a reselection to reselection_causes_tree.png in `output_dir`, and return
     the number of figures written.
 
-    Every test is a white box and every cause a box in its colours of
+    Every test is a white box and every cause a box in its colors of
     CAUSE_STYLE, with a note under it on the decision it reflects. Every branch
-    is labelled with the outcome of its test. The figure is cropped to the
+    is labeled with the outcome of its test. The figure is cropped to the
     boxes and the notes, keeping the inches per axis unit of TREE_FIG_W and
     TREE_FIG_H, and saved without padding."""
 
@@ -669,7 +667,7 @@ def round_ticks(ax, which, n_bins):
     """Put round ticks on the `which` axis ("x" or "y") of `ax`: multiples of
     1, 2, 2.5 or 5 times a power of ten, at most `n_bins` intervals apart over
     its limits, and grow the limits to the round ticks just outside them, so
-    the axis starts and ends on a tick. A value axis is labelled in the shortest
+    the axis starts and ends on a tick. A value axis is labeled in the shortest
     form of each tick ("%g")."""
 
     if which == "x":
@@ -715,8 +713,8 @@ def draw_share_figure(drawing, title, bars, styles, notes):
     counts) of `bars`, titled `title`, and return the figure and its axes.
 
     The segments of a bar are the fractions of its counts, in the order of
-    `styles`, a (label, colour, label colour) per count. A segment at least
-    CAUSE_LABEL_MIN wide is labelled with its percentage. The text of `notes`,
+    `styles`, a (label, color, label color) per count. A segment at least
+    CAUSE_LABEL_MIN wide is labeled with its percentage. The text of `notes`,
     one per bar, is written at the end of the bar. A bar is named by its
     environment, and by its entry too when several entries have bars."""
 
@@ -780,7 +778,7 @@ def draw_cause_figure(drawing, name, envs):
 
     Every reselection has one cause (see reselection_causes), and the segments
     of a bar are the fractions of its reselections of each cause, pooled over
-    the seeds, in the order and the colours of CAUSE_STYLE. At the end of the
+    the seeds, in the order and the colors of CAUSE_STYLE. At the end of the
     bar, "total = <reselections>" is written over "(<x>% of <training
     steps>)", x being the mean number of reselections per seed as a percentage
     of the training steps, both counts written by kilo."""
@@ -817,7 +815,7 @@ def draw_unreachable_figure(drawing, name, envs):
 
     The segments of a bar are the fractions of the goals, pooled over the
     seeds, that a reselection replaced and that were kept until the end of
-    their episode, in the order and the colours of UNREACHABLE_STYLE, with its
+    their episode, in the order and the colors of UNREACHABLE_STYLE, with its
     legend below. At the end of the bar, "total = <goals>" is written over
     "(median <s> steps)", s being the median steps from their first selection
     to the reselection, the count written by kilo."""
@@ -876,7 +874,7 @@ def cause_hist(drawing, env, index):
 
 def draw_cause_hist(ax, drawing, env, index, edges, heights, errors=True):
     """Draw the histogram `edges`, `heights` of cause_hist on `ax`, stacked by
-    cause in the order and the colours of CAUSE_STYLE, with round ticks on both
+    cause in the order and the colors of CAUSE_STYLE, with round ticks on both
     axes (see round_ticks). With `errors`, draw over the bars every statistic
     of OVERLAY_STATS the runs entry `index` selects in `env` logged, on a
     log-scale right axis against its logged steps, as the mean over seeds.

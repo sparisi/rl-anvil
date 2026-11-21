@@ -11,9 +11,11 @@ what the agent learns. Branches:
 - `tabular` for tabular Q-Learning (useful to quickly prototype algorithms).
 
 ## Key Features
-- **Launch and monitor sweeps on SLURM.** Resubmitting a sweep skips runs that already
-  finished or are still queued, `inspect_jobs.sh` reports on running jobs, and
-  `detect_jobs_err.sh` reconstructs what happened to the ones that died.
+- **Sweep anything, locally or on SLURM.** The provided scripts launch any sweep, and
+  YAML files customize sweeps and the plotting of their results. On SLURM,
+  resubmitting a sweep skips runs that already finished or are still queued,
+  `inspect_jobs.sh` reports on running jobs, and `detect_jobs_err.sh` reconstructs
+  what happened to the ones that died.
 - **Diagnostics at every checkpoint, not just returns.** Coverage and entropy of the
   visited state-action space, Q-value magnitude, gradient norms, eligibility-trace
   cuts, and optionally heatmaps of the Q-function, videos of the greedy policy, and
@@ -21,8 +23,6 @@ what the agent learns. Branches:
 - **Evaluation that is comparable across checkpoints.** The greedy policy is tested at
   every checkpoint against episodes whose reset seeds are fixed for the whole run, so a
   change in the test curve is the policy changing and not a different draw of episodes.
-- **Sweep anything in the config** easily with the provided scripts, and customize
-  sweeps and the plotting of their results with YAML files.
 - Compatible with any [Gymnasium](https://github.com/Farama-Foundation/Gymnasium/) environment.
 - Minimal yet stable implementations of popular RL algorithms (Double DQN, DDPG, PPO, SAC),
   all easy to customize.
@@ -82,18 +82,7 @@ steps | train (γ) |      train |  test (γ) |       test |   sa_% |   sa_h |   
 steps | train (γ) |      train |  test (γ) |       test |   sa_% |   sa_h |    s_% |    s_h |  eps |   loss | grad_norm |   q_mean | trace_cut_frac
 11000 | -559.9887 | -1292.2218 | -548.1097 | -1298.6761 | 0.4973 | 0.9114 | 0.7975 | 0.9475 | 0.81 | 1.3707 |    5.7773 | -7.365   |         0.8764
 12000 | -526.8196 | -1240.1048 | -564.3862 | -1358.2616 | 0.5232 | 0.9164 | 0.805  | 0.9502 | 0.62 | 0.7652 |    9.2342 | -13.3648 |         0.8735
-13000 |  -507.325 | -1243.7619 | -544.5045 | -1302.2352 | 0.5338 | 0.9163 | 0.8056 | 0.9461 | 0.43 | 0.8071 |   12.5352 | -18.8743 |         0.8697
-14000 | -576.2109 | -1432.5334 | -508.441  | -1220.9896 | 0.54   | 0.9135 | 0.8056 | 0.9406 | 0.24 | 0.9575 |   14.9446 | -24.7739 |         0.8575
-15000 | -614.2297 | -1484.9745 | -490.3922 | -1151.7335 | 0.543  | 0.9095 | 0.8056 | 0.9349 | 0.05 | 1.1947 |   16.4023 | -30.586  |         0.8416
-16000 | -503.5695 | -1193.4797 | -456.7987 | -1069.2802 | 0.5482 | 0.9072 | 0.8056 | 0.9321 | 0.05 | 1.3657 |   17.1672 | -35.8963 |         0.8295
-17000 | -498.8683 | -1139.0065 | -413.6176 | -944.2951  | 0.5517 | 0.9052 | 0.8056 | 0.9298 | 0.05 | 1.4996 |     16.61 | -41.667  |         0.8203
-18000 | -530.4734 | -1190.9065 | -354.4569 | -781.2514  | 0.5608 | 0.907  | 0.8056 | 0.9322 | 0.05 | 1.6135 |   16.6759 | -47.1844 |         0.8097
-19000 | -472.9179 | -1061.903  | -379.2295 | -858.8809  | 0.5666 | 0.9073 | 0.8056 | 0.9338 | 0.05 | 1.6941 |   16.7434 | -52.434  |         0.8003
-steps | train (γ) |     train  |  test (γ) |      test  |   sa_% |   sa_h |    s_% |    s_h |  eps |   loss | grad_norm |   q_mean | trace_cut_frac
-20000 | -398.5283 | -843.1945  | -247.0061 | -400.6085  | 0.5716 | 0.9036 | 0.8056 | 0.9297 | 0.05 | 1.7599 |   16.6345 | -56.7332 |          0.793
-21000 | -304.0222 | -526.6313  | -157.9989 | -210.3629  | 0.5763 | 0.8969 | 0.8056 | 0.9212 | 0.05 | 1.6835 |   17.1282 | -60.3145 |         0.7947
-22000 | -204.7916 | -284.4521  | -146.8495 | -180.4918  | 0.5776 | 0.8839 | 0.8056 | 0.9054 | 0.05 | 1.5727 |   17.8044 | -62.374  |         0.8019
-23000 |  -123.808 | -154.8114  | -191.4656 | -332.0349  | 0.5802 | 0.8709 | 0.8087 | 0.8892 | 0.05 | 1.5253 |   18.6862 | -64.3273 |         0.8022
+...
 24000 | -124.7618 | -154.2227  | -154.5895 | -226.8031  | 0.5825 | 0.8574 | 0.8087 | 0.8733 | 0.05 | 1.4364 |   21.3799 | -65.9974 |         0.8001
 25000 | -158.4445 | -188.5299  | -179.2285 | -305.5109  | 0.5841 | 0.8447 | 0.8087 | 0.8586 | 0.05 | 1.3888 |   23.9894 | -67.4086 |         0.7976
 
@@ -112,29 +101,25 @@ steps | train (γ) |     train  |  test (γ) |      test  |   sa_% |   sa_h |   
   the last checkpoint: the critic loss, the norm of the gradient, the average
   Q-value (useful to detect overestimation), and the percentage of cuts within
   eligibility traces.
+- You can change the way progress is reported with `results.progress_report`:
+ `history_table` (as above), `live_table` (prints one row per statistic, but with
+ only the latest value), `dict` (plain dictionary, the default of SLURM logs),
+ or `null` (no report at all).
 
-> `results.progress_report` selects the format. The default is `history_table`
-(the table and progress bars above), but rows are split if there are many statistics
-(or they have long names). If so, we suggest to use `live_table`, that prints
-one row per statistic without history (only the latest value per statistic).
-For SLURM logs, use `dict` for one plain dictionary line per checkpoint.
-Use `null` for no report at all.
-
-> Mind that `test` is the return of the **greedy** policy, evaluated separately at every
+> `test` is the return of the **greedy** policy, evaluated separately at every
 checkpoint, while `train` is the return of the **exploration** policy. Libraries that
 report a single return during training usually report the latter, so their curves are
 not directly comparable to the `test` ones.
 
 The second command will merge the heatmaps and videos into one stream each.
+Rendered frames are resized to 25% to save memory, since no setting controls the
+render size in every environment.
 
 <p align="center">
   <img src="assets/demo_heatmaps.gif" width="300" alt="Heatmaps Demo"> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
   <img src="assets/demo_videos.gif" width="300" alt="Video Demo">
 </p>
 
-> Unfortunately, there isn't a way to set the size of rendered environments that
-works in every environment. The code automatically resizes RGB renderings to 25% to
-save memory.
 
 ## Data Structure
 You can decide what to save via the `results` key (`results.data_dir`, `results.save_videos`, ...).
@@ -166,17 +151,11 @@ You can decide what to save via the `results` key (`results.data_dir`, `results.
 `results.force_run=False` to stop the run instead.
 
 ## Code Structure
-> The code is a compromise between readability, long-term maintainability, and
-consistency. For example, configurations are defined with Hydra, which makes it
-easy to customize algorithms and define sweeps. However, every class reads its
-configuration through `**kwargs` and ignores the keys it does not use: an extra
-key is still accepted, does nothing, and changes the configuration ID. For
-example, `python main.py` and `python main.py ++agent.critic.whatever=99` run
-the same experiment, yet they get two different IDs and write to two different
-data folders. The alternative, declaring every argument in every class, would
-clutter the code and make maintenance harder every time a key is added. We trust
-the user to define the configuration of their algorithm properly and not to add
-random keys.
+
+*IMPORTANT:* Every class reads its configuration through `**kwargs` and ignores
+the keys it does not use. An unused key still changes the configuration ID:
+`python main.py` and `python main.py ++agent.critic.whatever=99` run the same
+experiment but write to two different data folders.
 
 ### 1. Configuration
 Hyperparameters and other settings are defined in YAML files in the [`configs/`](configs/) folder.
@@ -228,15 +207,16 @@ familiarizing yourself with the sweep and plot examples (see
 > python main.py algorithm=eps_greedy environment=gymnasium/mountain_car ++tuned=eps_init
 > ```
 
-
 ### 2. Training and Testing + Reproducibility
 The training routine is handled in [`src/experiment.py`](src/experiment.py).
 It is a simple loop where the agent first fills the replay memory, then performs
 `N` updates every `M` steps (that is, you can control the update-to-data ratio by
 changing `N` and `M`).
 
-> The agent acts randomly while the replay memory is not ready, unless you customize
-the actor differently.
+By default, the agent acts randomly while the replay memory is not ready: every
+actor starts with the exploration coefficient `ε = 1` and keeps it for the first
+`experiment.warm_up` steps (during which the critic is not updated).
+You can change this behavior by customizing the actor (see below).
 
 ```
 while total steps < experiment.training_steps
@@ -307,14 +287,13 @@ script below for SLURM jobs.
 python submit_jobs_slurm.py --sweep=example --data_dir=data_example --cluster=roihu --seeds=0-9 --seeds_per_chunk=5 --skip_duplicates
 ```
 
-> `--cluster` selects a settings file in `configs/slurm` (directories, modules, account, ...).
+`--cluster` selects a settings file in `configs/slurm` (directories, modules, account, ...).
 
 Each configuration's seeds are split into chunks, and each chunk runs on a
 separate process within the same job via SLURM tasks. This script assigns unique
 names to jobs and checks for existing queued/running configurations. With
 `--skip_duplicates`, seeds that are already queued, running, or completed are not
 submitted again.  
-To list the runs missing from a sweep or a plot config, check `prepare_missing_runs.py`.  
 Run `bash inspect_jobs.sh` to print details about one or more running jobs, or
 `bash inspect_jobs.sh --progress_only` to check the progress of each job, e.g.
 ```shell
@@ -325,10 +304,12 @@ Job        Steps                   Time
 Run `bash detect_jobs_err.sh` to write a report summarizing jobs that ended
 prematurely due to errors.
 
-> Both SLURM and Joblib scripts allow you to override parameters with `--with`.
-For example, by default jobs are submitted with `wandb.mode=disabled` and
-`results.force_run=False`, but you can override them via
-`--with wandb.mode=online results.force_run=True`.
+To list the runs a sweep or a plot config still misses in a data directory, run
+```
+python prepare_missing_runs.py --sweep example --folder data_example --n_seeds 10
+```
+It prints the missing seeds of every configuration and writes
+`data_example/submit_missing_runs.py`, which relaunches them on SLURM.
 
 ## Data Processing and Visualization
 After a sweep is complete (e.g., the example sweep above), run
@@ -352,8 +333,7 @@ python interactive_heatmaps.py -f data_example --sweep=example -v --progression_
   <img src="assets/example_interactive_heatmaps.gif" width="670" alt="Example Interactive Heatmaps">
 </p>
 
-> Mind that these files can be large, depending on how large your sweep is and how
-many statistics you display.
+> These files grow with the size of the sweep and the number of statistics displayed.
 
 **<ins>Customized Plots.</ins>** Aggregate results with custom labels, axes limits,
 colors, filtered configurations, ... Customizations are defined in [`configs/plots/`](configs/plots).
@@ -387,7 +367,7 @@ that, run in offline mode and sync later with
 wandb sync --sync-all
 ```
 
-> The latest version of W&B introduced parallel sync via `wandb beta sync -n`.
+> W&B also supports parallel sync with `wandb beta sync -n`.
 
 Another alternative, which also works with `wandb.mode=disabled`, is to upload
 the runs saved in a data directory after training.

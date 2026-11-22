@@ -367,13 +367,17 @@ progress_from_out() {
             third = int(n/3); if (third < 1) third = 1
             early = med(spd, 1, third)
             late  = med(spd, n-third+1, n)
-            ratio = (late > 0) ? early/late : 0
+            # A zero median on either side leaves the ratio undefined: step/sec
+            # is 0 for an interval with d_steps == 0.
+            ratio = (early > 0 && late > 0) ? early/late : 0
 
             printf "speed: first %.1f -> last %.1f step/s", spd[1], spd[n]
             if (n >= 3) printf "  (median of first third %.1f -> last third %.1f)", early, late
             printf "\n"
 
-            if (n >= 3 && ratio >= 1.25)
+            if (n >= 3 && ratio == 0)
+                printf "no speed trend: the median step/s of the %s is 0.\n", (early > 0 ? "last third" : (late > 0 ? "first third" : "first and last thirds"))
+            else if (n >= 3 && ratio >= 1.25)
                 printf "SLOWDOWN: ended %.1fx slower than it started. A longer wallclock does not fix a rate that is still falling -- find what grows with steps (replay memory, visit counts, a graph never freed, a cgroup at its limit refaulting pages) before resubmitting.\n", ratio
             else if (n >= 3 && ratio <= 0.80)
                 printf "SPEEDUP: ended %.1fx faster than it started -- the early checkpoints paid a warm-up cost the rest did not.\n", 1/ratio

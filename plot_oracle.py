@@ -45,7 +45,6 @@ from ast import literal_eval
 
 import matplotlib
 matplotlib.use("Agg")
-import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
@@ -57,16 +56,15 @@ from src.utils.plot import (
     STEPS_STAT,
     add_config_group_args,
     assign_groups,
+    draw_curve_subplot,
     ensure_font,
     entry_rows,
     env_groups,
-    error_shade_plot,
     hyperparameter_strings,
     load_plot_configs,
     plot_labels,
     save_and_close,
     series_of,
-    set_3_ticks,
     style_entries,
     tex_kwargs,
     write_legend,
@@ -173,28 +171,13 @@ def draw_group(name, envs, stats, entries, curves, stat_labels, env_labels, stat
             if not drawn:
                 ax.set_axis_off()
                 continue
-            x_lo, x_hi = np.inf, 0.0
-            for i in drawn:
-                series, x, steps, _ = curves[(stat, env, i)]
-                error_shade_plot(
-                    ax,
-                    series.to_numpy().T,
-                    x=x,
-                    smoothing_window=args.smoothing_window,
-                    color=entries[i]["color"],
-                    linestyle=entries[i]["linestyle"],
-                    linewidth=2.0,
-                )
-                x_lo = min(x_lo, float(x[0]))
-                x_hi = max(x_hi, steps)
-
-            ax.tick_params(axis="x", labelsize=FONT_SIZE - 2, pad=-2)
-            ax.tick_params(axis="y", labelsize=FONT_SIZE - 2, pad=1)
-            ax.ticklabel_format(style="sci", axis="x", scilimits=(3, 3))
-            ax.xaxis.offsetText.set_visible(False)
-            if x_hi > x_lo:
-                ax.set_xlim(x_lo, x_hi)
-                ax.set_xticks([x_lo, (x_lo + x_hi) / 2, x_hi])
+            draw_curve_subplot(
+                ax,
+                [(entries[i], curves[(stat, env, i)]) for i in drawn],
+                args.smoothing_window,
+                FONT_SIZE,
+                stat_ylims.get((str(env), stat)),
+            )
             if r < len(stats) - 1:
                 ax.tick_params(axis="x", labelbottom=False)
             ax.set_ylabel(
@@ -202,10 +185,6 @@ def draw_group(name, envs, stats, entries, curves, stat_labels, env_labels, stat
                 fontsize=FONT_SIZE,
                 **tex_kwargs(ylabel),
             )
-            bounds = stat_ylims.get((str(env), stat))
-            if bounds:
-                ax.set_ylim(*bounds)
-            set_3_ticks(ax, which="y")
 
     return save_and_close(fig, output_dir, name, vprint)
 

@@ -660,15 +660,15 @@ def plot_labels(plot_cfg: dict):
     a name to its label and the last two mapping (environment, statistic) to a
     pair of bounds. `score_bounds` are the bounds scores are normalized by, and
     an (environment, statistic) without one takes its `ylim`. A config declaring
-    none of them gives four empty dicts: labelling is optional, and a name with
+    none of them gives four empty dicts: labeling is optional, and a name with
     no entry is shown as it is written in the data.
 
-    A figure is labelled by the config that draws it. The same statistic can be
+    A figure is labeled by the config that draws it. The same statistic can be
     "Test Return" in one figure and "return" in another, and a name that has to be
     the same everywhere is the one already in the data -- which is what the
     interactive pages show, having no plot config to read.
 
-    Algorithms are not labelled here. What names a configuration is the plot
+    Algorithms are not labeled here. What names a configuration is the plot
     config's `plot.label`, the sweep entry it came from, or the hyperparameters
     that tell it apart from its neighbours -- none of which a name-to-label map
     can reach."""
@@ -1464,6 +1464,43 @@ def error_shade_plot(ax, data, x, smoothing_window=0, **kwargs):
     return (line,)
 
 
+def draw_curve_subplot(ax, items, smoothing_window, font_size, ylim=None):
+    """Draw on `ax` the mean over seeds and the confidence band of every curve
+    of `items` with error_shade_plot, smoothed over `smoothing_window`. `items`
+    is a list of (entry, curve) pairs, `entry` a plot entry giving the color
+    and the linestyle and `curve` the series_of output of the runs it selects.
+
+    The x axis spans the steps the statistic is recorded over, from the first
+    recorded point of any curve to the training length, with three ticks and
+    tick labels in thousands. The y axis takes `ylim` when it is given, and
+    three ticks. Tick labels are drawn at `font_size` - 2."""
+
+    x_lo, x_hi = np.inf, 0.0
+    for entry, (series, x, steps, _) in items:
+        error_shade_plot(
+            ax,
+            series.to_numpy().T,
+            x=x,
+            smoothing_window=smoothing_window,
+            color=entry["color"],
+            linestyle=entry["linestyle"],
+            linewidth=2.0,
+        )
+        x_lo = min(x_lo, float(x[0]))
+        x_hi = max(x_hi, steps)
+
+    ax.tick_params(axis="x", labelsize=font_size - 2, pad=-2)
+    ax.tick_params(axis="y", labelsize=font_size - 2, pad=1)
+    ax.ticklabel_format(style="sci", axis="x", scilimits=(3, 3))
+    ax.xaxis.offsetText.set_visible(False)
+    if x_hi > x_lo:
+        ax.set_xlim(x_lo, x_hi)
+        ax.set_xticks([x_lo, (x_lo + x_hi) / 2, x_hi])
+    if ylim:
+        ax.set_ylim(*ylim)
+    set_3_ticks(ax, which="y")
+
+
 # -----------------------------------------------------------------------------
 # ----- Grid ------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -2104,7 +2141,7 @@ def keep_declared_environments(df, declared_envs, verb: str):
     The parquet file holds whatever ran in the folder, and a sweep that names
     two environments is a figure about those two. Matched on the stem, as the
     sweep names an environment by its config file while an overridden run is
-    labelled `<stem> (key=value)`.
+    labeled `<stem> (key=value)`.
 
     `verb` is what the caller does with a run -- "plotted", "drawn" -- for the
     messages."""

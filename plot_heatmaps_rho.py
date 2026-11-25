@@ -5,7 +5,7 @@ Written for one figure: the rho ablation of configs/plots/gcrl/ablation_rho.yaml
 It reads the `configs:` schema plot_results.py takes, one row per entry, and the
 entry whose hyperparameter is null is the reference: its own visit counts are
 that row, and each other entry is a `pseudocount(radius=<its value>)` over the
-SAME memory, labelled by its `plot.label`. So the figure compares the values of
+SAME memory, labeled by its `plot.label`. So the figure compares the values of
 that hyperparameter on one set of samples rather than on whatever data each run
 happened to collect. Nothing about it is specific to `rho` beyond the name: the
 hyperparameter is whichever key the entries name besides `algorithm`, and the
@@ -163,7 +163,7 @@ def add_colorbars(fig, axs, cell_keys, cell_ranges):
     `cell_ranges` holds the bounds as the maps hold them; plot_cell compresses
     them on its way to the colours, so a bar is normalised on the compressed
     bounds -- its gradient is then the one on the panels -- and its ticks are
-    labelled with the values they came from."""
+    labeled with the values they came from."""
 
     if not args.colorbar:
         return

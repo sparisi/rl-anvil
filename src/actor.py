@@ -53,7 +53,7 @@ class Actor(ABC):
             critic (Critic): the critic,
             pi (DictConfig): configuration to initialize the actor's own approximator
                 (e.g., a neural network). The actor acts on its outputs, and
-                `update` trains it with the critic's output (e.g., as in PPO).
+                `update` trains it with the critic's output.
                 If None, the actor acts on the estimates of the critic directly
                 (as in DQN), and `update` does nothing,
             seed (int): seed to initialize the network for reproducibility,
@@ -109,6 +109,10 @@ class Actor(ABC):
 
     @abstractmethod
     def explore(self, obs, rng_generator, **kwargs):
+        """
+        Draw one action in one state.
+        """
+
         pass
 
     @abstractmethod

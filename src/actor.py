@@ -434,31 +434,20 @@ class GoalConditioned(EpsilonGreedy):
         self._steps_to_goal_current = 0
         self._steps_to_goal_sum = 0
         # Diagnostics on the true visit Q-function (see `true_visit`).
-        # `_oracle_prev` holds (obs, start_idx, act, was_random, goal) of the
-        #     last step, start_idx being the index of the starting position of
-        #     the next reset (see `TrueVisitQ.start_idx`) at obs.
-        # `_oracle_sel_obs` is the obs where the goal held was selected, with
-        #     `_oracle_sel_start_idx` its start_idx, and the `_since_sel_*`
-        #     flags record how the steps since then changed its true value
-        #     (see `_oracle_track_step`).
-        # `_sel_start_idx` is the start_idx at `_sel_obs`.
+        # `_sel_start_idx` is the index of the starting position of the next
+        #     reset (see `TrueVisitQ.start_idx`) at `_sel_obs`.
         # `_oracle_kept_old` tells whether the true scores of the last goal
         #     selection keep the goal held before it, or None if that goal was
-        #     not a candidate.
+        #     not a candidate. When it is not None, every reselection records it
+        #     as `resel_oracle_keep_%`.
         # `_oracle_unreach` is (goal obs, goal act, steps) while the goal held is
         #     unreachable from the current obs, with the steps since it became
         #     so, and None otherwise (see `_oracle_track_unreachable`).
         # `_oracle_stats` averages every diagnostic since the last call to
         #     `info`, which resets it.
-        self._oracle_prev = None
-        self._oracle_sel_obs = None
-        self._oracle_sel_start_idx = 0
         self._sel_start_idx = 0
         self._oracle_kept_old = None
         self._oracle_unreach = None
-        self._since_sel_random = False
-        self._since_sel_suboptimal = False
-        self._since_sel_bad_landing = False
         self._oracle_stats = StatsTracker()
         if self.goal_selected_count is not None:
             self.goal_selected_count.reset()
@@ -580,78 +569,6 @@ class GoalConditioned(EpsilonGreedy):
         self._oracle_kept_old = None
         if self.goal is not None and self._per_step_selection:
             self._oracle_kept_old = bool(score_true[-1, self.goal["act"]] >= best - ORACLE_TOL)
-
-    def _oracle_track_step(self, obs):
-        """
-        Flag how the last step, taken toward the goal still held, changed the
-        true value of that goal, given that `obs` is where it landed:
-        - `_since_sel_random`: the action was random,
-        - `_since_sel_suboptimal`: the action was not optimal under the true
-          visit Q-function,
-        - `_since_sel_bad_landing`: the action was optimal, but the transition
-          landed in a state whose true value is below what the action expects.
-        """
-
-        if self._oracle_prev is None:
-            return
-        prev_obs, prev_start_idx, prev_act, prev_random, prev_goal = self._oracle_prev
-        self._oracle_prev = None
-        # Compared by content: per-step selection builds a new goal dict at every
-        # selection, also when it keeps the same goal.
-        if (
-            prev_goal is None
-            or self.goal is None
-            or not np.array_equal(prev_goal["obs"], self.goal["obs"])
-            or prev_goal["act"] != self.goal["act"]
-        ):
-            return
-
-        if prev_random:
-            self._since_sel_random = True
-            return
-        q_prev = self.true_visit(prev_obs, prev_goal["obs"], prev_start_idx)[:, prev_goal["act"]]
-        if q_prev[prev_act] < q_prev.max() - ORACLE_TOL:
-            self._since_sel_suboptimal = True
-            return
-        v_curr = self.true_visit(obs, prev_goal["obs"])[:, prev_goal["act"]].max()
-        expected = q_prev[prev_act]
-        if self.true_visit.reward_miss + self.true_visit.gamma * v_curr < expected - ORACLE_TOL:
-            self._since_sel_bad_landing = True
-
-    def _oracle_new_goal(self, obs):
-        """Store `obs` and the current start_idx of the true visit Q-function as
-        the obs where the new goal was selected and clear the flags of
-        `_oracle_track_step`."""
-
-        self._oracle_sel_obs = obs.copy()
-        self._oracle_sel_start_idx = self.true_visit.start_idx()
-        self._since_sel_random = False
-        self._since_sel_suboptimal = False
-        self._since_sel_bad_landing = False
-
-    def _oracle_classify_reselection(self, old_goal, obs):
-        """
-        Record why `old_goal` was replaced at `obs`. If its true value at `obs`
-        is below its true value where it was selected, every flag of
-        `_oracle_track_step` raised since then counts as a cause; otherwise,
-        the reselection counts as an error of the learned visit Q-function.
-        With per-step selection, also record whether the true scores would
-        have kept `old_goal`.
-        """
-
-        g, a_g = old_goal["obs"], old_goal["act"]
-        v_curr = self.true_visit(obs, g)[:, a_g].max()
-        v_sel = self.true_visit(self._oracle_sel_obs, g, self._oracle_sel_start_idx)[:, a_g].max()
-        dropped = v_curr < v_sel - ORACLE_TOL
-        stats = {
-            "resel_random_%": dropped and self._since_sel_random,
-            "resel_suboptimal_%": dropped and self._since_sel_suboptimal,
-            "resel_stochastic_%": dropped and self._since_sel_bad_landing,
-            "resel_value_error_%": not dropped,
-        }
-        if self._oracle_kept_old is not None:
-            stats["resel_oracle_keep_%"] = self._oracle_kept_old
-        self._oracle_stats.update(**stats)
 
     def _oracle_check(self, obs, fired, curr_value, sel_value):
         """
@@ -802,7 +719,6 @@ class GoalConditioned(EpsilonGreedy):
 
     def explore(self, obs, rng_generator, replay_memory, **kwargs):
         if self.true_visit is not None:
-            self._oracle_track_step(obs)
             self._oracle_track_unreachable(obs)
 
         if (
@@ -865,10 +781,9 @@ class GoalConditioned(EpsilonGreedy):
                     # Steps to goal are counted from the selection of the goal now held.
                     self._steps_to_goal_current = 0
                     if self.true_visit is not None:
-                        self._oracle_classify_reselection(old_goal, obs)
+                        if self._oracle_kept_old is not None:
+                            self._oracle_stats.update(**{"resel_oracle_keep_%": self._oracle_kept_old})
                         self._oracle_replaced_unreachable()
-                if self.true_visit is not None and (old_goal is None or goal_changed):
-                    self._oracle_new_goal(obs)
 
                 if self.goal_selected_count is not None:
                     self.goal_selected_count.update(self.goal["obs"], self.goal["act"])
@@ -882,14 +797,6 @@ class GoalConditioned(EpsilonGreedy):
             self._steps_to_goal_current += 1
         # Snapshot the goal before _goal_reached_check may reset self.goal
         self._goal_used_last_step = self.goal
-        if self.true_visit is not None:
-            self._oracle_prev = (
-                obs.copy(),
-                self.true_visit.start_idx(),
-                int(act),
-                self._act_source_last_step == ACT_RANDOM,
-                self.goal,
-            )
         self._goal_reached_check(obs, act, replay_memory)
         return act
 

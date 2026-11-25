@@ -97,6 +97,10 @@ class Actor(ABC):
 
     @abstractmethod
     def explore(self, obs, rng_generator, **kwargs):
+        """
+        Draw one action in one state.
+        """
+
         pass
 
     @abstractmethod

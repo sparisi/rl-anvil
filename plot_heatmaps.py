@@ -189,7 +189,7 @@ vprint = make_vprint(args.verbose)
 # --- Naming ---
 
 def display_name(name, labels):
-    """A config label under its display name. An inexactly matched run is labelled
+    """A config label under its display name. An inexactly matched run is labeled
     `<stem> (key=value)`, and the labels file names the stem, so only that part is
     substituted and the overrides are kept."""
 
@@ -205,7 +205,7 @@ def add_colorbars(fig, axs, cell_keys, cell_ranges):
     `cell_ranges` holds the bounds as the maps hold them; plot_cell compresses
     them on its way to the colours, so a bar is normalised on the compressed
     bounds -- its gradient is then the one on the panels -- and its ticks are
-    labelled with the values they came from."""
+    labeled with the values they came from."""
 
     if not args.colorbar:
         return

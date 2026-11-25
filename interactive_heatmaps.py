@@ -718,7 +718,7 @@ global_sweep, sweep = load_sweep(args.sweep)
 swept = swept_keys(global_sweep, sweep)
 
 # Without the config YAMLs there is nothing to match against, and every run would
-# be labelled the same -- one figure holding maps of different shapes on
+# be labeled the same -- one figure holding maps of different shapes on
 # incomparable scales. The id the run recorded keeps them apart instead.
 env_configs = load_config_group(args.environments) if args.environments else {}
 if env_configs:

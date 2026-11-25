@@ -14,7 +14,7 @@ value that merely reads like one ("none") stays a value.
 EQUALITY. Two config values are the same when `value_str` renders them the same.
 That is the only equality in this module: the same rule decides whether a run
 matches a config YAML, whether a row belongs in a cell, and what a curve is
-labelled. A second pairwise comparison would eventually disagree with it.
+labeled. A second pairwise comparison would eventually disagree with it.
 
 Config groups are read by composing each of their YAMLs with Hydra (see
 `load_config_group`), so a `defaults:` chain means what it means to Hydra.
@@ -353,7 +353,7 @@ def assign_configs(
             for stem in over_stem.unique()
         }
 
-    # Labelling a row only depends on the columns some config declares, on its
+    # Labeling a row only depends on the columns some config declares, on its
     # nullness for them and on which keys it skips, so rows agreeing on those get
     # the same label: build a signature from them, label one row per distinct
     # signature, map the rest. value_str first -- list-valued hyperparameters

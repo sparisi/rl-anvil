@@ -96,10 +96,10 @@ from src.utils.plot import (
     ci_bounds,
     detect_precision,
     draw_bars,
+    draw_curve_subplot,
     ensure_font,
     entry_rows,
     env_groups,
-    error_shade_plot,
     fitted_rows_cols,
     hyperparameter_strings,
     load_plot_configs,
@@ -963,42 +963,22 @@ def draw_config(config_name, cfg):
                     ax = axs[k // n_cols][k % n_cols]
                     title = drawing.env_labels.get(str(env), str(env))
                     ax.set_title(title, fontsize=FONT_SIZE, **tex_kwargs(title))
-
-                    # The axis spans the steps the statistic is recorded over: from
-                    # the first recorded point of any curve to the training length.
-                    x_lo, x_hi = np.inf, 0.0
-                    for i, entry in enumerate(drawing.entries):
-                        if (env, i) not in decoded_of:
-                            continue
-                        series, x, steps, _ = decoded_of[(env, i)]
-                        error_shade_plot(
-                            ax,
-                            series.to_numpy().T,
-                            x=x,
-                            smoothing_window=args.smoothing_window,
-                            color=entry["color"],
-                            linestyle=entry["linestyle"],
-                            linewidth=2.0,
-                        )
-                        x_lo = min(x_lo, float(x[0]))
-                        x_hi = max(x_hi, steps)
-
-                    ax.tick_params(axis="x", labelsize=FONT_SIZE - 2, pad=-2)
-                    ax.tick_params(axis="y", labelsize=FONT_SIZE - 2, pad=1)
-                    ax.ticklabel_format(style="sci", axis="x", scilimits=(3, 3))
-                    ax.xaxis.offsetText.set_visible(False)
+                    draw_curve_subplot(
+                        ax,
+                        [
+                            (entry, decoded_of[(env, i)])
+                            for i, entry in enumerate(drawing.entries)
+                            if (env, i) in decoded_of
+                        ],
+                        args.smoothing_window,
+                        FONT_SIZE,
+                        drawing.stat_ylims.get((str(env), stat)),
+                    )
                     ax.set_ylabel(
                         ylabel if k % n_cols == 0 else "",
                         fontsize=FONT_SIZE,
                         **tex_kwargs(ylabel),
                     )
-                    if x_hi > x_lo:
-                        ax.set_xlim(x_lo, x_hi)
-                        ax.set_xticks([x_lo, (x_lo + x_hi) / 2, x_hi])
-                    bounds = drawing.stat_ylims.get((str(env), stat))
-                    if bounds:
-                        ax.set_ylim(*bounds)
-                    set_3_ticks(ax, which="y")
 
                 if args.with_auc:
                     k = len(present)
@@ -1216,37 +1196,17 @@ def draw_config(config_name, cfg):
                         ax = axs[k // n_cols][k % n_cols]
                         title = drawing.stat_labels.get(stat, stat)
                         ax.set_title(title, fontsize=FONT_SIZE, **tex_kwargs(title))
-
-                        # From the first recorded point of any curve to the
-                        # training length, as in the curves figure.
-                        x_lo, x_hi = np.inf, 0.0
-                        for i, entry in enumerate(drawing.entries):
-                            if (env, stat, i) not in curves_of:
-                                continue
-                            series, x, steps, _ = curves_of[(env, stat, i)]
-                            error_shade_plot(
-                                ax,
-                                series.to_numpy().T,
-                                x=x,
-                                smoothing_window=args.smoothing_window,
-                                color=entry["color"],
-                                linestyle=entry["linestyle"],
-                                linewidth=2.0,
-                            )
-                            x_lo = min(x_lo, float(x[0]))
-                            x_hi = max(x_hi, steps)
-
-                        ax.tick_params(axis="x", labelsize=FONT_SIZE - 2, pad=-2)
-                        ax.tick_params(axis="y", labelsize=FONT_SIZE - 2, pad=1)
-                        ax.ticklabel_format(style="sci", axis="x", scilimits=(3, 3))
-                        ax.xaxis.offsetText.set_visible(False)
-                        if x_hi > x_lo:
-                            ax.set_xlim(x_lo, x_hi)
-                            ax.set_xticks([x_lo, (x_lo + x_hi) / 2, x_hi])
-                        bounds = drawing.stat_ylims.get((str(env), stat))
-                        if bounds:
-                            ax.set_ylim(*bounds)
-                        set_3_ticks(ax, which="y")
+                        draw_curve_subplot(
+                            ax,
+                            [
+                                (entry, curves_of[(env, stat, i)])
+                                for i, entry in enumerate(drawing.entries)
+                                if (env, stat, i) in curves_of
+                            ],
+                            args.smoothing_window,
+                            FONT_SIZE,
+                            drawing.stat_ylims.get((str(env), stat)),
+                        )
 
                     for k in range(len(env_stats), n_rows * n_cols):
                         axs[k // n_cols][k % n_cols].axis("off")

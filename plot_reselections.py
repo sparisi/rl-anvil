@@ -352,8 +352,10 @@ def read_memory_causes(run_dir, mem_file):
     selection, with the steps it was held before, as unreachable_selections
     returns them. Return None when the
     dump or the run's cfg.yaml cannot be read, the dump lacks a key of
-    MEMORY_KEYS, the environment has no tabular counter, or true_visit_of gives
-    no true visit Q-function."""
+    MEMORY_KEYS, the environment has no tabular counter, true_visit_of gives
+    no true visit Q-function, or the true visit Q-function depends on the index
+    of the next starting position (see src.oracle.TrueVisitQ) and the dump does
+    not store it as start_idx."""
 
     if not os.path.isfile(mem_file):
         return None
@@ -370,22 +372,30 @@ def read_memory_causes(run_dir, mem_file):
         return None
     try:
         with np.load(mem_file) as data:
-            mem = {k: data[k] for k in data.files if k in MEMORY_KEYS}
+            mem = {k: data[k] for k in data.files if k in MEMORY_KEYS or k == "start_idx"}
     except Exception as e:
         vprint(f"  WARNING: skipping unreadable {mem_file}: {e}")
         return None
     if any(k not in mem for k in MEMORY_KEYS):
         vprint(f"  WARNING: {mem_file} lacks {[k for k in MEMORY_KEYS if k not in mem]}, skipping.")
         return None
+    if true_visit.n_start > 1 and "start_idx" not in mem:
+        vprint(f"  WARNING: {mem_file} lacks start_idx, which the true visit Q-function needs, skipping.")
+        return None
     size = len(mem["obs"])
     flat = {k: np.asarray(mem[k]).reshape(size) for k in MEMORY_KEYS if k not in ("obs", "goal_obs")}
     state = np.asarray(counter.bin_index(mem["obs"])).reshape(size)
     goal = np.asarray(counter.bin_index(mem["goal_obs"])).reshape(size)
+    if true_visit.n_start > 1:
+        start_idx = np.asarray(mem["start_idx"]).reshape(size).astype(np.int64)
+    else:
+        start_idx = np.zeros(size, dtype=np.int64)
     goal_act = flat["goal_act"].astype(np.int64)
     selected = flat["goal_selection"].astype(bool)
     causes = reselection_causes(
         true_visit,
         state,
+        start_idx,
         goal,
         flat["act"].astype(np.int64),
         goal_act,
@@ -395,10 +405,11 @@ def read_memory_causes(run_dir, mem_file):
         flat["term"].astype(bool) | flat["trunc"].astype(bool),
         ORACLE_TOL,
     )
-    progress = critic_error_progress(true_visit, state, goal, goal_act, selected, causes)
+    progress = critic_error_progress(true_visit, state, start_idx, goal, goal_act, selected, causes)
     fates, held = unreachable_selections(
         true_visit,
         state,
+        start_idx,
         goal,
         flat["act"].astype(np.int64),
         goal_act,

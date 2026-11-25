@@ -5,17 +5,17 @@ approximation error, and whether each goal unreachable from the state of its
 last selection was replaced by a reselection.
 
 The arrays over the steps of a dump are `state` and `goal`, the counter bins of
-its `obs` and `goal_obs`, and `act`, `goal_act`, `has_goal` and `act_source` as
+its `obs` and `goal_obs`, `start_idx`, the index of the starting position of the
+next reset at every step (see src.oracle.TrueVisitQ), as stored or zeros when the
+dump does not store it, and `act`, `goal_act`, `has_goal` and `act_source` as
 stored, with `selected` marking the steps stored with `goal_selection` and
-`done` the steps that ended an episode (`term` or `trunc`)."""
+`done` the steps that ended an episode (`term` or `trunc`). The true visit
+Q-function and its reachability are read at the state and the start_idx of a
+step."""
 
 import numpy as np
 
-from src.actor import ACT_RANDOM
-
-# Tolerance of the comparisons between values of the true visit Q-function
-# (src.oracle.TrueVisitQ), passed to reselection_causes as `tol`.
-ORACLE_TOL = 1e-9
+from src.actor import ACT_RANDOM, ORACLE_TOL
 
 # Causes of a goal reselection, in the order reselection_causes tests them.
 RESELECTION_CAUSES = (
@@ -31,6 +31,7 @@ RESELECTION_CAUSES = (
 def reselection_causes(
     true_visit,
     state,
+    start_idx,
     goal,
     act,
     goal_act,
@@ -83,22 +84,26 @@ def reselection_causes(
         if replaced:
             g, a_g = int(goal[p]), int(goal_act[p])
             s_sel, s_now = int(state[last_sel]), int(state[t])
-            if not reach[s_sel, g]:
+            i_sel, i_now = int(start_idx[last_sel]), int(start_idx[t])
+            if not reach[s_sel, i_sel, g]:
                 causes[t] = 0
-            elif not reach[s_now, g]:
+            elif not reach[s_now, i_now, g]:
                 causes[t] = 1
             else:
-                v = q[:, g, :, a_g].max(axis=1)
-                if v[s_now] >= v[s_sel] - tol:
+                v = q[:, :, g, :, a_g].max(axis=-1)
+                if v[s_now, i_now] >= v[s_sel, i_sel] - tol:
                     causes[t] = 5
                 else:
                     ks = np.arange(last_sel, t)
-                    loss = v[state[ks]] - (true_visit.reward_miss + true_visit.gamma * v[state[ks + 1]])
+                    loss = v[state[ks], start_idx[ks]] - (
+                        true_visit.reward_miss
+                        + true_visit.gamma * v[state[ks + 1], start_idx[ks + 1]]
+                    )
                     faults = np.flatnonzero(loss > tol)
                     k = int(ks[faults[0]] if faults.size else ks[np.argmax(loss)])
                     if act_source[k] == ACT_RANDOM:
                         causes[t] = 2
-                    elif q[state[k], g, act[k], a_g] < v[state[k]] - tol:
+                    elif q[state[k], start_idx[k], g, act[k], a_g] < v[state[k], start_idx[k]] - tol:
                         causes[t] = 3
                     else:
                         causes[t] = 4
@@ -106,7 +111,7 @@ def reselection_causes(
     return causes
 
 
-def unreachable_selections(true_visit, state, goal, act, goal_act, has_goal, selected, done):
+def unreachable_selections(true_visit, state, start_idx, goal, act, goal_act, has_goal, selected, done):
     """Return `(fates, held)`, an int array and a float array over the steps of a
     replay-memory dump, for every goal held that is not reachable from the state
     of its last selection, under the reachability of the true visit Q-function
@@ -130,7 +135,7 @@ def unreachable_selections(true_visit, state, goal, act, goal_act, has_goal, sel
     for t in range(size):
         new_episode = t == 0 or done[t - 1]
         if new_episode and first >= 0:
-            if not reach[int(state[last]), int(goal[last])]:
+            if not reach[int(state[last]), int(start_idx[last]), int(goal[last])]:
                 fates[first] = 0
             first = last = -1
         if not selected[t]:
@@ -142,18 +147,18 @@ def unreachable_selections(true_visit, state, goal, act, goal_act, has_goal, sel
         if same and not reached:
             last = t
             continue
-        if first >= 0 and not reach[int(state[last]), int(goal[last])]:
+        if first >= 0 and not reach[int(state[last]), int(start_idx[last]), int(goal[last])]:
             replaced = held_before and not reached
             fates[first] = int(replaced)
             if replaced:
                 held[first] = t - first
         first = last = t
-    if first >= 0 and not reach[int(state[last]), int(goal[last])]:
+    if first >= 0 and not reach[int(state[last]), int(start_idx[last]), int(goal[last])]:
         fates[first] = 0
     return fates, held
 
 
-def critic_error_progress(true_visit, state, goal, goal_act, selected, causes):
+def critic_error_progress(true_visit, state, start_idx, goal, goal_act, selected, causes):
     """Return a float array over the steps of a replay-memory dump holding, at
     every reselection `causes` (as reselection_causes returns them) attributes to
     critic_error, the steps of true progress toward the goal replaced since its
@@ -175,9 +180,9 @@ def critic_error_progress(true_visit, state, goal, goal_act, selected, causes):
     progress = np.full(len(state), np.nan)
     sel = np.flatnonzero(selected)
     for t in np.flatnonzero(causes == RESELECTION_CAUSES.index("critic_error")):
-        s_sel = int(state[sel[np.searchsorted(sel, t) - 1]])
+        t_sel = sel[np.searchsorted(sel, t) - 1]
         g, a_g = int(goal[t - 1]), int(goal_act[t - 1])
-        v = q[[s_sel, int(state[t])], g, :, a_g].max(axis=1)
+        v = q[state[[t_sel, t]], start_idx[[t_sel, t]], g, :, a_g].max(axis=1)
         d = np.log((v - floor) / (true_visit.reward_hit - floor)) / np.log(gamma)
         progress[t] = d[0] - d[1]
     return progress

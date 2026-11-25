@@ -308,6 +308,19 @@ class Experiment:
                 act_source=np.asarray(ACT_RANDOM, dtype=np.int8),
             )
 
+        # The index of the starting position the next reset moves to, stored
+        # with every step of a Gym-Gridworlds environment that cycles through
+        # more than one starting position at random resets. The true visit
+        # Q-function depends on it (see src.oracle.TrueVisitQ).
+        unwrapped = self._env_train.unwrapped
+        self._store_start_idx = bool(
+            getattr(unwrapped, "loop_through_start_pos", False)
+            and getattr(unwrapped, "random_reset_prob", 0.0) > 0.0
+            and len(getattr(unwrapped, "start_pos", None) or ()) > 1
+        )
+        if self._store_start_idx:
+            self._replay_memory.add_keys(start_idx=np.asarray(0, dtype=np.int64))
+
         # Counts for scoring goal candidates. The memory serves either the true
         # binned counts read from this counter or pseudocounts over its own
         # samples, depending on whether its rho is None; the counter is None when
@@ -521,6 +534,8 @@ class Experiment:
                         replay_memory=self._replay_memory,
                         rng_generator=actor_rng,
                     )
+                    if self._store_start_idx:
+                        start_idx = self._env_train.unwrapped.start_pos_idx
                     next_obs, rwd, term, trunc, info = self._env_train.step(act)
 
                     sample = dict(
@@ -538,6 +553,8 @@ class Experiment:
                         sample["goal_act"] = 0 if goal is None else goal["act"]
                         sample["goal_selection"] = self._actor._goal_selection_last_step
                         sample["act_source"] = self._actor._act_source_last_step
+                    if self._store_start_idx:
+                        sample["start_idx"] = start_idx
 
                     # Update statistics and decay epsilon, learning rates, and
                     # any other scheduled parameter. These run on the

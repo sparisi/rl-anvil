@@ -152,7 +152,7 @@ def draw_group(name, envs, stats, entries, curves, stat_labels, env_labels, stat
     its confidence band of every entry it holds, and is left blank when it holds
     none. Its x axis spans the steps the statistic is recorded over, and its y
     axis takes the `ylim` the plot config gives the environment and statistic.
-    Only the bottom row is labelled with steps, and only the first column with
+    Only the bottom row is labeled with steps, and only the first column with
     the statistic."""
 
     fig, axs = plt.subplots(

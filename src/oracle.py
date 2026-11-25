@@ -45,6 +45,17 @@ class TrueVisitQ:
     are rejected, as are random goals, which change the grid at every reset,
     and observation noise, which makes the observation differ from the state.
 
+    A reset lands uniformly on the starting positions (with repetitions), or
+    on the cells the agent can spawn in when there are none. With
+    loop_through_start_pos, random_reset_prob > 0 and more than one starting
+    position, a reset instead moves the agent to the starting position of
+    index k, the start_pos_idx of the environment, and advances k by one
+    modulo the number of starting positions. The values then depend on k, and
+    Q* is solved over the pairs (s, k): a step keeps k, and a random reset
+    from (s, k) lands in (start_pos[k], k + 1). In every other case k is
+    always 0. The goal is a cell, hit from (g, k) for every k. `q` holds
+    n_cells**2 * n_start * n_actions**2 values.
+
     A gymnasium StickyAction wrapper is modelled too. At every step outside a
     series of repeats, with probability p, it starts a series of d steps, d
     uniform in [d_min, d_max], that execute the last executed action in place
@@ -104,33 +115,67 @@ class TrueVisitQ:
             raise ValueError("TrueVisitQ needs the one-hot GridworldCount of a MatrixWrapper observation.")
 
         self._counter = counter
+        self._env = unwrapped
         self.gamma = gamma
         self.reward_hit = 0.0 if negative_reward else 1.0
         self.reward_miss = -1.0 if negative_reward else 0.0
+        self.n_start = self._start_cycle_length(unwrapped)
         self.sticky_prob, self.sticky_durations = self._sticky(env)
         cont = self._transitions(unwrapped)
         self.q = self._solve(cont, tol, max_iterations)
         self.reach = self._reachability(cont)
 
-    def __call__(self, obs, goal):
+    def __call__(self, obs, goal, start_idx=None):
         """
         Return Q*(obs, a | goal, a_g) with shape (..., n_actions, n_actions):
         agent actions on the second-to-last axis and goal actions on the last,
         as the critic returns them. `obs` and `goal` are observations with the
-        same batch shape.
+        same batch shape, and `start_idx` the index k of the starting position
+        of the next reset (see the class docstring), broadcastable to that
+        shape. When `start_idx` is None, it is the current index of the
+        environment (see `start_idx`).
         """
 
-        return self.q[self._counter.bin_index(obs), self._counter.bin_index(goal)]
+        if start_idx is None:
+            start_idx = self.start_idx()
+        return self.q[self._counter.bin_index(obs), start_idx, self._counter.bin_index(goal)]
 
-    def reachable(self, obs, goal):
+    def reachable(self, obs, goal, start_idx=None):
         """
         Return whether the cell of `goal` can be reached from the cell of `obs`
-        with the batch shape of `obs` and `goal`. A reachable goal can be hit
-        with any goal action, since the hit is the goal action taken in the
-        goal's cell.
+        and the index `start_idx`, as in `__call__`, with the batch shape of
+        `obs` and `goal`. A reachable goal can be hit with any goal action,
+        since the hit is the goal action taken in the goal's cell.
         """
 
-        return self.reach[self._counter.bin_index(obs), self._counter.bin_index(goal)]
+        if start_idx is None:
+            start_idx = self.start_idx()
+        return self.reach[self._counter.bin_index(obs), start_idx, self._counter.bin_index(goal)]
+
+    def start_idx(self):
+        """
+        Return the index k of the starting position the next reset of the
+        environment moves to, or 0 when the values do not depend on it.
+        """
+
+        return self._env.start_pos_idx if self.n_start > 1 else 0
+
+    @staticmethod
+    def _start_cycle_length(env):
+        """
+        Return the number of starting positions `env` cycles through at random
+        resets, or 1 when its values do not depend on the index of the next
+        starting position (see the class docstring).
+        """
+
+        if (
+            env.loop_through_start_pos
+            and env.random_reset_prob > 0.0
+            and env.start_pos is not None
+            and len(env.start_pos) > 1
+        ):
+            return len(env.start_pos)
+        return 1
 
     @staticmethod
     def _sticky(env):
@@ -151,23 +196,28 @@ class TrueVisitQ:
         low, high = found[0].repeat_action_duration_range
         return float(found[0].repeat_action_probability), (int(low), int(high))
 
-    @staticmethod
-    def _start_distribution(env):
+    def _reset_distribution(self, env):
         """
-        Return the probability of every cell at reset: uniform over the starting
-        positions (with repetitions), or over the cells the agent can spawn in
-        when there are none.
+        Return R with shape (n_start, n_cells, n_start), where R[k, s', k'] is
+        the probability that a reset from index k lands in cell s' with index
+        k'. With one index, the reset is uniform over the starting positions
+        (with repetitions), or over the cells the agent can spawn in when there
+        are none. With more, the reset from k lands in start_pos[k] with index
+        k + 1 modulo `n_start`.
         """
 
         grid = env.original_grid
-        start = np.zeros(grid.size)
-        if env.start_pos is None:
+        reset = np.zeros((self.n_start, grid.size, self.n_start))
+        if self.n_start > 1:
+            for k, pos in enumerate(env.start_pos):
+                reset[k, np.ravel_multi_index(pos, grid.shape), (k + 1) % self.n_start] = 1.0
+        elif env.start_pos is None:
             allowed = ~np.isin(grid, (WALL, PIT, GOOD, GOOD_SMALL))
-            start[allowed.ravel()] = 1.0
+            reset[0, allowed.ravel(), 0] = 1.0
         else:
             for pos in env.start_pos:
-                start[np.ravel_multi_index(pos, grid.shape)] += 1.0
-        return start / start.sum()
+                reset[0, np.ravel_multi_index(pos, grid.shape), 0] += 1.0
+        return reset / reset.sum(axis=(1, 2), keepdims=True)
 
     @staticmethod
     def _executed(env, pos, act):
@@ -213,17 +263,19 @@ class TrueVisitQ:
 
     def _transitions(self, env):
         """
-        Return C with shape (n_cells, n_actions, n_cells), where C[s, a, s'] is
-        the probability that the step from s with action a lands in s' and does
-        not terminate the episode.
+        Return C with shape (n_cells * n_start, n_actions, n_cells * n_start),
+        where C[x, a, x'] is the probability that the step from x with action a
+        lands in x' and does not terminate the episode, the pair (s, k) of
+        cell s and index k having index x = s * n_start + k.
         """
 
         grid = env.original_grid
         n_cells = grid.size
         n_actions = env.action_space.n
-        start = self._start_distribution(env)
+        n_start = self.n_start
+        reset = self._reset_distribution(env)
         reset_p = env.random_reset_prob
-        cont = np.zeros((n_cells, n_actions, n_cells))
+        cont = np.zeros((n_cells, n_start, n_actions, n_cells, n_start))
         for s in range(n_cells):
             pos = tuple(int(x) for x in np.unravel_index(s, grid.shape))
             p_random = env.random_action_prob
@@ -238,24 +290,29 @@ class TrueVisitQ:
                         if term:
                             continue
                         mass = p_act * p
-                        cont[s, a, np.ravel_multi_index(cell, grid.shape)] += (1.0 - reset_p) * mass
-                        cont[s, a] += reset_p * mass * start
-        return cont
+                        landed = np.ravel_multi_index(cell, grid.shape)
+                        for k in range(n_start):
+                            cont[s, k, a, landed, k] += (1.0 - reset_p) * mass
+                            cont[s, k, a] += reset_p * mass * reset[k]
+        return cont.reshape(n_cells * n_start, n_actions, n_cells * n_start)
 
     def _solve(self, cont, tol, max_iterations):
         """
-        Return Q* with shape (n_cells, n_cells, n_actions, n_actions), indexed
-        as [s, g, a, a_g], by value iteration on the continuation probabilities
-        `cont` for all goals at once. Every iteration updates Q* and U (see the
-        class docstring) from the U of the previous one. Without a
-        StickyAction wrapper, U(s, a) is V*(s).
+        Return Q* with shape (n_cells, n_start, n_cells, n_actions, n_actions),
+        indexed as [s, k, g, a, a_g], by value iteration on the continuation
+        probabilities `cont` (see `_transitions`) for all goals at once. Every
+        iteration updates Q* and U (see the class docstring) from the U of the
+        previous one. Without a StickyAction wrapper, U(s, a) is V*(s).
         """
 
-        n_cells, n_actions, _ = cont.shape
+        n_states, n_actions, _ = cont.shape
+        n_start = self.n_start
+        n_cells = n_states // n_start
         n_goals = n_cells * n_actions  # one column per (g, a_g), with index g * n_actions + a_g
         goal = np.arange(n_goals)
-        hit_cell = goal // n_actions
         hit_act = goal % n_actions
+        # The rows of the goal's cell, one per index k.
+        hit_row = (goal // n_actions)[:, None] * n_start + np.arange(n_start)
         by_action = np.ascontiguousarray(cont.transpose(1, 0, 2))
         p = self.sticky_prob
         low, high = self.sticky_durations
@@ -264,18 +321,18 @@ class TrueVisitQ:
             # r_miss + gamma * sum_s' C(s' | s, a) y[s', a], for every (s, a).
             return self.reward_miss + self.gamma * np.matmul(by_action, y.transpose(1, 0, 2)).transpose(1, 0, 2)
 
-        q = np.zeros((n_cells, n_actions, n_goals))
+        q = np.zeros((n_states, n_actions, n_goals))
         u = np.zeros_like(q)
         for _ in range(max_iterations):
             q_new = backup(u)
-            q_new[hit_cell, hit_act, goal] = self.reward_hit
+            q_new[hit_row, hit_act[:, None], goal[:, None]] = self.reward_hit
             u_new = np.broadcast_to(q_new.max(axis=1, keepdims=True), q.shape)
             if p > 0.0:
                 forced = u
                 repeats = np.zeros_like(q)
                 for d in range(1, high + 1):
                     forced = backup(forced)
-                    forced[hit_cell, :, goal] = self.reward_hit
+                    forced[hit_row, :, goal[:, None]] = self.reward_hit
                     if d >= low:
                         repeats += forced
                 u_new = (1.0 - p) * u_new + p * repeats / (high - low + 1)
@@ -286,21 +343,23 @@ class TrueVisitQ:
         else:
             raise RuntimeError(f"Value iteration did not converge within {max_iterations} iterations.")
 
-        return q.reshape(n_cells, n_actions, n_cells, n_actions).transpose(0, 2, 1, 3).copy()
+        return q.reshape(n_cells, n_start, n_actions, n_cells, n_actions).transpose(0, 1, 3, 2, 4).copy()
 
-    @staticmethod
-    def _reachability(cont):
+    def _reachability(self, cont):
         """
-        Return a boolean array with shape (n_cells, n_cells), True at [s, g]
-        when g can be reached from s through steps that do not terminate the
-        episode (`cont` > 0), with s reaching itself.
+        Return a boolean array with shape (n_cells, n_start, n_cells), True at
+        [s, k, g] when cell g can be reached from the pair (s, k) through steps
+        that do not terminate the episode (`cont` > 0, see `_transitions`),
+        with every pair reaching itself.
         """
 
         reach = np.eye(cont.shape[0], dtype=bool) | (cont.max(axis=1) > 0.0)
         while True:
             # Paths of up to twice the current length, so the loop ends after
-            # about log2(n_cells) passes.
+            # about log2(n_states) passes.
             new = reach | ((reach.astype(np.int64) @ reach.astype(np.int64)) > 0)
             if np.array_equal(new, reach):
-                return reach
+                break
             reach = new
+        n_cells = cont.shape[0] // self.n_start
+        return reach.reshape(n_cells, self.n_start, n_cells, self.n_start).any(axis=-1)

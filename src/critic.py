@@ -485,10 +485,13 @@ class QVisitNetwork(QNetwork):
         # obs scale, but it also breaks the condition on terminal transition
         # "term = rwd_visit == 1", unless a threshold check |s - g | < η is used.
 
-        # The true visit Q-function reads observations before normalization.
+        # The true visit Q-function reads observations before normalization, and
+        # the index of the starting position of the next reset of every sample
+        # when the replay memory stores it (see TrueVisitQ.start_idx).
         q_true = None
         if self.true_visit is not None:
-            q_true = self.true_visit(obs, goal)
+            start_idx = batch["start_idx"][..., None] if "start_idx" in batch else 0
+            q_true = self.true_visit(obs, goal, start_idx)
 
         obs = self._normalize_obs(obs)
         next_obs = self._normalize_obs(next_obs)

@@ -23,6 +23,7 @@ dependencies = [
     "gymnasium[box2d]",
     "box2d-py",
     "numpy",
+    "scipy",
     "opencv-python",
     "submitit",
     "hydra-core",

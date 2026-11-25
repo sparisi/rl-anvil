@@ -15,7 +15,7 @@ step."""
 
 import numpy as np
 
-from src.actor import ACT_RANDOM, ORACLE_TOL
+from src.actor import ACT_RANDOM
 
 # Causes of a goal reselection, in the order reselection_causes tests them.
 RESELECTION_CAUSES = (

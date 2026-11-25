@@ -93,6 +93,7 @@ from matplotlib import pyplot as plt
 from matplotlib.ticker import MaxNLocator
 from matplotlib.transforms import Bbox
 
+from src.actor import ORACLE_TOL
 from src.oracle import TrueVisitQ
 from src.pseudocount import tabular_count
 from src.utils.heatmaps import env_context
@@ -115,7 +116,6 @@ from src.utils.plot import (
     tex_kwargs,
 )
 from src.utils.reachability import (
-    ORACLE_TOL,
     RESELECTION_CAUSES,
     critic_error_progress,
     reselection_causes,

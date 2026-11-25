@@ -20,6 +20,7 @@ from gym_gridworlds.gridworld import (
     Gridworld,
     _move,
 )
+from scipy import sparse
 
 from src.pseudocount import GridworldCount
 
@@ -302,7 +303,8 @@ class TrueVisitQ:
         indexed as [s, k, g, a, a_g], by value iteration on the continuation
         probabilities `cont` (see `_transitions`) for all goals at once. Every
         iteration updates Q* and U (see the class docstring) from the U of the
-        previous one. Without a StickyAction wrapper, U(s, a) is V*(s).
+        previous one. Without a StickyAction wrapper, U(s, a) is V*(s). The
+        backup multiplies by `cont` as one sparse matrix per action.
         """
 
         n_states, n_actions, _ = cont.shape
@@ -313,13 +315,16 @@ class TrueVisitQ:
         hit_act = goal % n_actions
         # The rows of the goal's cell, one per index k.
         hit_row = (goal // n_actions)[:, None] * n_start + np.arange(n_start)
-        by_action = np.ascontiguousarray(cont.transpose(1, 0, 2))
+        by_action = [sparse.csr_matrix(cont[:, a, :]) for a in range(n_actions)]
         p = self.sticky_prob
         low, high = self.sticky_durations
 
         def backup(y):
             # r_miss + gamma * sum_s' C(s' | s, a) y[s', a], for every (s, a).
-            return self.reward_miss + self.gamma * np.matmul(by_action, y.transpose(1, 0, 2)).transpose(1, 0, 2)
+            return self.reward_miss + self.gamma * np.stack(
+                [c @ y[:, a, :] for a, c in enumerate(by_action)],
+                axis=1,
+            )
 
         q = np.zeros((n_states, n_actions, n_goals))
         u = np.zeros_like(q)

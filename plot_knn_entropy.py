@@ -97,7 +97,7 @@ HBAR_UNIT_INCHES = 0.18
 HBAR_TOP_INCHES = 0.30
 HBAR_BOTTOM_INCHES = 0.55
 
-# A value axis whose ticks all sit below this is labelled in scientific
+# A value axis whose ticks all sit below this is labeled in scientific
 # notation. `set_3_ticks` writes at most four decimals on x, so a tick whose
 # first significant digit falls past the fourth reads as 0.0000.
 SCIENTIFIC_BELOW = 1e-4

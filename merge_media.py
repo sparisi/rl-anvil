@@ -46,7 +46,7 @@ where --fps changes the speed without changing what is in the file.
 is the lever on how long the animation runs. Neither goes above 1.
 
 Frames are streamed: the output canvas is sized from file headers first, then
-each frame is decoded, labelled, written, and dropped. Only one frame is held at
+each frame is decoded, labeled, written, and dropped. Only one frame is held at
 a time, so a folder of long clips costs no more memory than a folder of short
 ones.
 
@@ -191,11 +191,11 @@ def label_frame(image, step):
     """Copy of `image` with "Steps <step>" on a band added above it."""
     font, _ = get_font(image.width)
     band = band_height(image.width)
-    labelled = Image.new("RGB", (image.width, image.height + band), (255, 255, 255))
-    labelled.paste(image, (0, band))
+    labeled = Image.new("RGB", (image.width, image.height + band), (255, 255, 255))
+    labeled.paste(image, (0, band))
 
     text = f"Steps {step}"
-    draw = ImageDraw.Draw(labelled)
+    draw = ImageDraw.Draw(labeled)
     left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
     draw.text(
         ((image.width - (right - left)) // 2 - left, (band - (bottom - top)) // 2 - top),
@@ -203,7 +203,7 @@ def label_frame(image, step):
         fill=(0, 0, 0),
         font=font,
     )
-    return labelled
+    return labeled
 
 
 def step_files(folder, suffixes):
@@ -268,7 +268,7 @@ def source_fps(path):
 
 
 def canvas_size(items, is_gif, factor=None):
-    """Output canvas: large enough for every labelled frame in `items`, at the
+    """Output canvas: large enough for every labeled frame in `items`, at the
     size `factor` scales them to.
 
     Figures saved with bbox_inches="tight" vary in size between checkpoints, so

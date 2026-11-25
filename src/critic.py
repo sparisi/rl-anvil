@@ -616,7 +616,7 @@ class QEnsemble(Critic):
     Each call to update() trains one member Q_i, chosen at random, on its own
     mini-batch. Its TD target is computed with its own target network, i.e.,
 
-        Q_i(s_t, a_t) target: r + γ max_a Qt_i(s_{t+1}, a) with i random
+        Q_i(s_t, a_t) target: r + γ Qt_i(s_{t+1}, argmax_a Q_i(s_{t+1}, a)) with i random
 
     Members never bootstrap from each other's target networks, so each one
     remains an independent estimate and the spread of the ensemble measures

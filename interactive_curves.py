@@ -1815,7 +1815,7 @@ def build_spec(
         f" * 0.6180339887498949) % 1) - 0.5)"
     )
 
-    def labelled(options):
+    def labeled(options):
         """What a dropdown shows for its options: the value 'All', which the
         filters compare against, reads "(all)"."""
 
@@ -1830,7 +1830,7 @@ def build_spec(
         "bind": {
             "input": "select",
             "options": seed_options,
-            "labels": labelled(seed_options),
+            "labels": labeled(seed_options),
             "name": "Seed: ",
         },
     }]
@@ -1846,7 +1846,7 @@ def build_spec(
             "bind": {
                 "input": "select",
                 "options": options,
-                "labels": labelled(options),
+                "labels": labeled(options),
                 "name": f"{name[:1].upper()}{name[1:]}: ",
             },
         })
@@ -1973,7 +1973,7 @@ def build_spec(
     violin_scores = pick_score if args.all_seeds else curve_means
 
     # A scale's `type` is the one thing a Vega-Lite param cannot drive, so the log
-    # axis is the values put into log space and the ticks labelled back out of it.
+    # axis is the values put into log space and the ticks labeled back out of it.
     #
     # A symlog axis: linear within `constant` of zero, logarithmic beyond it.
     # That is what a log scale means for data that goes negative -- it is
@@ -2837,7 +2837,7 @@ vprint(
 
 # Labels are decided over the whole set of hyperparameters at once: a name is the
 # last dotted segment where that is unique and longer where it is not, so every
-# key that will ever be labelled has to be here -- the data's columns and the
+# key that will ever be labeled has to be here -- the data's columns and the
 # sweep's keys, which need not be columns.
 LABELS = hyperparameter_to_label(
     sorted(
@@ -2882,7 +2882,7 @@ for pairs, flag, keep in (
 # tell "declared nothing" from "declared these".
 #
 # Matched on the stem, as the sweep names an environment by its config file
-# while an overridden run is labelled `<stem> (key=value)`.
+# while an overridden run is labeled `<stem> (key=value)`.
 declared_envs = None
 # Nothing left to filter, and nothing the sweep did: --include/--exclude emptied
 # the frame, and the exit below would put the sweep's name to their doing.
@@ -2937,7 +2937,7 @@ avg_block_labels = {}
 rliable_runs = []
 
 for env in envs_present:
-    # An overridden run is labelled `<stem> (key=value)`, and the sweep names an
+    # An overridden run is labeled `<stem> (key=value)`, and the sweep names an
     # environment by its config file, so the stem is what a declared
     # configuration is matched against.
     env_stem = split_config_label(str(env))[0]

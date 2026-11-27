@@ -406,6 +406,7 @@ class QEnsemble(Critic):
         self.aggregation = aggregation
         self.obs_shape = obs_space.shape
         self.episode_critic_idx = None
+        self.n_updates = 0  # Calls to update(), whatever members each call trains
         critic_cls = globals()[critics_id]
         self.critics = [
             critic_cls(
@@ -464,6 +465,7 @@ class QEnsemble(Critic):
     def update(self, replay_memory, rng_generator=None, **kwargs):
         if rng_generator is None:
             rng_generator = self.rng_generator()
+        self.n_updates += 1
 
         # Update one random critic, with its own target network.
         # Sharing target networks between members (e.g., randomly shuffling
@@ -499,6 +501,7 @@ class QEnsemble(Critic):
 
     def copy_from(self, source):
         self.n_critics = source.n_critics
+        self.n_updates = source.n_updates
         for c, sc in zip(self.critics, source.critics):
             c.copy_from(sc)
 
@@ -561,6 +564,7 @@ class SUNRISE(QEnsemble):
         if rng_generator is None:
             rng_generator = self.rng_generator()
 
+        self.n_updates += 1
         c0 = self.critics[0]
         self.train()
 
